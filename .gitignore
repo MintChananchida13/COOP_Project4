@@ -1,0 +1,13 @@
+# Node modules
+node_modules/
+.next/
+.env
+
+# Python/Backend files
+__pycache__/
+*.pyc
+project_backend/cropped_rois/
+project_backend/qdrant_local_db/
+
+# Git warning files
+.DS_Store
