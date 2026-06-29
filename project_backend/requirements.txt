@@ -1,0 +1,7 @@
+fastapi==0.110.0
+uvicorn==0.28.0
+pydantic==2.6.4
+opencv-python-headless==4.9.0.80
+pillow
+numpy
+qdrant-client==1.8.0
