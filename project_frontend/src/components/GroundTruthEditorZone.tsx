@@ -1,0 +1,330 @@
+"use client";
+
+import React, { useState, useRef, useMemo } from 'react';
+import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ROI, OCRResult } from '../types/ocr';
+
+// ✨ เพิ่มสเปกให้ ROI และ OCRResult รองรับ pageIndex 
+interface GroundTruthEditorZoneProps {
+  previewUrl: string;
+  rois: (ROI & { pageIndex?: number })[]; 
+  ocrResults: (OCRResult & { pageIndex?: number })[];
+  setOcrResults: React.Dispatch<React.SetStateAction<(OCRResult & { pageIndex?: number })[]>>;
+  onBackToStudio: () => void;
+  onApproveAndSave: () => Promise<void>;
+  
+  imageList?: string[];              
+  currentImageIndex?: number;         
+  onImageIndexChange?: (index: number) => void; 
+}
+
+export default function GroundTruthEditorZone({
+  previewUrl,
+  rois,
+  ocrResults,
+  setOcrResults,
+  onBackToStudio,
+  onApproveAndSave,
+  imageList = [previewUrl], 
+  currentImageIndex = 0,
+  onImageIndexChange,
+}: GroundTruthEditorZoneProps) {
+  
+  const [activeFieldId, setActiveFieldId] = useState<number | null>(null);
+  const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+  const [zoomIndex, setZoomIndex] = useState<number>(2); 
+  const currentZoom = ZOOM_STEPS[zoomIndex];
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // 🛡️ กรองกรอบ ROI ให้ดึงมาเฉพาะของหน้าปัจจุบัน
+  const currentPageRois = useMemo(() => {
+    return rois.filter(roi => roi.pageIndex === currentImageIndex);
+  }, [rois, currentImageIndex]);
+
+  // 🛡️ กรองผลลัพธ์ OCR ให้แสดงในตารางเฉพาะของหน้าปัจจุบันเท่านั้น
+  const currentPageOcrResults = useMemo(() => {
+    return ocrResults.filter(res => res.pageIndex === currentImageIndex);
+  }, [ocrResults, currentImageIndex]);
+
+  const getRoiByFieldName = (fieldName: string) => {
+    return currentPageRois.find(roi => roi.fieldName === fieldName);
+  };
+
+  const handlePrevImage = () => {
+    if (onImageIndexChange && currentImageIndex > 0) {
+      onImageIndexChange(currentImageIndex - 1);
+      setActiveFieldId(null); // เคลียร์ฟิลด์ที่เลือกเมื่อย้ายหน้า
+    }
+  };
+
+  const handleNextImage = () => {
+    if (onImageIndexChange && currentImageIndex < imageList.length - 1) {
+      onImageIndexChange(currentImageIndex + 1);
+      setActiveFieldId(null); // เคลียร์ฟิลด์ที่เลือกเมื่อย้ายหน้า
+    }
+  };
+
+  const autoResizeTextarea = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    const target = e.currentTarget;
+    target.style.height = "auto";
+    target.style.height = `${target.scrollHeight}px`;
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-fade-in">
+      
+      {/* 📊 STEP PROCESS PROGRESS BAR */}
+      <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
+          <div className="flex items-center gap-2.5 bg-white pr-4 z-10">
+            <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
+            <p className="text-xs font-semibold text-slate-400">Pre-processing</p>
+          </div>
+          <div className="flex items-center gap-2.5 bg-white px-4 z-10">
+            <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
+            <p className="text-xs font-semibold text-slate-400">ROI Studio</p>
+          </div>
+          <div className="flex items-center gap-2.5 bg-white pl-4 z-10">
+            <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center ring-4 ring-indigo-100">3</div>
+            <p className="text-xs font-bold text-slate-800">Ground Truth Editor</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 💻 LAYOUT */}
+      <div className="grid grid-cols-12 gap-6 h-[720px]">
+        
+        {/* 🎨 👈 ฝั่งซ้าย: กระดานแสดงภาพเอกสาร */}
+        <div className="col-span-5 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col h-full relative shadow-md">
+          <div 
+            ref={viewportRef}
+            className="w-full flex-1 overflow-auto p-4 flex items-start justify-start shadow-inner relative"
+          >
+            <div 
+              className="relative inline-block"
+              style={{ 
+                transform: `scale(${currentZoom * 0.6})`, 
+                transformOrigin: "top left",
+                transition: "transform 0.1s ease-out"
+              }}
+            >
+              <div className="relative w-[750px] h-auto bg-transparent">
+                <img 
+                  src={previewUrl} 
+                  alt="Review Target" 
+                  className="w-full h-auto block select-none rounded bg-white border border-slate-700 shadow-sm"
+                />
+
+                {/* 🎯 เลเยอร์วาดกล่องไฮไลต์เชื่อมโยงข้อมูล (กรองเฉพาะหน้าปัจจุบัน) */}
+                <div className="absolute inset-0 top-0 left-0 w-full h-full pointer-events-none">
+                  {currentPageOcrResults.map((res) => {
+                    const matchedRoi = getRoiByFieldName(res.fieldName);
+                    if (!matchedRoi) return null;
+                    const isCurrentActive = activeFieldId === res.id;
+
+                    return (
+                      <div
+                        key={res.id}
+                        className={`absolute border transition-all duration-300 ${
+                          isCurrentActive 
+                            ? "border-blue-500 bg-blue-500/20 ring-4 ring-blue-500/30 z-30 shadow-lg scale-[1.01]" 
+                            : "border-orange-500 bg-orange-500/5 z-10"
+                        }`}
+                        style={{
+                          left: matchedRoi.x,
+                          top: matchedRoi.y,
+                          width: matchedRoi.width,
+                          height: matchedRoi.height,
+                        }}
+                      >
+                        <span className={`absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow font-bold ${
+                          isCurrentActive ? "bg-blue-600 text-white z-40" : "bg-orange-600 text-white"
+                        }`}>
+                          {res.fieldName}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* แผงควบคุมซูม */}
+          <div className="absolute bottom-24 right-4 bg-slate-950/80 backdrop-blur border border-slate-700 rounded-lg p-1 flex items-center gap-2 shadow-md z-20 text-white">
+            <button type="button" onClick={() => zoomIndex > 0 && setZoomIndex(prev => prev - 1)} className="p-1 hover:bg-slate-800 rounded"><ZoomOut size={12} /></button>
+            <span className="text-[10px] font-mono font-bold w-10 text-center text-slate-300">{Math.round(currentZoom * 100)}%</span>
+            <button type="button" onClick={() => zoomIndex < ZOOM_STEPS.length - 1 && setZoomIndex(prev => prev + 1)} className="p-1 hover:bg-slate-800 rounded"><ZoomIn size={12} /></button>
+            <button type="button" onClick={() => setZoomIndex(2)} className="p-1 hover:bg-slate-800 rounded text-slate-400"><Maximize2 size={10} /></button>
+          </div>
+
+          {/* 🎞️ Carousel แถบเลือกหน้า */}
+          <div className="bg-slate-950/60 backdrop-blur border-t border-slate-800 p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] text-slate-400 font-medium">เอกสารทั้งหมด ({imageList.length} ไฟล์)</span>
+              <span className="text-[10px] font-mono bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-bold">
+                หน้า {currentImageIndex + 1} / {imageList.length}
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrevImage}
+                disabled={currentImageIndex === 0}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 transition-colors"
+              >
+                <ChevronLeft size={16} />
+              </button>
+
+              <div className="flex-1 flex gap-2 overflow-x-auto py-1 scrollbar-thin scrollbar-thumb-slate-700">
+                {imageList.map((imgUrl, idx) => {
+                  const isCurrent = idx === currentImageIndex;
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        if (onImageIndexChange) onImageIndexChange(idx);
+                        setActiveFieldId(null);
+                      }}
+                      className={`relative flex-shrink-0 w-12 h-14 rounded border-2 transition-all overflow-hidden bg-white ${
+                        isCurrent ? 'border-indigo-500 ring-2 ring-indigo-500/30 scale-105' : 'border-slate-700 opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      <img src={imgUrl} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
+                      <div className="absolute bottom-0 inset-x-0 bg-slate-950/70 text-[8px] text-white text-center py-0.5 font-mono">
+                        #{idx + 1}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleNextImage}
+                disabled={currentImageIndex === imageList.length - 1}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 transition-colors"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 📊 👉 ฝั่งขวา: ตารางข้อมูล (กรองผลลัพธ์เฉพาะหน้าปัจจุบัน) */}
+        <div className="col-span-7 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col h-full overflow-hidden">
+          <div className="p-4 border-b flex justify-between items-center bg-slate-50/50">
+            <button
+              type="button"
+              onClick={onBackToStudio}
+              className="py-1.5 px-3 hover:bg-slate-200/70 text-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+            >
+              <ArrowLeft size={14} /> กลับไปปรับกล่อง
+            </button>
+            <h3 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <CheckCircle size={15} className="text-indigo-600" /> ตรวจสอบความถูกต้องและอนุมัติผลลัพธ์
+            </h3>
+          </div>
+
+          <div className="overflow-y-auto flex-1">
+            <table className="min-w-full text-xs text-left text-slate-600 table-fixed border-collapse">
+              <thead className="bg-slate-50 font-sans text-slate-500 font-semibold border-b border-slate-100 sticky top-0 z-10">
+                <tr>
+                  <th className="px-4 py-3 w-[22%]">Field Channel</th>
+                  <th className="px-4 py-3 w-[39%]">ช่องที่ OCR อ่านได้</th>
+                  <th className="px-4 py-3 w-[39%]">ช่องที่แก้คำได้</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {currentPageOcrResults.map((res) => {
+                  const isSelected = activeFieldId === res.id;
+                  return (
+                    <tr 
+                      key={res.id} 
+                      onClick={() => setActiveFieldId(res.id)} 
+                      className={`group cursor-pointer transition-all ${isSelected ? 'bg-indigo-50/40 border-l-4 border-l-indigo-500 font-medium' : 'hover:bg-slate-50/50'}`}
+                    >
+                      {/* คอลัมน์ 1: ฟิลด์ */}
+                      <td className="px-4 py-4 align-top" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1 bg-transparent border border-transparent rounded px-1 group-hover:border-slate-200 focus-within:border-indigo-400 focus-within:bg-white transition-all">
+                          <input
+                            type="text"
+                            value={res.fieldName}
+                            onFocus={() => setActiveFieldId(res.id)}
+                            onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
+                            className="w-full bg-transparent font-bold text-slate-700 focus:outline-none py-1 text-xs truncate"
+                            placeholder="ระบุชื่อฟิลด์..."
+                          />
+                          <Edit3 size={12} className="text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
+                        </div>
+                      </td>
+                      
+                      {/* คอลัมน์ 2: ช่องที่ OCR อ่านได้ */}
+                      <td className="px-4 py-4 align-top w-[39%]">
+                        <div className="flex flex-col gap-1.5 h-full justify-between">
+                          <div className="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-slate-600 font-medium text-xs break-words leading-relaxed shadow-sm">
+                            {res.extractedText || <span className="text-slate-400 italic">(ไม่มีข้อความ)</span>}
+                          </div>
+                          <span className={`w-fit px-1.5 py-0.5 rounded text-[10px] font-mono font-bold mt-1 ${res.confidence >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                            Confidence: {(res.confidence * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      </td>
+                      
+                      {/* คอลัมน์ 3: ช่องที่แก้คำได้ */}
+                      <td className="px-4 py-4 align-top w-[39%]" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-col gap-1.5 h-full justify-between">
+                          <textarea 
+                            value={res.extractedText} 
+                            onFocus={() => setActiveFieldId(res.id)} 
+                            onInput={autoResizeTextarea}
+                            ref={(el) => {
+                              if (el) {
+                                el.style.height = "auto";
+                                el.style.height = `${el.scrollHeight}px`;
+                              }
+                            }}
+                            onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))} 
+                            className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner" 
+                            placeholder="พิมพ์เพื่อแก้ไขคำคัดลอก..."
+                            rows={1}
+                          />
+                          <div className="text-[10px] py-0.5 opacity-0 select-none pointer-events-none mt-1" aria-hidden="true">
+                            Spacer
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {/* ℹ️ กรณีหน้านี้ไม่มีการสลักกล่อง OCR ไว้เลย */}
+                {currentPageOcrResults.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-center py-20 text-slate-400 font-medium bg-slate-50/50">
+                      ไม่พบกล่องข้อมูล OCR บนหน้าปัจจุบัน <br />
+                      <span className="text-[11px] font-normal text-slate-400">โปรดย้อนกลับไปลากกล่องดักจับที่ขั้นตอน ROI Studio</span>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="p-4 border-t bg-slate-50/50">
+            <button 
+              type="button"
+              onClick={onApproveAndSave} 
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2"
+            >
+              <Save size={15} /> Approve & Commit Sync
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
