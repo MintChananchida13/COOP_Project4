@@ -1,0 +1,48 @@
+// 1. ตั้งค่าการเชื่อมต่อฐานข้อมูล (ใช้ SQLite ในเครื่องเป็นไฟล์เดียวก่อน ย้ายไป Postgres ทีหลังได้ง่ายมาก)
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 2. ตารางผู้ใช้งานระบบ (แยกสิทธิ์ USER และ ADMIN)
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("USER") // USER หรือ ADMIN
+  createdAt    DateTime  @default(now())
+  requests     Request[]
+}
+
+// 3. ตารางบันทึกคำขอและข้อมูลต้นแบบของเอกสาร (Template / Requests)
+model Request {
+  id           String     @id @default(uuid())
+  documentName String
+  imageUrl     String     // พาร์ทที่เก็บรูปภาพตัวอย่างไว้ใช้รัน ViT
+  status       String     @default("PENDING") // PENDING, APPROVED, REJECTED
+  templateName String?    // ชื่อทางการหลังจากแอดมินอนุมัติลงทะเบียน
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  
+  // ความสัมพันธ์
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  roiFields    RoiField[]
+}
+
+// 4. ตารางเก็บพิกัดกล่องข้อมูลสำคัญ (Region of Interest) ที่ผู้ใช้หรือแอดมินลากวาดไว้
+model RoiField {
+  id         String   @id @default(uuid())
+  fieldName  String   // เช่น invoice_no, total_amount, date_issue
+  x          Float    // พิกัดแกน X บน Canvas
+  y          Float    // พิกัดแกน Y บน Canvas
+  width      Float    // ความกว้างของกล่อง
+  height     Float    // ความสูงของกล่อง
+  
+  // ความสัมพันธ์ผูกไว้กับ Request ต้นทาง
+  requestId  String
+  request    Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
