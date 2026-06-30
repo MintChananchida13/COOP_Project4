@@ -1,28 +1,75 @@
 "use client";
 
-import React, { useState } from 'react';
-import AdminDashboard from '@/admin//AdminDashboard';
-import AdminReviewZone from '@/admin//AdminReviewZone';
+import React, { useState, useEffect } from 'react';
+import AdminDashboard from '@/admin/AdminDashboard';
+import AdminReviewZone from '@/admin/AdminReviewZone';
 
 interface RequestItem {
-  id: number;
+  id: string | number;
   user: string;
   docName: string;
   date: string;
   status: string;
+  image?: string | null;
+  rois?: any[];
 }
 
 export default function AdminPage() {
   const [view, setView] = useState<'dashboard' | 'review'>('dashboard');
-  const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
+  const [selectedRequestId, setSelectedRequestId] = useState<string | number | null>(null);
+  const [requests, setRequests] = useState<RequestItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // ข้อมูลจำลองสำหรับทดสอบ
-  const [requests, setRequests] = useState<RequestItem[]>([
-    { id: 101, user: "John Doe", docName: "Invoice_CompanyA.pdf", date: "2026-06-24", status: "Pending" },
-    { id: 102, user: "Jane Smith", docName: "Receipt_Fuel.jpg", date: "2026-06-23", status: "Pending" },
-  ]);
+  // ดึงคำขอเทมเพลตทั้งหมดจาก SQLite
+  const fetchRequests = async () => {
+    try {
+      setIsLoading(true);
+      const res = await fetch("/api/ocr");
+      const json = await res.json();
+      if (json.success) {
+        const dbRequests = json.data.map((req: any) => ({
+          id: req.id,
+          user: "user@ocr.com", // ผู้ส่งคำขอจำลอง
+          docName: req.documentName,
+          date: new Date(req.createdAt).toISOString().split('T')[0],
+          status: req.status === "PENDING" ? "Pending" : req.status === "APPROVED" ? "Approved" : "Rejected",
+          image: req.imageUrl,
+          rois: req.roiFields ? req.roiFields.map((f: any) => ({
+            id: f.id,
+            fieldName: f.fieldName,
+            x: f.x,
+            y: f.y,
+            width: f.width,
+            height: f.height,
+            type: f.type,
+            dataType: f.dataType,
+            role: f.role,
+            verificationRule: f.verificationRule,
+            pageIndex: f.pageIndex,
+            points: f.points ? JSON.parse(f.points) : undefined
+          })) : []
+        }));
 
-  const handleSelectRequest = (id: number) => {
+        // ข้อมูลจำลองเพิ่มเติมสำหรับแสดงผล
+        const mocks = [
+          { id: 101, user: "John Doe", docName: "Invoice_CompanyA.pdf", date: "2026-06-24", status: "Pending", image: null, rois: [] },
+          { id: 102, user: "Jane Smith", docName: "Receipt_Fuel.jpg", date: "2026-06-23", status: "Pending", image: null, rois: [] },
+        ];
+
+        setRequests([...dbRequests, ...mocks]);
+      }
+    } catch (err) {
+      console.error("Error fetching requests:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRequests();
+  }, []);
+
+  const handleSelectRequest = (id: string | number) => {
     setSelectedRequestId(id);
     setView('review');
   };
@@ -32,28 +79,45 @@ export default function AdminPage() {
     setSelectedRequestId(null);
   };
 
-  const handleUpdateStatus = (id: number, nextStatus: 'Approved' | 'Rejected') => {
+  const handleUpdateStatus = async (id: string | number, nextStatus: 'Approved' | 'Rejected') => {
+    if (typeof id === 'string') {
+      try {
+        const response = await fetch(`/api/ocr?id=${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus })
+        });
+        if (!response.ok) {
+          alert("ไม่สามารถอัปเดตสถานะในฐานข้อมูลได้");
+        }
+      } catch (err) {
+        console.error("Error updating request status:", err);
+      }
+    }
+
     setRequests(prev => prev.map(req => req.id === id ? { ...req, status: nextStatus } : req));
     setView('dashboard');
   };
 
-const renderContent = () => {
+  const renderContent = () => {
     if (view === 'dashboard') {
       const DashboardComp = AdminDashboard as any;
       return (
         <DashboardComp 
           requests={requests} 
           onSelectRequest={handleSelectRequest} 
-          // 💡 เพิ่มฟังก์ชันนี้เพื่อรับค่าจากปุ่มอัปโหลดด่วนเข้าตารางหลัก
           onAddMockRequest={(newReq: any) => setRequests(prev => [newReq, ...prev])} 
         />
       );
     }
     
     const ReviewComp = AdminReviewZone as any;
+    const selectedRequest = requests.find(r => r.id === selectedRequestId);
+    
     return (
       <ReviewComp 
         requestId={selectedRequestId} 
+        requestData={selectedRequest}
         onBack={handleBackToDashboard}
         onResolveStatus={handleUpdateStatus}
       />

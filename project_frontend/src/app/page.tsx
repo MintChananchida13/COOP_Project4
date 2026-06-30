@@ -24,6 +24,7 @@ interface PageConfig {
     renderedWidth?: number;
     renderedHeight?: number;
   } | null;
+  cropCorners: { x: number; y: number }[] | null;
   isCropActive: boolean;
   isCropped: boolean;
   croppedLocalUrl: string | null;
@@ -37,6 +38,64 @@ const UploadZone = dynamic(() => import("../components/UploadZone"), {
     </div>
   ),
 });
+
+// 🎨 Helper: ตัดรูปเฉพาะจุดและถมพื้นหลังภายนอกด้วยสีขาว รองรับทั้ง Rectangle, Quad, และ Polygon
+const cropRoiToImage = (
+  imgEl: HTMLImageElement,
+  roi: { x: number; y: number; width: number; height: number; points?: { x: number; y: number }[] },
+  scaleX: number,
+  scaleY: number
+): string | null => {
+  if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0) return null;
+
+  const realX = roi.x * scaleX;
+  const realY = roi.y * scaleY;
+  const realW = roi.width * scaleX;
+  const realH = roi.height * scaleY;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(realW));
+  canvas.height = Math.max(1, Math.round(realH));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // 1. ถมพื้นหลังขาวล้วนเป็นค่าเริ่มต้น
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.save();
+  // 2. ถ้าเป็นรูปหลายเหลี่ยม (Quad / Polygon) ให้ทำการคลิปเส้น
+  if (roi.points && roi.points.length > 2) {
+    ctx.beginPath();
+    roi.points.forEach((p, idx) => {
+      const px = p.x * scaleX - realX;
+      const py = p.y * scaleY - realY;
+      if (idx === 0) {
+        ctx.moveTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    });
+    ctx.closePath();
+    ctx.clip();
+  }
+
+  // 3. วาดภาพต้นฉบับลงพื้นที่แคนวาสเฉพาะส่วน
+  ctx.drawImage(
+    imgEl,
+    Math.max(0, realX),
+    Math.max(0, realY),
+    Math.max(1, realW),
+    Math.max(1, realH),
+    0,
+    0,
+    Math.max(1, realW),
+    Math.max(1, realH)
+  );
+  ctx.restore();
+
+  return canvas.toDataURL("image/jpeg", 0.95);
+};
 
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
@@ -71,6 +130,7 @@ export default function Home() {
       flipH: false,
       flipV: false,
       cropBox: null,
+      cropCorners: null,
       isCropActive: false,
       isCropped: false,
       croppedLocalUrl: null
@@ -100,7 +160,7 @@ export default function Home() {
     setCurrentStep("studio");
   };
 
-  // 🚀 ฟังก์ชันสั่ง Run OCR รวมทุกหน้า พร้อมระบบคำนวณสเกลภาพแบบ "แยกรายไฟล์" แม่นยำ 100%
+  // 🚀 ฟังก์ชันสั่ง Run OCR รวมทุกหน้า พร้อมระบบตัดภาพตามพิกัดโครงสร้างเครื่องมือจริง (Polygon/Quad Support)
   const handleRunOCR = async () => {
     if (rois.length === 0) {
       alert("⚠️ ไม่พบกล่อง ROI ใดๆ ในคลัง กรุณาลากกล่องข้อความอย่างน้อย 1 กล่องก่อนกดรันประมวลผลครับ");
@@ -123,51 +183,71 @@ export default function Home() {
 
         if (pageRois.length === 0) return [];
 
-        // 🎯 [FIXED] โหลดขนาดจริงของรูปภาพในหน้านั้น ๆ ขึ้นมาเช็ค อัตราส่วนจะไม่เพี้ยนแม้รูปแต่ละหน้าจะกว้างยาวไม่เท่ากัน
         const currentImgUrl = imagesList[pageIdx];
-        const dimensions = await new Promise<{ naturalWidth: number; naturalHeight: number }>((resolve) => {
-          const img = new Image();
-          img.onload = () => {
-            resolve({ naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
-          };
-          img.src = currentImgUrl;
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const imageObj = new Image();
+          imageObj.onload = () => resolve(imageObj);
+          imageObj.onerror = (err) => reject(err);
+          imageObj.src = currentImgUrl;
         });
 
-        // ขนาดกล่องจำลองมาตรฐานบน Canvas Workspace ของเราตั้งค่าคงที่ไว้ที่ความกว้าง 750px
         const renderedWidth = 750; 
-        const renderedHeight = (dimensions.naturalHeight / dimensions.naturalWidth) * renderedWidth;
+        const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
 
-        const scaleX = dimensions.naturalWidth / renderedWidth;
-        const scaleY = dimensions.naturalHeight / renderedHeight;
+        const scaleX = img.naturalWidth / renderedWidth;
+        const scaleY = img.naturalHeight / renderedHeight;
 
-        const response = await fetch("http://localhost:8000/api/ai/process", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image: currentImgUrl,
-            rois: pageRois.map((roi) => ({
-              fieldName: roi.fieldName,
-              x: roi.x * scaleX,
-              y: roi.y * scaleY,
-              width: roi.width * scaleX,
-              height: roi.height * scaleY,
-            })),
-          }),
+        // ดึงผลลัพธ์ทีละ ROI แบบขนาน
+        const roiPromises = pageRois.map(async (roi, rIdx) => {
+          const croppedBase64 = cropRoiToImage(img, roi, scaleX, scaleY);
+          if (!croppedBase64) return null;
+
+          try {
+            const response = await fetch("http://localhost:8000/api/ai/process", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                image: croppedBase64,
+                rois: [
+                  {
+                    fieldName: roi.fieldName,
+                    x: 0,
+                    y: 0,
+                    width: roi.width * scaleX,
+                    height: roi.height * scaleY
+                  }
+                ]
+              })
+            });
+
+            const aiData = await response.json();
+            if (aiData.success && aiData.extracted_data.length > 0) {
+              const resItem = aiData.extracted_data[0];
+              return {
+                id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
+                fieldName: resItem.fieldName,
+                bbox: [],
+                extractedText: resItem.text,
+                originalText: resItem.text,
+                confidence: resItem.confidence,
+                saved_path: resItem.saved_path || "",
+                pageIndex: pageIdx,
+                type: roi.type || "text",
+                dataType: roi.dataType || "string",
+                role: roi.role || "data_extraction",
+                weight: roi.weight !== undefined ? roi.weight : 1.0,
+                verificationRule: roi.verificationRule || "",
+                points: roi.points
+              };
+            }
+          } catch (innerErr) {
+            console.error(`Error processing ROI ${roi.fieldName}:`, innerErr);
+          }
+          return null;
         });
 
-        const aiData = await response.json();
-        if (aiData.success) {
-          return aiData.extracted_data.map((resItem: any, idx: number) => ({
-            id: Date.now() + pageIdx * 1000 + idx, 
-            fieldName: resItem.fieldName,
-            bbox: [],
-            extractedText: resItem.text,
-            confidence: resItem.confidence,
-            saved_path: resItem.saved_path || "",
-            pageIndex: pageIdx, 
-          }));
-        }
-        return [];
+        const roiResults = await Promise.all(roiPromises);
+        return roiResults.filter(r => r !== null) as OCRResult[];
       });
 
       const resolvedResultsArray = await Promise.all(allPagePromises);
@@ -180,7 +260,108 @@ export default function Home() {
         alert("ไม่สามารถดึงข้อมูล OCR ได้ กรุณาตรวจสอบเอนจินระบบ");
       }
     } catch (err) {
+      console.error(err);
       alert("เกิดข้อผิดพลาดในการประมวลผลภาพรวมพร้อมกันทุกหน้า");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 🚀 ฟังก์ชันสำหรับการตรวจหาข้อความแยกตามประโยค/บรรทัด และรัน OCR ทั้งหน้ากระดาษโดยอัตโนมัติ
+  const handleRunFullPageOCR = async () => {
+    setIsLoading(true);
+    setOcrResults([]);
+
+    try {
+      const currentImgUrl = imagesList[currentIndex];
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const imageObj = new Image();
+        imageObj.onload = () => resolve(imageObj);
+        imageObj.onerror = (err) => reject(err);
+        imageObj.src = currentImgUrl;
+      });
+
+      const renderedWidth = 750;
+      const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
+      const scaleX = img.naturalWidth / renderedWidth;
+      const scaleY = img.naturalHeight / renderedHeight;
+
+      // 1. เรียก API โดยส่ง Rois ว่างเปล่าเพื่อวิเคราะห์เลย์เอาต์เส้นข้อความทั้งหมด
+      const response = await fetch("http://localhost:8000/api/ai/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: currentImgUrl,
+          rois: []
+        })
+      });
+
+      const aiData = await response.json();
+      if (aiData.success && aiData.extracted_data.length > 0) {
+        // 2. แปลงผลลัพธ์พิกัด (Scale) แยกเป็นแต่ละคำ/บรรทัดกลับลงมาแคนวาส 750px
+        const newRoisFromOcr: (ROI & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
+          const rx = item.x / scaleX;
+          const ry = item.y / scaleY;
+          const rw = item.width / scaleX;
+          const rh = item.height / scaleY;
+          
+          const pts = item.bbox ? item.bbox.map((pt: any) => ({
+            x: pt[0] / scaleX,
+            y: pt[1] / scaleY
+          })) : undefined;
+
+          return {
+            id: Date.now() + idx + Math.floor(Math.random() * 1000000),
+            fieldName: item.fieldName || `line_${idx + 1}`,
+            x: rx,
+            y: ry,
+            width: rw,
+            height: rh,
+            pageIndex: currentIndex,
+            type: "text",
+            dataType: "string",
+            role: "data_extraction",
+            points: pts
+          };
+        });
+
+        // 3. อัปเดตพิกัดกล่องแยกรายหน้า
+        setRois(prev => {
+          const otherPagesRois = prev.filter(r => (r.pageIndex !== undefined ? Number(r.pageIndex) : 0) !== currentIndex);
+          return [...otherPagesRois, ...newRoisFromOcr];
+        });
+
+        // 4. บันทึกผลลัพธ์เป็นข้อความแยกแต่ละบรรทัด/คำ
+        const newOcrResults: (OCRResult & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
+          const pts = item.bbox ? item.bbox.map((pt: any) => ({
+            x: pt[0] / scaleX,
+            y: pt[1] / scaleY
+          })) : undefined;
+
+          return {
+            id: Date.now() + idx + 1000000 + Math.floor(Math.random() * 1000000),
+            fieldName: item.fieldName || `line_${idx + 1}`,
+            bbox: [],
+            extractedText: item.text,
+            originalText: item.text,
+            confidence: item.confidence,
+            saved_path: item.saved_path || "",
+            pageIndex: currentIndex,
+            type: "text",
+            dataType: "string",
+            role: "data_extraction",
+            points: pts
+          };
+        });
+
+        setOcrResults(newOcrResults);
+        setCurrentStep("editor");
+      } else {
+        alert("⚠️ ไม่พบข้อความใดๆ บนหน้ากระดาษใบนี้จากการสแกนด้วย AI Engine");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งหน้ากระดาษ");
     } finally {
       setIsLoading(false);
     }
@@ -279,6 +460,7 @@ export default function Home() {
             deleteROI={(id) => setRois((p) => p.filter((roi) => roi.id !== id))}
             isLoading={isLoading}
             onRunOCR={handleRunOCR} // 🎯 เรียกใช้งานฟังก์ชันหลักแบบไม่ต้องแนบพารามิเตอร์ผิดฝั่งมา
+            onRunFullPageOCR={handleRunFullPageOCR}
             currentIndex={currentIndex}
             imagesList={imagesList}
             onIndexChange={(nextIdx) => {

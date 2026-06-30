@@ -6,7 +6,6 @@ import {
   ChevronLeft, ChevronRight, Maximize2, Sparkles, FlipHorizontal, FlipVertical,
   RotateCcw
 } from 'lucide-react';
-import { Rnd } from 'react-rnd';
 
 interface PageConfig {
   rotation: number;
@@ -25,19 +24,136 @@ interface PageConfig {
     renderedWidth?: number;
     renderedHeight?: number;
   } | null;
+  cropCorners: { x: number; y: number }[] | null;
   isCropActive: boolean;
   isCropped: boolean;
   croppedLocalUrl: string | null;
 }
 
-interface AdjustZoneProps {
-  imagesList: string[];
-  currentIndex: number;
-  onIndexChange: (index: number) => void;
-  pagesConfig: PageConfig[];
-  setPagesConfig: React.Dispatch<React.SetStateAction<PageConfig[]>>;
-  onBatchConfirm: (finalImages: string[]) => void;
-}
+const warpPerspective = (
+  srcImg: HTMLImageElement,
+  corners: { x: number; y: number }[], // 4 corners in natural coordinates
+  destW: number,
+  destH: number
+): string => {
+  const destCanvas = document.createElement("canvas");
+  destCanvas.width = destW;
+  destCanvas.height = destH;
+  const destCtx = destCanvas.getContext("2d");
+  if (!destCtx) return "";
+
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = srcImg.naturalWidth;
+  srcCanvas.height = srcImg.naturalHeight;
+  const srcCtx = srcCanvas.getContext("2d");
+  if (!srcCtx) return "";
+  srcCtx.drawImage(srcImg, 0, 0);
+  const srcData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+  const srcPixels = srcData.data;
+
+  const destData = destCtx.createImageData(destW, destH);
+  const destPixels = destData.data;
+
+  const x0 = corners[0].x, y0 = corners[0].y;
+  const x1 = corners[1].x, y1 = corners[1].y;
+  const x2 = corners[2].x, y2 = corners[2].y;
+  const x3 = corners[3].x, y3 = corners[3].y;
+
+  const dx1 = x1 - x2;
+  const dx2 = x3 - x2;
+  const sx = x0 - x1 + x2 - x3;
+  const dy1 = y1 - y2;
+  const dy2 = y3 - y2;
+  const sy = y0 - y1 + y2 - y3;
+
+  let a0, a1, a2, a3, a4, a5, a6, a7;
+
+  if (sx === 0 && sy === 0) {
+    a0 = x1 - x0;
+    a1 = x2 - x1;
+    a2 = x0;
+    a3 = y1 - y0;
+    a4 = y2 - y1;
+    a5 = y0;
+    a6 = 0;
+    a7 = 0;
+  } else {
+    const denom = dx1 * dy2 - dy1 * dx2;
+    const g = (sx * dy2 - sy * dx2) / (denom || 1);
+    const h = (dx1 * sy - dy1 * sx) / (denom || 1);
+
+    a0 = x1 - x0 + g * x1;
+    a1 = x3 - x0 + h * x3;
+    a2 = x0;
+    a3 = y1 - y0 + g * y1;
+    a4 = y3 - y0 + h * y3;
+    a5 = y0;
+    a6 = g;
+    a7 = h;
+  }
+
+  const srcW = srcImg.naturalWidth;
+  const srcH = srcImg.naturalHeight;
+
+  for (let y = 0; y < destH; y++) {
+    const v = y / destH;
+    for (let x = 0; x < destW; x++) {
+      const u = x / destW;
+
+      const denom = a6 * u + a7 * v + 1;
+      const srcX = Math.round((a0 * u + a1 * v + a2) / (denom || 1));
+      const srcY = Math.round((a3 * u + a4 * v + a5) / (denom || 1));
+
+      const destIdx = (y * destW + x) * 4;
+
+      if (srcX >= 0 && srcX < srcW && srcY >= 0 && srcY < srcH) {
+        const srcIdx = (srcY * srcW + srcX) * 4;
+        destPixels[destIdx] = srcPixels[srcIdx];
+        destPixels[destIdx + 1] = srcPixels[srcIdx + 1];
+        destPixels[destIdx + 2] = srcPixels[srcIdx + 2];
+        destPixels[destIdx + 3] = srcPixels[srcIdx + 3];
+      } else {
+        destPixels[destIdx] = 255;
+        destPixels[destIdx + 1] = 255;
+        destPixels[destIdx + 2] = 255;
+        destPixels[destIdx + 3] = 255;
+      }
+    }
+  }
+
+  destCtx.putImageData(destData, 0, 0);
+  return destCanvas.toDataURL("image/jpeg", 0.95);
+};
+
+const extractPerspectiveCropAreaUrl = (imgEl: HTMLImageElement, config: PageConfig): string | null => {
+  if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0 || !config.cropCorners || config.cropCorners.length !== 4) return null;
+
+  const naturalWidth = imgEl.naturalWidth;
+  const naturalHeight = imgEl.naturalHeight;
+  const renderedWidth = imgEl.clientWidth || 1;
+  const renderedHeight = imgEl.clientHeight || 1;
+
+  const scaleX = naturalWidth / renderedWidth;
+  const scaleY = naturalHeight / renderedHeight;
+
+  const naturalCorners = config.cropCorners.map(c => ({
+    x: c.x * scaleX,
+    y: c.y * scaleY
+  }));
+
+  const dist = (p1: any, p2: any) => Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+  
+  const wTop = dist(naturalCorners[0], naturalCorners[1]);
+  const wBottom = dist(naturalCorners[3], naturalCorners[2]);
+  const hLeft = dist(naturalCorners[0], naturalCorners[3]);
+  const hRight = dist(naturalCorners[1], naturalCorners[2]);
+
+  const destW = Math.round(Math.max(wTop, wBottom));
+  const destH = Math.round(Math.max(hLeft, hRight));
+
+  if (destW <= 0 || destH <= 0) return null;
+  return warpPerspective(imgEl, naturalCorners, destW, destH);
+};
 
 const DEFAULT_CONFIG: PageConfig = {
   rotation: 0,
@@ -49,10 +165,20 @@ const DEFAULT_CONFIG: PageConfig = {
   flipH: false,
   flipV: false,
   cropBox: null,
+  cropCorners: null,
   isCropActive: false,
   isCropped: false,
   croppedLocalUrl: null
 };
+
+interface AdjustZoneProps {
+  imagesList: string[];
+  currentIndex: number;
+  onIndexChange: (index: number) => void;
+  pagesConfig: PageConfig[];
+  setPagesConfig: React.Dispatch<React.SetStateAction<PageConfig[]>>;
+  onBatchConfirm: (finalImages: string[]) => void;
+}
 
 export default function AdjustZone({
   imagesList,
@@ -80,6 +206,7 @@ export default function AdjustZone({
   const croppedImageRef = useRef<HTMLImageElement | null>(null);
   const [liveCropPreviewUrl, setLiveCropPreviewUrl] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [activeCornerIdx, setActiveCornerIdx] = useState<number | null>(null);
 
   const currentConfig = useMemo(() => {
     return pagesConfig[currentIndex] || { ...DEFAULT_CONFIG };
@@ -103,67 +230,9 @@ export default function AdjustZone({
     });
   };
 
-  const extractCropAreaUrl = (imgEl: HTMLImageElement, config: PageConfig): string | null => {
-    // 🛡️ กันรูปพัง: เช็คความสมบูรณ์ของ Element ภาพต้นทาง
-    if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0 || !config.cropBox) return null;
-    
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    const naturalWidth = imgEl.naturalWidth;
-    const naturalHeight = imgEl.naturalHeight;
-    const renderedWidth = config.cropBox.renderedWidth ?? imgEl.clientWidth ?? 1;
-    const renderedHeight = config.cropBox.renderedHeight ?? imgEl.clientHeight ?? 1;
-
-    const imgRatio = naturalWidth / naturalHeight;
-    const containerRatio = renderedWidth / renderedHeight;
-    
-    let displayedImgWidth = renderedWidth;
-    let displayedImgHeight = renderedHeight;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (imgRatio > containerRatio) {
-      displayedImgHeight = renderedWidth / imgRatio;
-      offsetY = (renderedHeight - displayedImgHeight) / 2;
-    } else {
-      displayedImgWidth = renderedHeight * imgRatio;
-      offsetX = (renderedWidth - displayedImgWidth) / 2;
-    }
-
-    const scaleX = naturalWidth / (displayedImgWidth || 1);
-    const scaleY = naturalHeight / (displayedImgHeight || 1);
-    const relativeX = config.cropBox.x - offsetX;
-    const relativeY = config.cropBox.y - offsetY;
-
-    const realX = Math.max(0, relativeX * scaleX);
-    const realY = Math.max(0, relativeY * scaleY);
-    const realWidth = Math.min(naturalWidth, config.cropBox.width * scaleX);
-    const realHeight = Math.min(naturalHeight, config.cropBox.height * scaleY);
-
-    if (realWidth <= 0 || realHeight <= 0) return null;
-
-    canvas.width = realWidth;
-    canvas.height = realHeight;
-    ctx.drawImage(imgEl, realX, realY, realWidth, realHeight, 0, 0, realWidth, realHeight);
-
-    return canvas.toDataURL('image/jpeg', 0.95);
-  };
-
   useEffect(() => {
-    // 🛡️ ป้องกัน Live Preview เสียหาย: เช็คความพร้อมของรูปภาพบน DOM ก่อนอัปเดตสเตต
-    if (isCropped && rawImageRef.current && rawImageRef.current.complete && rawImageRef.current.naturalWidth > 0) {
-      const croppedUrl = extractCropAreaUrl(rawImageRef.current, currentConfig);
-      if (croppedUrl && !croppedUrl.startsWith("data:;")) {
-        setLiveCropPreviewUrl(croppedUrl);
-      } else {
-        setLiveCropPreviewUrl(croppedLocalUrl);
-      }
-    } else {
-      setLiveCropPreviewUrl(isCropped ? croppedLocalUrl : null);
-    }
-  }, [isCropped, cropBox, currentIndex, currentRawUrl, croppedLocalUrl]);
+    setLiveCropPreviewUrl(isCropped ? croppedLocalUrl : null);
+  }, [isCropped, croppedLocalUrl, currentIndex]);
 
   const processSingleImageCanvas = (imgEl: HTMLImageElement, config: PageConfig, baseIsCropped: boolean): string => {
     // 🛡️ ป้องกันรูปค้าง/รูปดำ: ถ้ารูปยังโหลดไม่เสร็จหรือไม่มีมิติความกว้าง ให้คืนค่า src ดั้งเดิมทันที
@@ -331,7 +400,8 @@ export default function AdjustZone({
       isCropped: false,
       isCropActive: false,
       croppedLocalUrl: null,
-      cropBox: null
+      cropBox: null,
+      cropCorners: null
     });
 
     setPagesConfig(prev => {
@@ -346,18 +416,37 @@ export default function AdjustZone({
     });
   };
 
+  const handleCornerMouseDown = (e: React.MouseEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveCornerIdx(index);
+  };
+
+  const handleContainerMouseMove = (e: React.MouseEvent) => {
+    if (activeCornerIdx === null || !rawImageRef.current) return;
+    const rect = rawImageRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+
+    if (currentConfig.cropCorners) {
+      const updatedCorners = currentConfig.cropCorners.map((c, idx) => 
+        idx === activeCornerIdx ? { x, y } : c
+      );
+      updateCurrentConfig({ cropCorners: updatedCorners });
+    }
+  };
+
+  const handleContainerMouseUp = () => {
+    setActiveCornerIdx(null);
+  };
+
   const handleInstantLocalCrop = () => {
-    if (cropBox && rawImageRef.current && rawImageRef.current.complete && rawImageRef.current.naturalWidth > 0) {
-      const croppedUrl = extractCropAreaUrl(rawImageRef.current, currentConfig);
+    if (currentConfig.cropCorners && currentConfig.cropCorners.length === 4 && rawImageRef.current && rawImageRef.current.complete && rawImageRef.current.naturalWidth > 0) {
+      const croppedUrl = extractPerspectiveCropAreaUrl(rawImageRef.current, currentConfig);
       updateCurrentConfig({ 
         isCropped: true, 
         isCropActive: false,
-        croppedLocalUrl: croppedUrl,
-        cropBox: {
-          ...cropBox,
-          renderedWidth: rawImageRef.current.clientWidth,
-          renderedHeight: rawImageRef.current.clientHeight
-        }
+        croppedLocalUrl: croppedUrl
       });
     }
   };
@@ -370,24 +459,24 @@ export default function AdjustZone({
     const imgEl = rawImageRef.current;
     if (!imgEl) return;
     
-    if (cropBox) {
+    if (currentConfig.cropCorners) {
       updateCurrentConfig({ isCropActive: true, isCropped: false });
       return;
     }
 
-    const w = Math.min(320, imgEl.clientWidth - 20);
-    const h = Math.min(240, imgEl.clientHeight - 20);
+    const w = imgEl.clientWidth || 300;
+    const h = imgEl.clientHeight || 400;
+    const marginW = w * 0.1;
+    const marginH = h * 0.1;
     updateCurrentConfig({
       isCropActive: true,
       isCropped: false,
-      cropBox: { 
-        x: (imgEl.clientWidth - w) / 2, 
-        y: (imgEl.clientHeight - h) / 2, 
-        width: w, 
-        height: h,
-        renderedWidth: imgEl.clientWidth,
-        renderedHeight: imgEl.clientHeight
-      }
+      cropCorners: [
+        { x: marginW, y: marginH },
+        { x: w - marginW, y: marginH },
+        { x: w - marginW, y: h - marginH },
+        { x: marginW, y: h - marginH }
+      ]
     });
   };
 
@@ -453,23 +542,40 @@ export default function AdjustZone({
                     style={dynamicPreviewStyle} 
                   />
                   
-                  {isCropActive && cropBox && (
-                    <Rnd
-                      size={{ width: cropBox.width, height: cropBox.height }}
-                      position={{ x: cropBox.x, y: cropBox.y }}
-                      onDragStop={(e, d) => updateCurrentConfig({ cropBox: { ...cropBox, x: d.x, y: d.y } })}
-                      onResizeStop={(e, dir, ref, delta, pos) => updateCurrentConfig({ cropBox: { width: parseInt(ref.style.width), height: parseInt(ref.style.height), ...pos } })}
-                      bounds="parent"
-                      className="border-2 border-dashed border-blue-500 bg-blue-500/5 z-40"
-                      resizeHandleStyles={{
-                        topLeft: handleHandleStyle, topRight: handleHandleStyle, bottomLeft: handleHandleStyle, bottomRight: handleHandleStyle,
-                        top: handleHandleStyle, right: handleHandleStyle, bottom: handleHandleStyle, left: handleHandleStyle
-                      }}
+                  {isCropActive && currentConfig.cropCorners && currentConfig.cropCorners.length === 4 && (
+                    <div 
+                      className="absolute inset-0 w-full h-full pointer-events-auto"
+                      onMouseMove={handleContainerMouseMove}
+                      onMouseUp={handleContainerMouseUp}
+                      onMouseLeave={handleContainerMouseUp}
                     >
-                      <div className="w-full h-full relative">
-                        <span className="absolute top-1 left-1 bg-blue-600 text-white text-[8px] font-bold tracking-wider px-1.5 py-0.5 rounded shadow pointer-events-none uppercase">CROP ZONE</span>
-                      </div>
-                    </Rnd>
+                      {/* SVG Overlay representing the crop quadrilateral */}
+                      <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
+                        <polygon
+                          points={currentConfig.cropCorners.map(c => `${c.x},${c.y}`).join(' ')}
+                          fill="rgba(59, 130, 246, 0.18)"
+                          stroke="#3b82f6"
+                          strokeWidth="2.5"
+                          strokeDasharray="4,4"
+                        />
+                      </svg>
+
+                      {/* 4 Draggable corner handles */}
+                      {currentConfig.cropCorners.map((c, idx) => (
+                        <div
+                          key={idx}
+                          onMouseDown={(e) => handleCornerMouseDown(e, idx)}
+                          style={{
+                            left: `${c.x}px`,
+                            top: `${c.y}px`,
+                            transform: 'translate(-50%, -50%)'
+                          }}
+                          className="absolute w-6 h-6 bg-white border-2 border-blue-600 rounded-full shadow-lg cursor-move z-40 flex items-center justify-center hover:scale-110 hover:bg-blue-50 transition-all select-none"
+                        >
+                          <span className="text-[10.5px] font-extrabold text-blue-600">{idx + 1}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}

@@ -1,3 +1,10 @@
+import sys
+import io
+
+# Force stdout/stderr to use UTF-8 to prevent Windows UnicodeEncodeError on console print
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -108,53 +115,90 @@ async def process_document(payload: DocumentPayload):
         results = []
         print(f"\n📥 [Request] ภาพขนาด: {w_img}x{h_img} px, จำนวน {len(payload.rois)} กล่อง")
         
-        for idx, roi in enumerate(payload.rois):
-            x, y, w, h = int(roi.x), int(roi.y), int(roi.width), int(roi.height)
-            x = max(0, x)
-            y = max(0, y)
-            x_end = min(x + w, w_img)
-            y_end = min(y + h, h_img)
-            
-            crop_img = opencv_img[y:y_end, x:x_end]
-            if crop_img.size == 0:
-                continue
-            
-            crop_img = cv2.copyMakeBorder(crop_img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-            
-            filename = f"{roi.fieldName}_{idx}.png"
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            cv2.imwrite(filepath, crop_img)
-            
-            extracted_text = ""
-            confidence_score = 0.0
-            
+        if not payload.rois:
+            print("📥 [Full Page OCR] Running EasyOCR on full page image...")
             try:
-                ocr_result = ocr_engine.readtext(crop_img)
-                if ocr_result:
-                    text_list = []
-                    conf_list = []
-                    for line in ocr_result:
-                        text_list.append(str(line[1]))
-                        conf_list.append(float(line[2]))
+                ocr_result = ocr_engine.readtext(opencv_img)
+                for idx, line in enumerate(ocr_result):
+                    bbox, text, conf = line
+                    xs = [pt[0] for pt in bbox]
+                    ys = [pt[1] for pt in bbox]
+                    x = max(0, int(min(xs)))
+                    y = max(0, int(min(ys)))
+                    w = max(1, int(max(xs) - x))
+                    h = max(1, int(max(ys) - y))
+                    w = min(w, w_img - x)
+                    h = min(h, h_img - y)
                     
-                    if text_list:
-                        extracted_text = " ".join(text_list).strip()
-                        confidence_score = sum(conf_list) / len(conf_list) if conf_list else 0.90
-            except Exception as inner_err:
-                print(f"⚠️ EasyOCR Error ย่อย: {str(inner_err)}")
+                    crop_img = opencv_img[y:y+h, x:x+w]
+                    filename = f"line_{idx+1}_{uuid.uuid4().hex[:6]}.png"
+                    filepath = os.path.join(OUTPUT_DIR, filename)
+                    if crop_img.size > 0:
+                        cv2.imwrite(filepath, crop_img)
+                    else:
+                        filepath = ""
+                    
+                    results.append({
+                        "fieldName": f"line_{idx + 1}",
+                        "text": text,
+                        "confidence": float(conf),
+                        "saved_path": filepath,
+                        "x": float(x),
+                        "y": float(y),
+                        "width": float(w),
+                        "height": float(h),
+                        "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox]
+                    })
+            except Exception as ocr_err:
+                print(f"⚠️ Full Page EasyOCR Error: {str(ocr_err)}")
+        else:
+            for idx, roi in enumerate(payload.rois):
+                x, y, w, h = int(roi.x), int(roi.y), int(roi.width), int(roi.height)
+                x = max(0, x)
+                y = max(0, y)
+                x_end = min(x + w, w_img)
+                y_end = min(y + h, h_img)
                 
-            if not extracted_text:
-                extracted_text = "(ไม่พบข้อความในกล่องพิกัด)"
+                crop_img = opencv_img[y:y_end, x:x_end]
+                if crop_img.size == 0:
+                    continue
+                
+                crop_img = cv2.copyMakeBorder(crop_img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+                
+                filename = f"{roi.fieldName}_{idx}.png"
+                filepath = os.path.join(OUTPUT_DIR, filename)
+                cv2.imwrite(filepath, crop_img)
+                
+                extracted_text = ""
                 confidence_score = 0.0
                 
-            print(f" 🔎 [Field: {roi.fieldName}] -> '{extracted_text}' ({(confidence_score*100):.1f}%)")
-            
-            results.append({
-                "fieldName": roi.fieldName,
-                "text": extracted_text,
-                "confidence": confidence_score,
-                "saved_path": filepath
-            })
+                try:
+                    ocr_result = ocr_engine.readtext(crop_img)
+                    if ocr_result:
+                        text_list = []
+                        conf_list = []
+                        for line in ocr_result:
+                            text_list.append(str(line[1]))
+                            conf_list.append(float(line[2]))
+                        
+                        if text_list:
+                            extracted_text = " ".join(text_list).strip()
+                            confidence_score = sum(conf_list) / len(conf_list) if conf_list else 0.90
+                except Exception as inner_err:
+                    print(f"⚠️ EasyOCR Error ย่อย: {str(inner_err)}")
+                    
+                if not extracted_text:
+                    extracted_text = "(ไม่พบข้อความในกล่องพิกัด)"
+                    confidence_score = 0.0
+                    
+                print(f" 🔎 [Field: {roi.fieldName}] -> '{extracted_text}' ({(confidence_score*100):.1f}%)")
+                
+                results.append({
+                    "fieldName": roi.fieldName,
+                    "text": extracted_text,
+                    "confidence": confidence_score,
+                    "saved_path": filepath
+                })
             
         return {
             "success": True,

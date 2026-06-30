@@ -1,6 +1,7 @@
 // 1. ตั้งค่าการเชื่อมต่อฐานข้อมูล (ใช้ SQLite ในเครื่องเป็นไฟล์เดียวก่อน ย้ายไป Postgres ทีหลังได้ง่ายมาก)
 datasource db {
   provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -33,16 +34,22 @@ model Request {
   roiFields    RoiField[]
 }
 
-// 4. ตารางเก็บพิกัดกล่องข้อมูลสำคัญ (Region of Interest) ที่ผู้ใช้หรือแอดมินลากวาดไว้
 model RoiField {
-  id         String   @id @default(uuid())
-  fieldName  String   // เช่น invoice_no, total_amount, date_issue
-  x          Float    // พิกัดแกน X บน Canvas
-  y          Float    // พิกัดแกน Y บน Canvas
-  width      Float    // ความกว้างของกล่อง
-  height     Float    // ความสูงของกล่อง
+  id               String   @id @default(uuid())
+  fieldName        String   // เช่น invoice_no, total_amount, date_issue
+  x                Float    // พิกัดแกน X บน Canvas
+  y                Float    // พิกัดแกน Y บน Canvas
+  width            Float    // ความกว้างของกล่อง
+  height           Float    // ความสูงของกล่อง
+  type             String   @default("text")     // text, table, image
+  dataType         String   @default("string")   // string, date, currency
+  role             String   @default("data_extraction") // anchor, data_extraction, visual_anchor
+  weight           Float    @default(1.0)
+  verificationRule String   @default("")
+  pageIndex        Int      @default(0)
+  points           String?
   
   // ความสัมพันธ์ผูกไว้กับ Request ต้นทาง
-  requestId  String
-  request    Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId        String
+  request          Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
 }
