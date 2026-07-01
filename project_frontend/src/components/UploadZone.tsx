@@ -121,7 +121,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
             </div>
             <div className="space-y-2 relative z-20">
               <h3 className="text-sm font-bold text-slate-700 tracking-tight group-hover:text-indigo-600">
-                Import Document Templates / Multi-Files
+                Import Documents / Multi-Files
               </h3>
               <p className="text-xs text-slate-400 font-medium max-w-sm mx-auto leading-relaxed">
                 ลากและวางไฟล์ หรือ <span className="text-indigo-600 font-semibold underline decoration-2 decoration-indigo-200">คลิกเพื่อเปิดไฟล์</span>

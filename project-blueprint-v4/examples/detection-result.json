@@ -1,0 +1,12 @@
+{
+  "document_id": "doc_001",
+  "pages": [
+    {
+      "page_number": 1,
+      "status": "template_found",
+      "template_id": "tpl_001",
+      "template_page_id": "tpl_page_001",
+      "confidence_score": 0.92
+    }
+  ]
+}

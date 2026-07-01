@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, ChevronDown, Copy, FilePlus, Table, Image as ImageIcon, FileText, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff } from 'lucide-react';
 import { ROI, OCRResult } from '../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
@@ -10,7 +10,7 @@ const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   return <FileText size={size} className="shrink-0 text-slate-400" />;
 };
 
-// ✨ เพิ่มสเปกให้ ROI และ OCRResult รองรับ pageIndex 
+
 const CroppedRoiPreview = ({
   previewUrl,
   roi,
@@ -117,11 +117,9 @@ export default function GroundTruthEditorZone({
 }: GroundTruthEditorZoneProps) {
   
   const [activeFieldId, setActiveFieldId] = useState<number | null>(null);
-  const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
-  const [isSubmittingRequest, setIsSubmittingRequest] = useState<boolean>(false);
   const [showLabels, setShowLabels] = useState<boolean>(true);
 
-  // 🛡️ ตั้งค่า originalText เริ่มต้นจาก extractedText หากยังไม่ระบุ เพื่อคงค่าดั้งเดิมของ OCR
+  // Keep the original OCR text for comparison while edits change extractedText.
   useEffect(() => {
     let changed = false;
     const updated = ocrResults.map(item => {
@@ -135,81 +133,17 @@ export default function GroundTruthEditorZone({
       setOcrResults(updated);
     }
   }, [ocrResults, setOcrResults]);
-
-  const handleRequestTemplate = async (option: number) => {
-    setIsDropdownOpen(false);
-    setIsSubmittingRequest(true);
-
-    try {
-      let roisToSend: any[] = [];
-      let docNameSuffix = "";
-      let flagMessage = "";
-
-      if (option === 1) {
-        roisToSend = rois.map(roi => ({
-          fieldName: roi.fieldName,
-          x: roi.x,
-          y: roi.y,
-          width: roi.width,
-          height: roi.height,
-          pageIndex: roi.pageIndex !== undefined ? roi.pageIndex : 0,
-          type: roi.type || 'text',
-          dataType: roi.dataType || 'string',
-          role: roi.role || 'data_extraction',
-          weight: roi.weight !== undefined ? roi.weight : 1.0,
-          verificationRule: roi.verificationRule || ''
-        }));
-        docNameSuffix = " (ROI Spec)";
-        flagMessage = "สร้างเทมเพลตจากพิกัด ROI ต้นแบบ";
-
-        if (roisToSend.length === 0) {
-          alert("ไม่พบพิกัด ROI ในระบบ กรุณาวาดกล่องข้อความก่อนส่งคำขอตัวเลือกนี้");
-          setIsSubmittingRequest(false);
-          return;
-        }
-      } else {
-        roisToSend = [];
-        docNameSuffix = " [New Template Request]";
-        flagMessage = "ร้องขอเทมเพลตสำหรับเอกสารประเภทใหม่ (New Document Type)";
-      }
-
-      const docName = `Request_Page_${currentImageIndex + 1}${docNameSuffix}`;
-
-      const response = await fetch("/api/ocr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: JSON.stringify(imageList), // เซอร์เรียลไลซ์รายการทุกหน้า
-          rois: roisToSend,
-          documentName: docName,
-          userId: "user-request-template"
-        })
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success) {
-        alert(`ส่งคำขอไปยังผู้ดูแลระบบเรียบร้อยแล้ว\n\nประเภทคำขอ: ${flagMessage}\nรหัสคำขอ: #${data.requestId}`);
-      } else {
-        alert(`เกิดข้อผิดพลาด: ${data.error || "ไม่สามารถดำเนินงานได้"}`);
-      }
-    } catch (err) {
-      console.error(err);
-      alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
-    } finally {
-      setIsSubmittingRequest(false);
-    }
-  };
   const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
   const [zoomIndex, setZoomIndex] = useState<number>(2); 
   const currentZoom = ZOOM_STEPS[zoomIndex];
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
-  // 🛡️ กรองกรอบ ROI ให้ดึงมาเฉพาะของหน้าปัจจุบัน
+
   const currentPageRois = useMemo(() => {
     return rois.filter(roi => roi.pageIndex === currentImageIndex);
   }, [rois, currentImageIndex]);
 
-  // 🛡️ กรองผลลัพธ์ OCR ให้แสดงในตารางเฉพาะของหน้าปัจจุบันเท่านั้น
+
   const currentPageOcrResults = useMemo(() => {
     return ocrResults.filter(res => res.pageIndex === currentImageIndex);
   }, [ocrResults, currentImageIndex]);
@@ -221,14 +155,14 @@ export default function GroundTruthEditorZone({
   const handlePrevImage = () => {
     if (onImageIndexChange && currentImageIndex > 0) {
       onImageIndexChange(currentImageIndex - 1);
-      setActiveFieldId(null); // เคลียร์ฟิลด์ที่เลือกเมื่อย้ายหน้า
+      setActiveFieldId(null); // Clear the selected field when changing pages.
     }
   };
 
   const handleNextImage = () => {
     if (onImageIndexChange && currentImageIndex < imageList.length - 1) {
       onImageIndexChange(currentImageIndex + 1);
-      setActiveFieldId(null); // เคลียร์ฟิลด์ที่เลือกเมื่อย้ายหน้า
+      setActiveFieldId(null); // Clear the selected field when changing pages.
     }
   };
 
@@ -241,7 +175,7 @@ export default function GroundTruthEditorZone({
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-fade-in">
       
-      {/* 📊 STEP PROCESS PROGRESS BAR */}
+      {/* Step progress bar */}
       <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
           <div className="flex items-center gap-2.5 bg-white pr-4 z-10">
@@ -259,14 +193,14 @@ export default function GroundTruthEditorZone({
         </div>
       </div>
 
-      {/* 💻 LAYOUT */}
-      <div className="grid grid-cols-12 gap-6 h-[720px]">
+      {/* Main editor layout */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 min-h-[720px] items-start">
         
-        {/* 🎨 👈 ฝั่งซ้าย: กระดานแสดงภาพเอกสาร */}
-        <div className="col-span-5 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-hidden flex flex-col h-full relative shadow-md">
+
+        <div className="xl:col-span-5 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-hidden flex flex-col min-h-[620px] relative shadow-md">
           {/* Header controls for left canvas */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200">
-            <span className="text-xs font-black text-slate-600 uppercase tracking-wider">เอกสารพรีวิว</span>
+            <span className="text-xs font-black text-slate-600 uppercase tracking-wider">Document Preview</span>
             <button
               type="button"
               onClick={() => setShowLabels(prev => !prev)}
@@ -275,10 +209,10 @@ export default function GroundTruthEditorZone({
                   ? 'bg-amber-50 text-amber-600 border-amber-250 shadow-sm' 
                   : 'bg-slate-50 text-slate-500 hover:bg-slate-100 border-slate-200'
               }`}
-              title={showLabels ? "ซ่อนชื่อฟิลด์บนภาพ" : "แสดงชื่อฟิลด์บนภาพ"}
+              title={showLabels ? "Hide field labels" : "Show field labels"}
             >
               {showLabels ? <Eye size={12} /> : <EyeOff size={12} />}
-              <span>{showLabels ? "ซ่อนป้ายชื่อ" : "แสดงป้ายชื่อ"}</span>
+              <span>{showLabels ? "Hide Labels" : "Show Labels"}</span>
             </button>
           </div>
 
@@ -301,7 +235,7 @@ export default function GroundTruthEditorZone({
                   className="w-full h-auto block select-none rounded bg-white border border-slate-700 shadow-sm"
                 />
 
-                {/* 🎯 เลเยอร์วาดกล่องไฮไลต์เชื่อมโยงข้อมูล (กรองเฉพาะหน้าปัจจุบัน) */}
+        {/* OCR results table */}
                 <div className="absolute inset-0 top-0 left-0 w-full h-full pointer-events-none">
                   {currentPageOcrResults.map((res) => {
                     const matchedRoi = getRoiByFieldName(res.fieldName);
@@ -357,7 +291,7 @@ export default function GroundTruthEditorZone({
             </div>
           </div>
 
-          {/* แผงควบคุมซูม */}
+
           <div className="absolute bottom-24 right-4 bg-white border border-slate-200 rounded-lg p-1 flex items-center gap-2 shadow-md z-20 text-slate-700">
             <button type="button" onClick={() => zoomIndex > 0 && setZoomIndex(prev => prev - 1)} className="p-1 hover:bg-slate-100 rounded text-slate-500"><ZoomOut size={12} /></button>
             <span className="text-[10px] font-mono font-bold w-10 text-center text-slate-650">{Math.round(currentZoom * 100)}%</span>
@@ -365,12 +299,12 @@ export default function GroundTruthEditorZone({
             <button type="button" onClick={() => setZoomIndex(2)} className="p-1 hover:bg-slate-100 rounded text-slate-400"><Maximize2 size={10} /></button>
           </div>
 
-          {/* 🎞️ Carousel แถบเลือกหน้า */}
+          {/* Page carousel */}
           <div className="bg-[#edf2f7] border-t border-slate-200 p-3 flex flex-col gap-2 select-none">
             <div className="flex items-center justify-between px-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">เอกสารทั้งหมด ({imageList.length} ไฟล์)</span>
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Documents ({imageList.length} files)</span>
               <span className="text-[10px] font-mono bg-white text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded font-bold">
-                หน้า {currentImageIndex + 1} / {imageList.length}
+                Page {currentImageIndex + 1} / {imageList.length}
               </span>
             </div>
             
@@ -420,18 +354,18 @@ export default function GroundTruthEditorZone({
           </div>
         </div>
 
-        {/* 📊 👉 ฝั่งขวา: ตารางข้อมูล (กรองผลลัพธ์เฉพาะหน้าปัจจุบัน) */}
-        <div className="col-span-7 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col h-full overflow-hidden">
+        {/* OCR results table */}
+        <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col min-h-[620px] overflow-hidden">
           <div className="p-4 border-b flex justify-between items-center bg-slate-50/50">
             <button
               type="button"
               onClick={onBackToStudio}
               className="py-1.5 px-3 hover:bg-slate-200/70 text-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
             >
-              <ArrowLeft size={14} /> กลับไปปรับกล่อง
+              <ArrowLeft size={14} /> Back to ROI Studio
             </button>
             <h3 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <CheckCircle size={15} className="text-indigo-600" /> ตรวจสอบความถูกต้องและอนุมัติผลลัพธ์
+              <CheckCircle size={15} className="text-indigo-600" /> Review and edit OCR results
             </h3>
           </div>
 
@@ -440,8 +374,8 @@ export default function GroundTruthEditorZone({
               <thead className="bg-slate-50 font-sans text-slate-500 font-semibold border-b border-slate-100 sticky top-0 z-10">
                 <tr>
                   <th className="px-4 py-3 w-[22%]">Field Channel</th>
-                  <th className="px-4 py-3 w-[39%]">ช่องที่ OCR อ่านได้</th>
-                  <th className="px-4 py-3 w-[39%]">ช่องที่แก้คำได้</th>
+                  <th className="px-4 py-3 w-[39%]">OCR Text</th>
+                  <th className="px-4 py-3 w-[39%]">Editable Text</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -454,7 +388,7 @@ export default function GroundTruthEditorZone({
                       onClick={() => setActiveFieldId(res.id)} 
                       className={`group cursor-pointer transition-all ${isSelected ? 'bg-indigo-50/40 border-l-4 border-l-indigo-500 font-medium' : 'hover:bg-slate-50/50'}`}
                     >
-                      {/* คอลัมน์ 1: ฟิลด์ */}
+
                       <td className="px-4 py-4 align-top" onClick={(e) => e.stopPropagation()}>
                         <div className="flex flex-col gap-1.5">
                           <div className="flex items-center gap-1 bg-transparent border border-transparent rounded px-1 group-hover:border-slate-200 focus-within:border-indigo-400 focus-within:bg-white transition-all">
@@ -464,7 +398,7 @@ export default function GroundTruthEditorZone({
                               onFocus={() => setActiveFieldId(res.id)}
                               onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
                               className="w-full bg-transparent font-bold text-slate-700 focus:outline-none py-1 text-xs truncate"
-                              placeholder="ระบุชื่อฟิลด์..."
+                              placeholder="Field name..."
                             />
                             <Edit3 size={12} className="text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
                           </div>
@@ -477,17 +411,17 @@ export default function GroundTruthEditorZone({
                         </div>
                       </td>
                       
-                      {/* คอลัมน์ 2: ช่องที่ OCR อ่านได้ */}
+
                       <td className="px-4 py-4 align-top w-[39%]">
                         <div className="flex flex-col gap-1.5 h-full justify-between">
                           {matchedRoi?.type === 'image' ? (
                             <div className="flex flex-col gap-1 bg-white border border-slate-200 p-1.5 rounded-xl w-fit shadow-xs">
                               <CroppedRoiPreview previewUrl={previewUrl} roi={matchedRoi} />
-                              <span className="text-[9px] font-bold text-slate-400">รูปภาพพิกัดครอบตัด</span>
+                              <span className="text-[9px] font-bold text-slate-400">ROI crop preview</span>
                             </div>
                           ) : (
                             <div className="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-slate-650 font-medium text-xs break-words leading-relaxed shadow-sm">
-                              {res.originalText || <span className="text-slate-400 italic">(ไม่มีข้อความ)</span>}
+                              {res.originalText || <span className="text-slate-400 italic">(No text)</span>}
                             </div>
                           )}
                           <span className={`w-fit px-1.5 py-0.5 rounded text-[10px] font-mono font-bold mt-1 ${res.confidence >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
@@ -496,12 +430,12 @@ export default function GroundTruthEditorZone({
                         </div>
                       </td>
                       
-                      {/* คอลัมน์ 3: ช่องที่แก้คำได้ */}
+
                       <td className="px-4 py-4 align-top w-[39%]" onClick={(e) => e.stopPropagation()}>
                         <div className="flex flex-col gap-1.5 h-full justify-between">
                           {matchedRoi?.type === 'image' ? (
                             <div className="w-full bg-slate-50/50 border border-dashed border-slate-200 rounded-xl px-3 py-3 text-slate-400 font-bold text-center text-xs">
-                              รูปภาพอ้างอิง (ไม่มีข้อความ)
+                              Image reference (No text)
                             </div>
                           ) : (
                             <textarea 
@@ -516,7 +450,7 @@ export default function GroundTruthEditorZone({
                               }}
                               onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))} 
                               className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner" 
-                              placeholder="พิมพ์เพื่อแก้ไขคำคัดลอก..."
+                              placeholder="Edit OCR text..."
                               rows={1}
                             />
                           )}
@@ -529,12 +463,12 @@ export default function GroundTruthEditorZone({
                   );
                 })}
 
-                {/* ℹ️ กรณีหน้านี้ไม่มีการสลักกล่อง OCR ไว้เลย */}
+
                 {currentPageOcrResults.length === 0 && (
                   <tr>
                     <td colSpan={3} className="text-center py-20 text-slate-400 font-medium bg-slate-50/50">
-                      ไม่พบกล่องข้อมูล OCR บนหน้าปัจจุบัน <br />
-                      <span className="text-[11px] font-normal text-slate-400">โปรดย้อนกลับไปลากกล่องดักจับที่ขั้นตอน ROI Studio</span>
+                      No OCR results on this page <br />
+                      <span className="text-[11px] font-normal text-slate-400">Go back to ROI Studio and run OCR first.</span>
                     </td>
                   </tr>
                 )}
@@ -548,64 +482,8 @@ export default function GroundTruthEditorZone({
               onClick={onApproveAndSave} 
               className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2"
             >
-              <Save size={15} /> Approve & Commit Sync
+              <Save size={15} /> Done
             </button>
-
-            {/* Dropdown Action Menu */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setIsDropdownOpen(prev => !prev)}
-                disabled={isSubmittingRequest}
-                className="h-full px-4 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-98 disabled:opacity-50"
-              >
-                Request New Template
-                <ChevronDown size={14} className={`transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {isDropdownOpen && (
-                <>
-                  {/* Overlay background to close dropdown on click outside */}
-                  <div className="fixed inset-0 z-30" onClick={() => setIsDropdownOpen(false)} />
-                  
-                  <div className="absolute right-0 bottom-full mb-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 p-1.5 animate-fade-in origin-bottom-right">
-                    <button
-                      type="button"
-                      onClick={() => handleRequestTemplate(1)}
-                      className="w-full text-left p-3 rounded-xl hover:bg-slate-50 transition-colors flex items-start gap-2.5 group"
-                    >
-                      <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition-colors shrink-0">
-                        <Copy size={15} />
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-bold text-slate-800">Request Template from Current ROI</p>
-                        <p className="text-[9px] text-slate-400 font-medium leading-relaxed mt-0.5">
-                          ส่งค่าพิกัดกล่อง (ROI) ที่วาดไว้ตอนนี้ เพื่อใช้เป็นโครงร่างเทมเพลตมาตรฐาน
-                        </p>
-                      </div>
-                    </button>
-                    
-                    <div className="h-[1px] bg-slate-100 my-1.5" />
-                    
-                    <button
-                      type="button"
-                      onClick={() => handleRequestTemplate(2)}
-                      className="w-full text-left p-3 rounded-xl hover:bg-slate-50 transition-colors flex items-start gap-2.5 group"
-                    >
-                      <div className="p-2 rounded-lg bg-amber-50 text-amber-600 group-hover:bg-amber-100 transition-colors shrink-0">
-                        <FilePlus size={15} />
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-bold text-slate-800">Request for New Document Type</p>
-                        <p className="text-[9px] text-slate-400 font-medium leading-relaxed mt-0.5">
-                          ร้องขอสร้างเทมเพลตประเภทใหม่ด้วยภาพต้นฉบับ โดยไม่ใช้พิกัดที่วาด
-                        </p>
-                      </div>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
           </div>
         </div>
 
@@ -613,3 +491,4 @@ export default function GroundTruthEditorZone({
     </div>
   );
 }
+

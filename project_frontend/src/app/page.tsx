@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import AdjustZone from '../components/AdjustZone';
+import AdjustZone from "../components/AdjustZone";
 import WorkspaceZone from "../components/WorkspaceZone";
 import GroundTruthEditorZone from "../components/GroundTruthEditorZone";
 import { ROI, OCRResult } from "../types/ocr";
@@ -11,15 +11,15 @@ interface PageConfig {
   rotation: number;
   brightness: number;
   contrast: number;
-  sharpness: number;      
-  perspectiveV: number;   
-  perspectiveH: number;   
-  flipH: boolean;         
-  flipV: boolean;         
-  cropBox: { 
-    x: number; 
-    y: number; 
-    width: number; 
+  sharpness: number;
+  perspectiveV: number;
+  perspectiveH: number;
+  flipH: boolean;
+  flipV: boolean;
+  cropBox: {
+    x: number;
+    y: number;
+    width: number;
     height: number;
     renderedWidth?: number;
     renderedHeight?: number;
@@ -39,7 +39,6 @@ const UploadZone = dynamic(() => import("../components/UploadZone"), {
   ),
 });
 
-// 🎨 Helper: ตัดรูปเฉพาะจุดและถมพื้นหลังภายนอกด้วยสีขาว รองรับทั้ง Rectangle, Quad, และ Polygon
 const cropRoiToImage = (
   imgEl: HTMLImageElement,
   roi: { x: number; y: number; width: number; height: number; points?: { x: number; y: number }[] },
@@ -59,12 +58,10 @@ const cropRoiToImage = (
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // 1. ถมพื้นหลังขาวล้วนเป็นค่าเริ่มต้น
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.save();
-  // 2. ถ้าเป็นรูปหลายเหลี่ยม (Quad / Polygon) ให้ทำการคลิปเส้น
   if (roi.points && roi.points.length > 2) {
     ctx.beginPath();
     roi.points.forEach((p, idx) => {
@@ -80,7 +77,6 @@ const cropRoiToImage = (
     ctx.clip();
   }
 
-  // 3. วาดภาพต้นฉบับลงพื้นที่แคนวาสเฉพาะส่วน
   ctx.drawImage(
     imgEl,
     Math.max(0, realX),
@@ -99,10 +95,9 @@ const cropRoiToImage = (
 
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
-
   const [imagesList, setImagesList] = useState<string[]>([]);
   const [originalImagesList, setOriginalImagesList] = useState<string[]>([]);
-  
+
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string>("");
@@ -115,34 +110,36 @@ export default function Home() {
 
   const handleUploadSuccess = (urls: string[]) => {
     setImagesList(urls);
-    setOriginalImagesList([...urls]); 
+    setOriginalImagesList([...urls]);
     setCurrentIndex(0);
-    setPreviewUrl(urls[0]);
-    setImage(urls[0]);
-    
-    const initialConfigs = urls.map(() => ({
-      rotation: 0,
-      brightness: 100,
-      contrast: 100,
-      sharpness: 0,
-      perspectiveV: 0,
-      perspectiveH: 0,
-      flipH: false,
-      flipV: false,
-      cropBox: null,
-      cropCorners: null,
-      isCropActive: false,
-      isCropped: false,
-      croppedLocalUrl: null
-    }));
-    setPagesConfig(initialConfigs);
-    
+    setPreviewUrl(urls[0] || "");
+    setImage(urls[0] || null);
+    setRois([]);
+    setSelectedId(null);
+    setOcrResults([]);
+    setPagesConfig(
+      urls.map(() => ({
+        rotation: 0,
+        brightness: 100,
+        contrast: 100,
+        sharpness: 0,
+        perspectiveV: 0,
+        perspectiveH: 0,
+        flipH: false,
+        flipV: false,
+        cropBox: null,
+        cropCorners: null,
+        isCropActive: false,
+        isCropped: false,
+        croppedLocalUrl: null,
+      }))
+    );
     setCurrentStep("adjust");
   };
 
   const handleClearAndUploadNew = () => {
     setImagesList([]);
-    setOriginalImagesList([]); 
+    setOriginalImagesList([]);
     setCurrentIndex(0);
     setPagesConfig([]);
     setPreviewUrl("");
@@ -155,15 +152,18 @@ export default function Home() {
 
   const handleBatchConfirm = (finalProcessedImages: string[]) => {
     setImagesList(finalProcessedImages);
-    setPreviewUrl(finalProcessedImages[currentIndex] || "");
-    setImage(finalProcessedImages[currentIndex] || null);
+    setPreviewUrl(finalProcessedImages[currentIndex] || finalProcessedImages[0] || "");
+    setImage(finalProcessedImages[currentIndex] || finalProcessedImages[0] || null);
+    setRois([]);
+    setSelectedId(null);
+    setOcrResults([]);
     setCurrentStep("studio");
   };
 
-  // 🚀 ฟังก์ชันสั่ง Run OCR รวมทุกหน้า พร้อมระบบตัดภาพตามพิกัดโครงสร้างเครื่องมือจริง (Polygon/Quad Support)
   const handleRunOCR = async () => {
-    if (rois.length === 0) {
-      alert("⚠️ ไม่พบกล่อง ROI ใดๆ ในคลัง กรุณาลากกล่องข้อความอย่างน้อย 1 กล่องก่อนกดรันประมวลผลครับ");
+    const activeRois = rois.filter((roi) => roi.enabled !== false);
+    if (activeRois.length === 0) {
+      alert("กรุณาวาดหรือเปิดใช้งาน ROI อย่างน้อย 1 กล่องก่อนอ่าน OCR");
       return;
     }
 
@@ -171,9 +171,8 @@ export default function Home() {
     setOcrResults([]);
 
     try {
-      // ค้นหาดัชนีของหน้าทั้งหมดที่ถูกระบุไว้ในกล่อง ROI
       const activePageIndexes = Array.from(
-        new Set(rois.map((roi) => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0)))
+        new Set(activeRois.map((roi) => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0)))
       );
 
       const allPagePromises = activePageIndexes.map(async (pageIdx) => {
@@ -191,13 +190,12 @@ export default function Home() {
           imageObj.src = currentImgUrl;
         });
 
-        const renderedWidth = 750; 
+        const renderedWidth = 750;
         const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
 
         const scaleX = img.naturalWidth / renderedWidth;
         const scaleY = img.naturalHeight / renderedHeight;
 
-        // ดึงผลลัพธ์ทีละ ROI แบบขนาน
         const roiPromises = pageRois.map(async (roi, rIdx) => {
           const croppedBase64 = cropRoiToImage(img, roi, scaleX, scaleY);
           if (!croppedBase64) return null;
@@ -214,10 +212,10 @@ export default function Home() {
                     x: 0,
                     y: 0,
                     width: roi.width * scaleX,
-                    height: roi.height * scaleY
-                  }
-                ]
-              })
+                    height: roi.height * scaleY,
+                  },
+                ],
+              }),
             });
 
             const aiData = await response.json();
@@ -236,8 +234,7 @@ export default function Home() {
                 dataType: roi.dataType || "string",
                 role: roi.role || "data_extraction",
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
-                verificationRule: roi.verificationRule || "",
-                points: roi.points
+                points: roi.points,
               };
             }
           } catch (innerErr) {
@@ -247,7 +244,7 @@ export default function Home() {
         });
 
         const roiResults = await Promise.all(roiPromises);
-        return roiResults.filter(r => r !== null) as OCRResult[];
+        return roiResults.filter((r) => r !== null) as (OCRResult & { pageIndex?: number })[];
       });
 
       const resolvedResultsArray = await Promise.all(allPagePromises);
@@ -267,7 +264,6 @@ export default function Home() {
     }
   };
 
-  // 🚀 ฟังก์ชันสำหรับการตรวจหาข้อความแยกตามประโยค/บรรทัด และรัน OCR ทั้งหน้ากระดาษโดยอัตโนมัติ
   const handleRunFullPageOCR = async () => {
     setIsLoading(true);
     setOcrResults([]);
@@ -286,29 +282,29 @@ export default function Home() {
       const scaleX = img.naturalWidth / renderedWidth;
       const scaleY = img.naturalHeight / renderedHeight;
 
-      // 1. เรียก API โดยส่ง Rois ว่างเปล่าเพื่อวิเคราะห์เลย์เอาต์เส้นข้อความทั้งหมด
       const response = await fetch("http://localhost:8000/api/ai/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image: currentImgUrl,
-          rois: []
-        })
+          rois: [],
+        }),
       });
 
       const aiData = await response.json();
       if (aiData.success && aiData.extracted_data.length > 0) {
-        // 2. แปลงผลลัพธ์พิกัด (Scale) แยกเป็นแต่ละคำ/บรรทัดกลับลงมาแคนวาส 750px
         const newRoisFromOcr: (ROI & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
           const rx = item.x / scaleX;
           const ry = item.y / scaleY;
           const rw = item.width / scaleX;
           const rh = item.height / scaleY;
-          
-          const pts = item.bbox ? item.bbox.map((pt: any) => ({
-            x: pt[0] / scaleX,
-            y: pt[1] / scaleY
-          })) : undefined;
+
+          const pts = item.bbox
+            ? item.bbox.map((pt: any) => ({
+                x: pt[0] / scaleX,
+                y: pt[1] / scaleY,
+              }))
+            : undefined;
 
           return {
             id: Date.now() + idx + Math.floor(Math.random() * 1000000),
@@ -321,22 +317,24 @@ export default function Home() {
             type: "text",
             dataType: "string",
             role: "data_extraction",
-            points: pts
+            points: pts,
           };
         });
 
-        // 3. อัปเดตพิกัดกล่องแยกรายหน้า
-        setRois(prev => {
-          const otherPagesRois = prev.filter(r => (r.pageIndex !== undefined ? Number(r.pageIndex) : 0) !== currentIndex);
+        setRois((prev) => {
+          const otherPagesRois = prev.filter(
+            (r) => (r.pageIndex !== undefined ? Number(r.pageIndex) : 0) !== currentIndex
+          );
           return [...otherPagesRois, ...newRoisFromOcr];
         });
 
-        // 4. บันทึกผลลัพธ์เป็นข้อความแยกแต่ละบรรทัด/คำ
         const newOcrResults: (OCRResult & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
-          const pts = item.bbox ? item.bbox.map((pt: any) => ({
-            x: pt[0] / scaleX,
-            y: pt[1] / scaleY
-          })) : undefined;
+          const pts = item.bbox
+            ? item.bbox.map((pt: any) => ({
+                x: pt[0] / scaleX,
+                y: pt[1] / scaleY,
+              }))
+            : undefined;
 
           return {
             id: Date.now() + idx + 1000000 + Math.floor(Math.random() * 1000000),
@@ -350,14 +348,14 @@ export default function Home() {
             type: "text",
             dataType: "string",
             role: "data_extraction",
-            points: pts
+            points: pts,
           };
         });
 
         setOcrResults(newOcrResults);
         setCurrentStep("editor");
       } else {
-        alert("⚠️ ไม่พบข้อความใดๆ บนหน้ากระดาษใบนี้จากการสแกนด้วย AI Engine");
+        alert("ไม่พบข้อความใดๆ บนหน้ากระดาษใบนี้จากการสแกนด้วย AI Engine");
       }
     } catch (err) {
       console.error(err);
@@ -368,7 +366,7 @@ export default function Home() {
   };
 
   const handleApproveAndSave = async () => {
-    const currentPageResults = ocrResults.filter(res => {
+    const currentPageResults = ocrResults.filter((res) => {
       const resPage = res.pageIndex !== undefined ? Number(res.pageIndex) : 0;
       return resPage === Number(currentIndex);
     });
@@ -389,8 +387,9 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      alert(`🎉 บันทึกข้อมูลของเอกสารหน้า ${currentIndex + 1} เรียบร้อยแล้ว!`);
+      alert(`บันทึกข้อมูลของเอกสารหน้า ${currentIndex + 1} เรียบร้อยแล้ว!`);
     } catch (error) {
+      console.error(error);
       alert("เกิดข้อผิดพลาดในการบันทึกข้อมูล");
     }
   };
@@ -398,7 +397,6 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-50 py-8 select-none">
       <div className="container mx-auto px-6 max-w-7xl space-y-5">
-        
         <div className="text-center py-2">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
             Intelligent OCR Portal
@@ -409,11 +407,11 @@ export default function Home() {
           <div className="flex items-center gap-2.5">
             <div className="w-2.5 h-2.5 rounded-full bg-indigo-600 shadow-sm shadow-indigo-600/30 animate-pulse"></div>
             <span className="text-xs font-bold tracking-wide text-slate-700 uppercase">
-              Intelligent OCR Studio v1.2 
+              Intelligent OCR Studio v1.2
               {imagesList.length > 0 && ` (Active: หน้า ${currentIndex + 1}/${imagesList.length})`}
             </span>
           </div>
-          
+
           <div className="flex items-center">
             {imagesList.length > 0 && (
               <button
@@ -431,7 +429,7 @@ export default function Home() {
         </div>
 
         {currentStep === "upload" && (
-          <UploadZone onUploadSuccess={handleUploadSuccess} /> 
+          <UploadZone onUploadSuccess={handleUploadSuccess} />
         )}
 
         {currentStep === "adjust" && (
@@ -447,8 +445,8 @@ export default function Home() {
 
         {currentStep === "studio" && (
           <WorkspaceZone
-            previewUrl={imagesList[currentIndex] || ""}
-            image={imagesList[currentIndex] || null}
+            previewUrl={imagesList[currentIndex] || previewUrl}
+            image={imagesList[currentIndex] || image}
             brightness={pagesConfig[currentIndex]?.brightness ?? 100}
             contrast={pagesConfig[currentIndex]?.contrast ?? 100}
             rotation={pagesConfig[currentIndex]?.rotation ?? 0}
@@ -459,24 +457,24 @@ export default function Home() {
             onBackToAdjust={() => setCurrentStep("adjust")}
             deleteROI={(id) => setRois((p) => p.filter((roi) => roi.id !== id))}
             isLoading={isLoading}
-            onRunOCR={handleRunOCR} // 🎯 เรียกใช้งานฟังก์ชันหลักแบบไม่ต้องแนบพารามิเตอร์ผิดฝั่งมา
+            onRunOCR={handleRunOCR}
             onRunFullPageOCR={handleRunFullPageOCR}
             currentIndex={currentIndex}
             imagesList={imagesList}
             onIndexChange={(nextIdx) => {
               setCurrentIndex(nextIdx);
-              setSelectedId(null); 
+              setSelectedId(null);
             }}
           />
         )}
 
         {currentStep === "editor" && (
           <GroundTruthEditorZone
-            previewUrl={imagesList[currentIndex] || ""}
+            previewUrl={imagesList[currentIndex] || previewUrl}
             rois={rois}
             ocrResults={ocrResults}
             setOcrResults={setOcrResults}
-            onBackToStudio={() => setCurrentStep("studio")} 
+            onBackToStudio={() => setCurrentStep("studio")}
             onApproveAndSave={handleApproveAndSave}
             imageList={imagesList}
             currentImageIndex={currentIndex}

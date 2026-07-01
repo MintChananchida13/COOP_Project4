@@ -1,0 +1,20 @@
+sequenceDiagram
+  actor Admin
+  participant FE as Admin UI
+  participant API as Backend API
+  participant EMB as EmbeddingService
+  participant QD as QdrantService
+  participant TEST as TestModeService
+
+  Admin->>FE: Create/edit template
+  FE->>API: Save fields and ignore regions
+  Admin->>FE: Generate embeddings
+  FE->>API: POST generate-layout-embedding
+  API->>EMB: Encode template pages
+  EMB->>QD: Store page vectors
+  Admin->>FE: Run Test Mode
+  FE->>API: POST /test
+  API->>TEST: Run full pipeline
+  TEST-->>API: Previews + scores
+  API-->>FE: Test result
+  Admin->>FE: Approve

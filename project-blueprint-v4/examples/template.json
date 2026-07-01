@@ -1,0 +1,12 @@
+{
+  "id": "tpl_001",
+  "name": "Invoice Template",
+  "page_count": 2,
+  "pages": [
+    {
+      "id": "tpl_page_001",
+      "page_number": 1,
+      "qdrant_point_id": "point_001"
+    }
+  ]
+}

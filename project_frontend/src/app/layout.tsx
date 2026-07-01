@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OCR Template Studio",
-  description: "Advanced Document Processing and Verification Studio",
+  title: "OCR Studio",
+  description: "Document OCR processing workspace",
 };
 
 export default function RootLayout({

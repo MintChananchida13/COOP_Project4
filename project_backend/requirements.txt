@@ -4,4 +4,4 @@ pydantic==2.6.4
 opencv-python-headless==4.9.0.80
 pillow
 numpy
-qdrant-client==1.8.0
+easyocr

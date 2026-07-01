@@ -1,0 +1,7 @@
+flowchart LR
+  A[Normalized Page] --> B[Image Encoder]
+  B --> C[Embedding]
+  C --> D[Qdrant Top-K]
+  D --> E[OCR Verification]
+  E --> F[Confidence Engine]
+  F --> G[Confirmed Template Page]

@@ -1,0 +1,11 @@
+{
+  "id": "doc_001",
+  "page_count": 2,
+  "pages": [
+    {
+      "id": "page_001",
+      "page_number": 1,
+      "original_image_url": "/uploads/page1.jpg"
+    }
+  ]
+}

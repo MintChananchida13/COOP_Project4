@@ -1,0 +1,13 @@
+flowchart TD
+  A[Review Request] --> B{Accept?}
+  B -- No --> C[Reject]
+  B -- Yes --> D[Create Template]
+  D --> E[Create Template Pages]
+  E --> F[Adjust Pages]
+  F --> G[Create Fields]
+  G --> H[Create Ignore Regions]
+  H --> I[Generate Embeddings]
+  I --> J[Test Mode]
+  J --> K{Pass?}
+  K -- No --> G
+  K -- Yes --> L[Approve]

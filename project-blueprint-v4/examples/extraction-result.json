@@ -1,0 +1,11 @@
+{
+  "document_id": "doc_001",
+  "results": [
+    {
+      "page_number": 1,
+      "field_name": "invoice_no",
+      "ocr_text": "INV-2026-001",
+      "ocr_confidence": 0.94
+    }
+  ]
+}

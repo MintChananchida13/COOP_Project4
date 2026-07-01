@@ -1,0 +1,24 @@
+sequenceDiagram
+  actor User
+  participant FE as Frontend
+  participant API as Backend API
+  participant SPLIT as PageSplitService
+  participant IMG as ImageProcessingService
+  participant ENC as ImageEncoderService
+  participant QD as QdrantService
+  participant OCR as OCRService
+  participant VER as VerificationService
+  participant CONF as ConfidenceService
+
+  User->>FE: Upload document
+  FE->>API: POST /documents/upload
+  API->>SPLIT: Split into pages
+  loop each page
+    API->>IMG: Preprocess page
+    API->>ENC: Generate embedding
+    API->>QD: Top-K search
+    API->>OCR: OCR verification fields
+    API->>VER: Verify
+    API->>CONF: Calculate confidence
+  end
+  API-->>FE: Page-level detection results

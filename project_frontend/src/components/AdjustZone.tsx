@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useRef, useMemo, useEffect, useState } from 'react';
 import { 
@@ -248,8 +248,8 @@ export default function AdjustZone({
     let targetHeight = naturalHeight;
 
     if (!baseIsCropped && config.cropBox) {
-      const renderedWidth = config.cropBox.renderedWidth ?? imgEl.clientWidth ?? 500;
-      const renderedHeight = config.cropBox.renderedHeight ?? imgEl.clientHeight ?? 500;
+      const renderedWidth = config.cropBox.renderedWidth || imgEl.clientWidth || 500;
+      const renderedHeight = config.cropBox.renderedHeight || imgEl.clientHeight || 500;
       
       const safeRenderedWidth = renderedWidth <= 0 ? 500 : renderedWidth;
       const safeRenderedHeight = renderedHeight <= 0 ? 500 : renderedHeight;
@@ -514,14 +514,14 @@ export default function AdjustZone({
     <div className="max-w-7xl mx-auto bg-[#f8fafc] border border-slate-200 rounded-2xl p-4 md:p-6 space-y-6">
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
         <h2 className="text-sm font-bold text-[#172b4d] flex items-center gap-2 tracking-wide uppercase">
-          <Crop size={16} className="text-[#0052cc]" /> Image Configuration Panel
+          <Crop size={16} className="text-[#0052cc]" /> ตั้งค่าภาพเอกสาร
         </h2>
-        <p className="text-xs text-slate-400 mt-0.5">จัดระเบียบโครงสร้างระนาบ ความคมชัด และสัดส่วนขอบเขตของหน้าเอกสารก่อนการวิเคราะห์โครงสร้าง</p>
+        <p className="text-xs text-slate-400 mt-0.5">ปรับครอปภาพ มุมเอียง แสง คอนทราสต์ และทิศทางหน้าก่อนนำไปอ่าน OCR</p>
       </div>
 
-      <div className="grid grid-cols-12 gap-6 items-stretch">
-        <div className="col-span-12 lg:col-span-8 flex flex-col gap-4">
-          <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center h-[540px] overflow-hidden shadow-inner relative p-4">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
+        <div className="xl:col-span-8 flex flex-col gap-4">
+          <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[420px] md:h-[540px] overflow-hidden shadow-inner relative p-4">
             
             <div className="relative flex items-center justify-center w-full h-full">
               {isCropped && liveCropPreviewUrl ? (
@@ -529,16 +529,16 @@ export default function AdjustZone({
                   ref={croppedImageRef} 
                   src={liveCropPreviewUrl} 
                   alt="Cropped Sub-Region Preview" 
-                  className="max-h-[460px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
+                  className="max-h-[360px] md:max-h-[460px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
                   style={dynamicPreviewStyle} 
                 />
               ) : (
-                <div className="relative inline-block max-h-[440px] max-w-full">
+                <div className="relative inline-block max-h-[340px] md:max-h-[440px] max-w-full">
                   <img 
                     ref={rawImageRef} 
                     src={currentRawUrl} 
                     alt="Main Raw Input Preview" 
-                    className="max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain" 
+                    className="max-h-[340px] md:max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain" 
                     style={dynamicPreviewStyle} 
                   />
                   
@@ -583,14 +583,14 @@ export default function AdjustZone({
 
             {isCropped && (
               <span className="text-[10px] bg-slate-800/90 text-slate-200 font-medium tracking-wider px-3 py-1 rounded-md absolute bottom-4 shadow whitespace-nowrap z-50">
-                PREVIEW MODE: ภาพตัดถูกจัดกึ่งกลางและปรับขยายให้พอดีกรอบอัตโนมัติแล้ว
+                โหมดพรีวิว: ภาพที่ครอปถูกจัดกึ่งกลางและปรับขนาดให้อัตโนมัติ
               </span>
             )}
           </div>
 
           <div className="bg-[#edf2f7] border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="text-slate-600 text-xs font-semibold px-2 shrink-0">
-              คลังเอกสารประมวลผล: <span className="text-blue-600 font-mono font-bold ml-1">{currentIndex + 1} / {imagesList.length} หน้า</span>
+              เอกสารในคิว: <span className="text-blue-600 font-mono font-bold ml-1">{currentIndex + 1} / {imagesList.length} หน้า</span>
             </div>
             <div className="flex items-center gap-2 flex-1 justify-center w-full">
               <button type="button" disabled={currentIndex === 0 || isProcessing} onClick={() => handleSafeIndexChange(currentIndex - 1)} className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-slate-700 disabled:opacity-25"><ChevronLeft size={16} /></button>
@@ -616,64 +616,64 @@ export default function AdjustZone({
           </div>
         </div>
         
-        <div className="col-span-12 lg:col-span-4 border border-slate-200 rounded-xl bg-slate-50 shadow-2xs flex flex-col overflow-hidden h-full min-h-[616px]">
-          <div className="p-4 space-y-4 overflow-y-auto flex-1 pr-1.5 max-h-[530px]">
+        <div className="xl:col-span-4 border border-slate-200 rounded-xl bg-slate-50 shadow-2xs flex flex-col overflow-hidden h-full min-h-[616px]">
+          <div className="p-4 space-y-4 overflow-y-auto flex-1 pr-1.5 max-h-[calc(100vh-260px)]">
             
             <div className="bg-white p-3.5 rounded-xl border border-rose-100 bg-rose-50/10 shadow-3xs space-y-2">
               <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
-                <RotateCcw size={13} className="text-rose-600" /> Reset Options
+                <RotateCcw size={13} className="text-rose-600" /> รีเซ็ตการปรับแต่ง
               </h3>
-              <p className="text-[11px] text-slate-400 leading-normal">ล้างฟิลเตอร์ ปรับระนาบ และยกเลิกกรอบครอบตัดทั้งหมดเพื่อกลับไปใช้ภาพต้นฉบับดั้งเดิม</p>
+              <p className="text-[11px] text-slate-400 leading-normal">ล้างฟิลเตอร์ มุมเอียง และกรอบครอป เพื่อกลับไปใช้ภาพต้นฉบับ</p>
               <button 
                 type="button" 
                 onClick={handleResetToDefault} 
                 className="w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-3xs cursor-pointer"
               >
-                <RefreshCw size={13} /> ล้างค่าทั้งหมดกลับสู่รูปต้นฉบับ
+                <RefreshCw size={13} /> กลับไปใช้ภาพต้นฉบับ
               </button>
             </div>
 
             <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2.5">
               <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Crop size={13} className="text-blue-600" /> Crop Studio</h3>
-                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${isCropped ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-50 text-slate-400'}`}>{isCropped ? "CROPPED" : "READY"}</span>
+                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Crop size={13} className="text-blue-600" /> ครอปภาพ</h3>
+                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${isCropped ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-50 text-slate-400'}`}>{isCropped ? "ครอปแล้ว" : "พร้อม"}</span>
               </div>
               <div className="flex flex-col gap-2">
                 {!isCropped ? (
                   isCropActive ? (
-                    <button type="button" onClick={handleInstantLocalCrop} className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all active:scale-95"><Scissors size={13} /> ดำเนินการครอบตัดหน้าปัจจุบัน</button>
+                    <button type="button" onClick={handleInstantLocalCrop} className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all active:scale-95"><Scissors size={13} /> ครอปหน้าปัจจุบัน</button>
                   ) : (
-                    <button type="button" onClick={handleActivateCrop} className="w-full py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-slate-50 shadow-3xs transition-colors"><Crop size={13} /> เปิดใช้งานฟังก์ชันครอบตัด</button>
+                    <button type="button" onClick={handleActivateCrop} className="w-full py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-slate-50 shadow-3xs transition-colors"><Crop size={13} /> เปิดเครื่องมือครอป</button>
                   )
                 ) : (
                   <button type="button" onClick={handleModifyCrop} className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm">
-                    <RefreshCw size={13} /> ปรับปรุง/แก้ไขกรอบตัดภาพใหม่
+                    <RefreshCw size={13} /> แก้ไขพื้นที่ครอป
                   </button>
                 )}
               </div>
             </div>
 
             <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2">
-              <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><FlipHorizontal size={13} className="text-slate-500" /> Mirror Transforms</h3>
+              <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><FlipHorizontal size={13} className="text-slate-500" /> พลิกภาพ</h3>
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => updateCurrentConfig({ flipH: !flipH })} className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 transition-all ${flipH ? 'bg-blue-50 text-blue-700 border-blue-400 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                  <FlipHorizontal size={13} /> กลับแนวนอน
+                  <FlipHorizontal size={13} /> พลิกซ้าย-ขวา
                 </button>
                 <button type="button" onClick={() => updateCurrentConfig({ flipV: !flipV })} className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 transition-all ${flipV ? 'bg-blue-50 text-blue-700 border-blue-400 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                  <FlipVertical size={13} /> กลับแนวตั้ง
+                  <FlipVertical size={13} /> พลิกบน-ล่าง
                 </button>
               </div>
             </div>
 
             <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-3.5">
               <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Maximize2 size={13} className="text-slate-600" /> Perspective Alignment</h3>
-                <button type="button" onClick={() => updateCurrentConfig({ perspectiveV: 0, perspectiveH: 0 })} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"><RefreshCw size={10} className="inline mr-0.5" /> ล้างระนาบเอียง</button>
+                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Maximize2 size={13} className="text-slate-600" /> ปรับระนาบภาพ</h3>
+                <button type="button" onClick={() => updateCurrentConfig({ perspectiveV: 0, perspectiveH: 0 })} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"><RefreshCw size={10} className="inline mr-0.5" /> ล้างมุมเอียง</button>
               </div>
 
               <div className="space-y-1">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">ปรับระนาบแนวตั้ง (Vertical Tilt)</span>
+                  <span className="text-slate-500">เอียงแนวตั้ง</span>
                   <div className="flex items-center text-slate-800 font-mono font-bold text-xs">
                     <input type="number" min="-20" max="20" value={perspectiveV} onChange={(e) => handleNumberChange(e.target.value, -20, 20, "perspectiveV")} className="w-8 text-right bg-transparent focus:outline-none" />
                     <span className="text-slate-400 font-normal ml-0.5">°</span>
@@ -684,7 +684,7 @@ export default function AdjustZone({
 
               <div className="space-y-1">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">ปรับระนาบแนวนอน (Horizontal Tilt)</span>
+                  <span className="text-slate-500">เอียงแนวนอน</span>
                   <div className="flex items-center text-slate-800 font-mono font-bold text-xs">
                     <input type="number" min="-20" max="20" value={perspectiveH} onChange={(e) => handleNumberChange(e.target.value, -20, 20, "perspectiveH")} className="w-8 text-right bg-transparent focus:outline-none" />
                     <span className="text-slate-400 font-normal ml-0.5">°</span>
@@ -695,10 +695,10 @@ export default function AdjustZone({
             </div>
 
             {[
-              { label: "Image Rotation", value: rotation, min: -180, max: 180, unit: "°", icon: <RotateCw size={12} className="text-slate-500" />, key: "rotation" as keyof PageConfig, resetVal: 0, step: 90 },
-              { label: "Brightness Level", value: brightness, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "brightness" as keyof PageConfig, resetVal: 100, step: 5 },
-              { label: "Contrast Level", value: contrast, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "contrast" as keyof PageConfig, resetVal: 100, step: 5 },
-              { label: "Text Sharpness Index", value: sharpness, min: 0, max: 100, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "sharpness" as keyof PageConfig, resetVal: 0, step: 10 }
+              { label: "หมุนภาพ", value: rotation, min: -180, max: 180, unit: "°", icon: <RotateCw size={12} className="text-slate-500" />, key: "rotation" as keyof PageConfig, resetVal: 0, step: 90 },
+              { label: "ความสว่าง", value: brightness, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "brightness" as keyof PageConfig, resetVal: 100, step: 5 },
+              { label: "คอนทราสต์", value: contrast, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "contrast" as keyof PageConfig, resetVal: 100, step: 5 },
+              { label: "ความคมชัดตัวอักษร", value: sharpness, min: 0, max: 100, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "sharpness" as keyof PageConfig, resetVal: 0, step: 10 }
             ].map((item) => (
               <div key={item.key} className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2">
                 <div className="flex justify-between items-center">
@@ -733,11 +733,11 @@ export default function AdjustZone({
             >
               {isProcessing ? (
                 <>
-                  <RefreshCw size={14} className="animate-spin" /> Processing Images...
+                  <RefreshCw size={14} className="animate-spin" /> กำลังประมวลผลภาพ...
                 </>
               ) : (
                 <>
-                  <Check size={14} /> Confirm Layout & Edit ROI
+                  <Check size={14} /> ยืนยันภาพและกำหนด ROI
                 </>
               )}
             </button>
@@ -747,3 +747,4 @@ export default function AdjustZone({
     </div>
   );
 }
+

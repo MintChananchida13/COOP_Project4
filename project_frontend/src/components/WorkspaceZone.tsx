@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2 } from 'lucide-react';
@@ -28,7 +28,7 @@ interface WorkspaceZoneProps {
   onRunFullPageOCR: () => Promise<void>;
   currentIndex: number;
   imagesList: string[]; 
-  onIndexChange: (index: number) => void; 
+  onIndexChange: (index: number) => void;
 }
 
 export default function WorkspaceZone({
@@ -44,12 +44,12 @@ export default function WorkspaceZone({
   onRunFullPageOCR,
   currentIndex,
   imagesList,    
-  onIndexChange, 
+  onIndexChange,
 }: WorkspaceZoneProps) {
   const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>('box');
   const [activeDrawPoints, setActiveDrawPoints] = useState<{ x: number; y: number }[]>([]);
 
-  // คำนวณขอบเขตรูปสี่เหลี่ยมคลุมจุดพิกัดทั้งหมด (Bounding Box) สำหรับแคนวาสของ Rnd
+  // Calculate the bounding box for custom ROI points.
   const getBoundingBoxOfPoints = (points: { x: number; y: number }[]) => {
     if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
     const xs = points.map(p => p.x);
@@ -69,7 +69,7 @@ export default function WorkspaceZone({
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [dragBox, setDragBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // 🔍 สเตปการซูมมาตรฐาน
+  // Standard zoom levels.
   const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
   const [zoomIndex, setZoomIndex] = useState<number>(2); 
   const currentZoom = ZOOM_STEPS[zoomIndex];
@@ -81,7 +81,7 @@ export default function WorkspaceZone({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
-  // 👁️ สเตทเปิดปิดชื่อฟิลด์ และประวัติ Undo / Redo
+  // Toggle field labels and keep undo/redo history.
   const [showLabels, setShowLabels] = useState(true);
   const [history, setHistory] = useState<ROI[][]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
@@ -90,14 +90,14 @@ export default function WorkspaceZone({
   const skipHistoryRecordRef = useRef(false);
   const lastRoisRef = useRef<ROI[]>([]);
 
-  // เริ่มต้นสร้างคลังประวัติเมื่อสลับหน้า
+  // Track ROI history when the page changes.
   useEffect(() => {
     setHistory([rois]);
     setHistoryIndex(0);
     lastRoisRef.current = rois;
   }, [currentIndex]);
 
-  // คอยจับตาดูและบันทึกประวัติการเปลี่ยนแปลงของกล่อง ROI อัตโนมัติ (ยกเว้นกดเลิกทำ/ทำซ้ำ)
+  // Track ROI history when the page changes.
   useEffect(() => {
     if (skipHistoryRecordRef.current) {
       skipHistoryRecordRef.current = false;
@@ -105,7 +105,7 @@ export default function WorkspaceZone({
       return;
     }
     
-    // บันทึกเฉพาะเมื่อข้อมูลมีการเปลี่ยนแปลงจริงเท่านั้นเพื่อป้องกันการเกิด Infinite loop
+    // Record only real ROI changes to avoid loops.
     if (rois.length > 0 && JSON.stringify(rois) !== JSON.stringify(lastRoisRef.current)) {
       const newHistory = history.slice(0, historyIndex + 1);
       setHistory([...newHistory, rois]);
@@ -134,19 +134,19 @@ export default function WorkspaceZone({
     }
   };
 
-  // 🔄 เคลียร์ไอดีที่เลือกเมื่อสลับหน้า
+
   useEffect(() => {
     setSelectedId(null);
   }, [currentIndex, setSelectedId]);
 
-  // ⌨️ คีย์บอร์ดชอร์ตคัตสำหรับลบและย้อนกลับกล่องวาด (Ctrl+Z, Ctrl+Y, Delete)
+      // Delete selected ROI.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       const isInputActive = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
       if (isInputActive) return;
 
-      // ลบกล่อง (Delete / Backspace)
+      // Delete selected ROI.
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedId !== null) {
           e.preventDefault();
@@ -155,13 +155,13 @@ export default function WorkspaceZone({
         }
       }
 
-      // เลิกทำ (Ctrl + Z)
+      // Undo.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
       }
 
-      // ทำซ้ำ (Ctrl + Y หรือ Ctrl + Shift + Z)
+      // Redo.
       if (
         ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
@@ -177,14 +177,14 @@ export default function WorkspaceZone({
     };
   }, [selectedId, handleUndo, handleRedo, deleteROI]);
 
-  // ✨ บังคับให้ Workspace ใช้รูปที่โมดิฟายล่าสุด
+
   useEffect(() => {
     if (imageRef.current && previewUrl) {
       imageRef.current.src = previewUrl;
     }
   }, [previewUrl, currentIndex]);
 
-  // 🛡️ กรองกรอบ ROI แสดงผลเฉพาะของหน้าปัจจุบัน
+
   const currentPageRois = useMemo(() => {
     return rois.filter(roi => {
       const roiPage = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
@@ -423,7 +423,7 @@ export default function WorkspaceZone({
     }
   };
 
-  // 🖱️ ฟังก์ชันจัดการการ Drag & Drop ย้ายช่องข้อมูลทางขวา
+  // Handle drag-and-drop ordering in the right panel.
   const handleDragStart = (e: React.DragEvent, index: number) => {
     setDraggedItemIdx(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -464,7 +464,7 @@ export default function WorkspaceZone({
     boxShadow: "0 1px 2px rgba(0,0,0,0.2)"
   };
 
-  // 🚀 ส่งสัญญาณหาความกว้าง/ยาวจริงของหน้าปัจจุบัน เพื่อนำสเกลไปกระจายรันทุกหน้า
+
   const triggerOCRProcessing = () => {
     if (!imageRef.current) return;
     const scaleX = imageRef.current.naturalWidth / imageRef.current.clientWidth;
@@ -475,38 +475,39 @@ export default function WorkspaceZone({
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-20">
       
-      {/* 📊 STEP PROCESS PROGRESS BAR */}
+      {/* Step progress bar */}
       <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
           <div className="flex items-center gap-2.5 z-10 relative bg-white pr-4">
             <div className="w-7 h-7 rounded-full bg-green-100 border border-green-300 text-green-600 font-bold text-xs flex items-center justify-center">✓</div>
             <div className="text-left">
-              <p className="text-xs font-bold text-slate-500">Pre-processing</p>
-              <p className="text-[10px] text-slate-400 font-medium">ปรับมุมมองและครอปตัด</p>
+              <p className="text-xs font-bold text-slate-500">เตรียมภาพ</p>
+              <p className="text-[10px] text-slate-400 font-medium">ปรับภาพและครอปเอกสาร</p>
             </div>
           </div>
           <div className="absolute top-3.5 left-0 right-0 h-[2px] bg-slate-200 -z-0 hidden md:block"></div>
           <div className="flex items-center gap-2.5 z-10 relative bg-white px-4">
             <div className="w-7 h-7 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center ring-4 ring-blue-100">2</div>
             <div className="text-left">
-              <p className="text-xs font-bold text-slate-800">ROI Studio</p>
-              <p className="text-[10px] text-slate-400 font-medium">ลากกล่องดักจับข้อความ</p>
+              <p className="text-xs font-bold text-slate-800">กำหนด ROI</p>
+              <p className="text-[10px] text-slate-400 font-medium">ลากกรอบพื้นที่สำหรับ OCR</p>
             </div>
           </div>
           <div className="flex items-center gap-2.5 z-10 relative bg-white pl-4">
             <div className="w-7 h-7 rounded-full bg-white border-2 border-slate-300 text-slate-400 font-bold text-xs flex items-center justify-center">3</div>
             <div className="text-left">
-              <p className="text-xs font-bold text-slate-400">Ground Truth Editor</p>
-              <p className="text-[10px] text-slate-400 font-medium">สกัดผลลัพธ์และเซฟข้อมูล</p>
+              <p className="text-xs font-bold text-slate-400">ตรวจผล OCR</p>
+              <p className="text-[10px] text-slate-400 font-medium">แก้ไขและยืนยันผลลัพธ์</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 💻 MAIN CANVASES ROW */}
+
+      {/* Main canvas row */}
       <div className="flex gap-5 h-[620px] items-stretch">
         
-        {/* 🛠️ LEFT SIDEBAR: VERTICAL TOOLBAR */}
+        {/* Left toolbar */}
         <div className="w-16 shrink-0 flex flex-col items-center gap-3 bg-white border border-slate-200 py-4 rounded-xl shadow-sm h-full select-none animate-fade-in">
           <button 
             type="button"
@@ -543,7 +544,7 @@ export default function WorkspaceZone({
 
           <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
 
-          {/* ↩️ ↪️ UNDO & REDO BUTTONS */}
+          {/* Undo and redo buttons */}
           <button 
             type="button"
             onClick={handleUndo}
@@ -558,19 +559,19 @@ export default function WorkspaceZone({
             onClick={handleRedo}
             disabled={historyIndex >= history.length - 1}
             className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-20 transition-all"
-            title="ไปข้างหน้า (Ctrl+Y)"
+            title="ทำซ้ำ (Ctrl+Y)"
           >
             <Redo2 size={20} />
           </button>
 
           <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
 
-          {/* 👁️ TOGGLE LABELS BUTTON */}
+          {/* Toggle field labels */}
           <button 
             type="button"
             onClick={() => setShowLabels(prev => !prev)}
             className={`p-2.5 rounded-lg transition-all ${!showLabels ? 'bg-amber-100 text-amber-600 border border-amber-250 shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-            title={showLabels ? "ซ่อนชื่อฟิลด์บนกระดาษ" : "แสดงชื่อฟิลด์บนกระดาษ"}
+            title={showLabels ? "ซ่อนชื่อฟิลด์บนเอกสาร" : "แสดงชื่อฟิลด์บนเอกสาร"}
           >
             {showLabels ? <Eye size={20} /> : <EyeOff size={20} />}
           </button>
@@ -624,7 +625,7 @@ export default function WorkspaceZone({
           </button>
         </div>
 
-        {/* 🎨 CENTER: VIEWPORT MAIN CANVAS */}
+        {/* Center document canvas */}
         <div 
           ref={viewportRef} 
           className="flex-1 min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex items-start justify-start p-6 shadow-inner h-full relative"
@@ -810,18 +811,18 @@ export default function WorkspaceZone({
           </div>
         </div>
 
-        {/* 🎛️ RIGHT SIDEBAR: PROPERTIES PANEL */}
+        {/* Right properties panel */}
         <div className="w-80 shrink-0 bg-white border border-slate-200 p-4 rounded-xl shadow-sm space-y-4 overflow-y-auto h-full">
           <button
             type="button"
             onClick={onBackToAdjust}
             className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
           >
-            <ArrowLeft size={14} /> ย้อนกลับไปหน้าครอบตัดรูปภาพ
+            <ArrowLeft size={14} /> กลับไปหน้าปรับภาพ
           </button>
 
           <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
-            <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">Active Fields ({currentPageRois.length})</h3>
+            <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ฟิลด์ที่เลือก ({currentPageRois.length})</h3>
             <div className="space-y-1.5 max-h-[440px] overflow-y-auto pr-1">
               {currentPageRois.map((roi, idx) => (
                 <div 
@@ -832,7 +833,9 @@ export default function WorkspaceZone({
                   onDragOver={(e) => handleDragOver(e, idx)}
                   onDragEnd={handleDragEnd}
                   className={`flex items-center justify-between p-2 rounded border text-xs cursor-grab active:cursor-grabbing select-none transition-all ${
-                    draggedItemIdx === idx 
+                    roi.enabled === false
+                      ? 'opacity-50 bg-slate-50 border-slate-200'
+                      : draggedItemIdx === idx 
                       ? 'opacity-40 border-dashed border-indigo-400 bg-indigo-50/50' 
                       : (selectedId === roi.id 
                           ? "bg-indigo-50 border-indigo-300 text-slate-800 font-bold shadow-xs" 
@@ -874,11 +877,11 @@ export default function WorkspaceZone({
         </div>
       </div>
 
-      {/* 📄 🎠 FOOTER CAROUSEL & GLOBAL ACTION BUTTON */}
+      {/* Footer carousel and action buttons */}
       <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
         <div className="flex items-center gap-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-            คลังเอกสารประมวลผล: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
+            เอกสารในคิว: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
           </div>
           
           <div className="flex items-center gap-2.5">
@@ -926,7 +929,7 @@ export default function WorkspaceZone({
         </div>
 
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          {/* 🌟 ปุ่ม OCR ทั้งหน้ากระดาษ (เอนจินสแกนภาพออโต้) */}
+          {/* Full-page OCR button */}
           <button 
             type="button"
             disabled={isLoading} 
@@ -934,17 +937,17 @@ export default function WorkspaceZone({
             className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-900/10 active:scale-98"
           >
             <Cpu size={14} className={isLoading ? "animate-spin text-indigo-300" : "text-white"} />
-            {isLoading ? "Scanning Full Page..." : "OCR ทั้งหน้ากระดาษ"}
+            {isLoading ? "กำลังสแกนทั้งหน้า..." : "OCR ทั้งหน้า"}
           </button>
 
-          {/* 🌟 ปุ่มรัน OCR รวมทุกหน้าพร้อมกัน (ดึงกล่องทั้งหมดในแผงยิงตูมเดียว) */}
+          {/* ROI OCR button */}
           <button 
             disabled={rois.length === 0 || isLoading} 
             onClick={triggerOCRProcessing} 
             className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
           >
             <Cpu size={14} className={isLoading ? "animate-spin text-blue-300" : "text-white"} />
-            {isLoading ? "Analyzing via AI Engine..." : "Run OCR on All Pages"}
+            {isLoading ? "กำลังอ่าน OCR..." : "อ่าน OCR จาก ROI"}
           </button>
         </div>
       </div>
@@ -952,3 +955,4 @@ export default function WorkspaceZone({
     </div>
   );
 }
+

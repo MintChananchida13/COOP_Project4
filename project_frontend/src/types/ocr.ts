@@ -1,3 +1,5 @@
+export type RoiDataType = 'string' | 'text' | 'number' | 'date' | 'address' | 'currency';
+
 export interface ROI {
   id: number;
   fieldName: string;
@@ -9,11 +11,11 @@ export interface ROI {
   confidence?: number;
   pageIndex?: number;
   type?: 'text' | 'table' | 'image';
-  dataType?: 'string' | 'date' | 'currency';
-  role?: 'anchor' | 'data_extraction' | 'visual_anchor';
+  dataType?: RoiDataType;
+  role?: 'data_extraction';
   weight?: number;
-  verificationRule?: string;
   points?: { x: number; y: number }[];
+  enabled?: boolean;
 }
 
 export interface OCRResult {
@@ -25,9 +27,8 @@ export interface OCRResult {
   confidence: number;
   saved_path?: string;
   type?: 'text' | 'table' | 'image';
-  dataType?: 'string' | 'date' | 'currency';
-  role?: 'anchor' | 'data_extraction' | 'visual_anchor';
+  dataType?: RoiDataType;
+  role?: 'data_extraction';
   weight?: number;
-  verificationRule?: string;
   points?: { x: number; y: number }[];
 }
