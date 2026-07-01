@@ -510,49 +510,45 @@ export default function AdjustZone({
     };
   }, [rotation, perspectiveV, perspectiveH, flipH, flipV, brightness, contrast, sharpness]);
 
-  return (
-    <div className="max-w-7xl mx-auto bg-[#f8fafc] border border-slate-200 rounded-2xl p-4 md:p-6 space-y-6">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
-        <h2 className="text-sm font-bold text-[#172b4d] flex items-center gap-2 tracking-wide uppercase">
-          <Crop size={16} className="text-[#0052cc]" /> ตั้งค่าภาพเอกสาร
-        </h2>
-        <p className="text-xs text-slate-400 mt-0.5">ปรับครอปภาพ มุมเอียง แสง คอนทราสต์ และทิศทางหน้าก่อนนำไปอ่าน OCR</p>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
-        <div className="xl:col-span-8 flex flex-col gap-4">
-          <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[420px] md:h-[540px] overflow-hidden shadow-inner relative p-4">
-            
-            <div className="relative flex items-center justify-center w-full h-full">
-              {isCropped && liveCropPreviewUrl ? (
-                <img 
-                  ref={croppedImageRef} 
-                  src={liveCropPreviewUrl} 
-                  alt="Cropped Sub-Region Preview" 
-                  className="max-h-[360px] md:max-h-[460px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
-                  style={dynamicPreviewStyle} 
+return (
+  <div className="max-w-7xl mx-auto rounded-2xl border border-slate-200 bg-[#f8fafc] p-4 md:p-6">
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+      {/* Left Preview */}
+      <div className="xl:col-span-8 space-y-4">
+        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[420px] md:h-[540px] overflow-hidden shadow-inner relative p-4">
+          <div className="relative flex items-center justify-center w-full h-full">
+            {isCropped && liveCropPreviewUrl ? (
+              <img
+                ref={croppedImageRef}
+                src={liveCropPreviewUrl}
+                alt="Cropped Preview"
+                className="max-h-[360px] md:max-h-[460px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
+                style={dynamicPreviewStyle}
+              />
+            ) : (
+              <div className="relative inline-block max-h-[340px] md:max-h-[440px] max-w-full">
+                <img
+                  ref={rawImageRef}
+                  src={currentRawUrl}
+                  alt="Document Preview"
+                  className="max-h-[340px] md:max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain"
+                  style={dynamicPreviewStyle}
                 />
-              ) : (
-                <div className="relative inline-block max-h-[340px] md:max-h-[440px] max-w-full">
-                  <img 
-                    ref={rawImageRef} 
-                    src={currentRawUrl} 
-                    alt="Main Raw Input Preview" 
-                    className="max-h-[340px] md:max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain" 
-                    style={dynamicPreviewStyle} 
-                  />
-                  
-                  {isCropActive && currentConfig.cropCorners && currentConfig.cropCorners.length === 4 && (
-                    <div 
+
+                {isCropActive &&
+                  currentConfig.cropCorners &&
+                  currentConfig.cropCorners.length === 4 && (
+                    <div
                       className="absolute inset-0 w-full h-full pointer-events-auto"
                       onMouseMove={handleContainerMouseMove}
                       onMouseUp={handleContainerMouseUp}
                       onMouseLeave={handleContainerMouseUp}
                     >
-                      {/* SVG Overlay representing the crop quadrilateral */}
                       <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
                         <polygon
-                          points={currentConfig.cropCorners.map(c => `${c.x},${c.y}`).join(' ')}
+                          points={currentConfig.cropCorners
+                            .map((c) => `${c.x},${c.y}`)
+                            .join(" ")}
                           fill="rgba(59, 130, 246, 0.18)"
                           stroke="#3b82f6"
                           strokeWidth="2.5"
@@ -560,7 +556,6 @@ export default function AdjustZone({
                         />
                       </svg>
 
-                      {/* 4 Draggable corner handles */}
                       {currentConfig.cropCorners.map((c, idx) => (
                         <div
                           key={idx}
@@ -568,183 +563,360 @@ export default function AdjustZone({
                           style={{
                             left: `${c.x}px`,
                             top: `${c.y}px`,
-                            transform: 'translate(-50%, -50%)'
+                            transform: "translate(-50%, -50%)",
                           }}
                           className="absolute w-6 h-6 bg-white border-2 border-blue-600 rounded-full shadow-lg cursor-move z-40 flex items-center justify-center hover:scale-110 hover:bg-blue-50 transition-all select-none"
                         >
-                          <span className="text-[10.5px] font-extrabold text-blue-600">{idx + 1}</span>
+                          <span className="text-[10.5px] font-extrabold text-blue-600">
+                            {idx + 1}
+                          </span>
                         </div>
                       ))}
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-
-            {isCropped && (
-              <span className="text-[10px] bg-slate-800/90 text-slate-200 font-medium tracking-wider px-3 py-1 rounded-md absolute bottom-4 shadow whitespace-nowrap z-50">
-                โหมดพรีวิว: ภาพที่ครอปถูกจัดกึ่งกลางและปรับขนาดให้อัตโนมัติ
-              </span>
+              </div>
             )}
           </div>
-
-          <div className="bg-[#edf2f7] border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="text-slate-600 text-xs font-semibold px-2 shrink-0">
-              เอกสารในคิว: <span className="text-blue-600 font-mono font-bold ml-1">{currentIndex + 1} / {imagesList.length} หน้า</span>
-            </div>
-            <div className="flex items-center gap-2 flex-1 justify-center w-full">
-              <button type="button" disabled={currentIndex === 0 || isProcessing} onClick={() => handleSafeIndexChange(currentIndex - 1)} className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-slate-700 disabled:opacity-25"><ChevronLeft size={16} /></button>
-              
-              <div className="flex gap-2 overflow-x-auto max-w-xl py-1 no-scrollbar" style={{ msOverflowStyle: 'none', scrollbarWidth: 'none' }}>
-                <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }`}</style>
-                {imagesList.map((url, idx) => (
-                  <button 
-                    key={idx} 
-                    type="button" 
-                    disabled={isProcessing}
-                    onClick={() => handleSafeIndexChange(idx)} 
-                    className={`relative w-11 h-14 rounded border-2 overflow-hidden bg-white shrink-0 transition-all ${idx === currentIndex ? 'border-blue-500 ring-2 ring-blue-500/10 scale-105' : 'border-slate-200 opacity-50 hover:opacity-100'}`}
-                  >
-                    <img src={pagesConfig[idx]?.croppedLocalUrl || originalBackupList[idx] || url} className="w-full h-full object-cover" alt="" />
-                    <div className="absolute bottom-0 inset-x-0 bg-slate-900/80 text-[8px] text-slate-300 text-center font-mono py-0.5">#{idx + 1}</div>
-                  </button>
-                ))}
-              </div>
-
-              <button type="button" disabled={currentIndex === imagesList.length - 1 || isProcessing} onClick={() => handleSafeIndexChange(currentIndex + 1)} className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-slate-700"><ChevronRight size={16} /></button>
-            </div>
-          </div>
         </div>
-        
-        <div className="xl:col-span-4 border border-slate-200 rounded-xl bg-slate-50 shadow-2xs flex flex-col overflow-hidden h-full min-h-[616px]">
-          <div className="p-4 space-y-4 overflow-y-auto flex-1 pr-1.5 max-h-[calc(100vh-260px)]">
-            
-            <div className="bg-white p-3.5 rounded-xl border border-rose-100 bg-rose-50/10 shadow-3xs space-y-2">
-              <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
-                <RotateCcw size={13} className="text-rose-600" /> รีเซ็ตการปรับแต่ง
-              </h3>
-              <p className="text-[11px] text-slate-400 leading-normal">ล้างฟิลเตอร์ มุมเอียง และกรอบครอป เพื่อกลับไปใช้ภาพต้นฉบับ</p>
-              <button 
-                type="button" 
-                onClick={handleResetToDefault} 
-                className="w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-3xs cursor-pointer"
-              >
-                <RefreshCw size={13} /> กลับไปใช้ภาพต้นฉบับ
-              </button>
-            </div>
 
-            <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2.5">
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Crop size={13} className="text-blue-600" /> ครอปภาพ</h3>
-                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${isCropped ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-50 text-slate-400'}`}>{isCropped ? "ครอปแล้ว" : "พร้อม"}</span>
-              </div>
-              <div className="flex flex-col gap-2">
-                {!isCropped ? (
-                  isCropActive ? (
-                    <button type="button" onClick={handleInstantLocalCrop} className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all active:scale-95"><Scissors size={13} /> ครอปหน้าปัจจุบัน</button>
-                  ) : (
-                    <button type="button" onClick={handleActivateCrop} className="w-full py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-slate-50 shadow-3xs transition-colors"><Crop size={13} /> เปิดเครื่องมือครอป</button>
-                  )
-                ) : (
-                  <button type="button" onClick={handleModifyCrop} className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm">
-                    <RefreshCw size={13} /> แก้ไขพื้นที่ครอป
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2">
-              <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><FlipHorizontal size={13} className="text-slate-500" /> พลิกภาพ</h3>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => updateCurrentConfig({ flipH: !flipH })} className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 transition-all ${flipH ? 'bg-blue-50 text-blue-700 border-blue-400 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                  <FlipHorizontal size={13} /> พลิกซ้าย-ขวา
-                </button>
-                <button type="button" onClick={() => updateCurrentConfig({ flipV: !flipV })} className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 transition-all ${flipV ? 'bg-blue-50 text-blue-700 border-blue-400 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                  <FlipVertical size={13} /> พลิกบน-ล่าง
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-3.5">
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5"><Maximize2 size={13} className="text-slate-600" /> ปรับระนาบภาพ</h3>
-                <button type="button" onClick={() => updateCurrentConfig({ perspectiveV: 0, perspectiveH: 0 })} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"><RefreshCw size={10} className="inline mr-0.5" /> ล้างมุมเอียง</button>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">เอียงแนวตั้ง</span>
-                  <div className="flex items-center text-slate-800 font-mono font-bold text-xs">
-                    <input type="number" min="-20" max="20" value={perspectiveV} onChange={(e) => handleNumberChange(e.target.value, -20, 20, "perspectiveV")} className="w-8 text-right bg-transparent focus:outline-none" />
-                    <span className="text-slate-400 font-normal ml-0.5">°</span>
-                  </div>
-                </div>
-                <input type="range" min="-20" max="20" value={perspectiveV} onChange={(e) => updateCurrentConfig({ perspectiveV: Number(e.target.value) })} className="w-full accent-blue-600 h-1 bg-slate-200 rounded cursor-pointer" />
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">เอียงแนวนอน</span>
-                  <div className="flex items-center text-slate-800 font-mono font-bold text-xs">
-                    <input type="number" min="-20" max="20" value={perspectiveH} onChange={(e) => handleNumberChange(e.target.value, -20, 20, "perspectiveH")} className="w-8 text-right bg-transparent focus:outline-none" />
-                    <span className="text-slate-400 font-normal ml-0.5">°</span>
-                  </div>
-                </div>
-                <input type="range" min="-20" max="20" value={perspectiveH} onChange={(e) => updateCurrentConfig({ perspectiveH: Number(e.target.value) })} className="w-full accent-blue-600 h-1 bg-slate-200 rounded cursor-pointer" />
-              </div>
-            </div>
-
-            {[
-              { label: "หมุนภาพ", value: rotation, min: -180, max: 180, unit: "°", icon: <RotateCw size={12} className="text-slate-500" />, key: "rotation" as keyof PageConfig, resetVal: 0, step: 90 },
-              { label: "ความสว่าง", value: brightness, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "brightness" as keyof PageConfig, resetVal: 100, step: 5 },
-              { label: "คอนทราสต์", value: contrast, min: 50, max: 150, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "contrast" as keyof PageConfig, resetVal: 100, step: 5 },
-              { label: "ความคมชัดตัวอักษร", value: sharpness, min: 0, max: 100, unit: "%", icon: <Sparkles size={12} className="text-slate-500" />, key: "sharpness" as keyof PageConfig, resetVal: 0, step: 10 }
-            ].map((item) => (
-              <div key={item.key} className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs space-y-2">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">{item.icon} {item.label}</label>
-                  <div className="flex items-center text-slate-800 font-mono font-bold text-xs">
-                    <input 
-                      type="number" min={item.min} max={item.max} value={Number(item.value)} 
-                      onChange={(e) => handleNumberChange(e.target.value, item.min, item.max, item.key)}
-                      className="w-10 text-right bg-transparent focus:outline-none"
-                    />
-                    <span className="text-slate-400 font-normal ml-0.5">{item.unit}</span>
-                  </div>
-                </div>
-                
-                <input type="range" min={item.min} max={item.max} value={Number(item.value)} onChange={(e) => updateCurrentConfig({ [item.key]: Number(e.target.value) })} className="w-full accent-blue-600 h-1 bg-slate-200 rounded cursor-pointer" />
-                
-                <div className="flex gap-1.5 items-center pt-1">
-                  <button type="button" onClick={() => updateCurrentConfig({ [item.key]: Math.max(item.min, Number(item.value) - item.step) })} className="text-[10px] font-bold bg-white border border-slate-200 px-2.5 py-0.5 rounded text-slate-600 hover:bg-slate-50"><Minus size={9} className="inline mr-0.5" />-{item.step}</button>
-                  <button type="button" onClick={() => updateCurrentConfig({ [item.key]: Math.min(item.max, Number(item.value) + item.step) })} className="text-[10px] font-bold bg-white border border-slate-200 px-2.5 py-0.5 rounded text-slate-600 hover:bg-slate-50"><Plus size={9} className="inline mr-0.5" />+{item.step}</button>
-                  <button type="button" onClick={() => updateCurrentConfig({ [item.key]: item.resetVal })} className="text-[10px] font-semibold text-slate-400 border border-transparent ml-auto hover:text-slate-600 transition-colors"><RefreshCw size={9} className="inline mr-0.5" /> รีเซ็ต</button>
-                </div>
-              </div>
-            ))}
+        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="text-slate-600 text-xs font-semibold px-2 shrink-0">
+            เอกสารในคิว:
+            <span className="text-blue-600 font-mono font-bold ml-1">
+              {currentIndex + 1} / {imagesList.length} หน้า
+            </span>
           </div>
 
-          <div className="p-4 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.02)] mt-auto shrink-0">
-            <button 
+          <div className="flex items-center gap-2 flex-1 justify-center w-full">
+            <button
               type="button"
-              disabled={isProcessing}
-              onClick={handleConfirmAll} 
-              className="w-full px-6 bg-[#0052cc] hover:bg-[#0043a4] disabled:bg-slate-400 text-white py-3.5 rounded-xl text-xs font-bold tracking-wider uppercase shadow-md active:scale-98 transition-all flex items-center justify-center gap-2"
+              disabled={currentIndex === 0 || isProcessing}
+              onClick={() => handleSafeIndexChange(currentIndex - 1)}
+              className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-slate-700 disabled:opacity-25"
             >
-              {isProcessing ? (
-                <>
-                  <RefreshCw size={14} className="animate-spin" /> กำลังประมวลผลภาพ...
-                </>
-              ) : (
-                <>
-                  <Check size={14} /> ยืนยันภาพและกำหนด ROI
-                </>
-              )}
+              <ChevronLeft size={16} />
+            </button>
+
+            <div
+              className="flex gap-2 overflow-x-auto max-w-xl py-1 no-scrollbar"
+              style={{ msOverflowStyle: "none", scrollbarWidth: "none" }}
+            >
+              <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }`}</style>
+
+              {imagesList.map((url, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => handleSafeIndexChange(idx)}
+                  className={`relative w-11 h-14 rounded border-2 overflow-hidden bg-white shrink-0 transition-all ${
+                    idx === currentIndex
+                      ? "border-blue-500 ring-2 ring-blue-500/10 scale-105"
+                      : "border-slate-200 opacity-50 hover:opacity-100"
+                  }`}
+                >
+                  <img
+                    src={pagesConfig[idx]?.croppedLocalUrl || originalBackupList[idx] || url}
+                    className="w-full h-full object-cover"
+                    alt=""
+                  />
+                  <div className="absolute bottom-0 inset-x-0 bg-slate-900/80 text-[8px] text-slate-300 text-center font-mono py-0.5">
+                    #{idx + 1}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              disabled={currentIndex === imagesList.length - 1 || isProcessing}
+              onClick={() => handleSafeIndexChange(currentIndex + 1)}
+              className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-slate-700 disabled:opacity-25"
+            >
+              <ChevronRight size={16} />
             </button>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
 
+{/* Right Tools */}
+<div className="xl:col-span-4 flex flex-col">
+  <div className="max-h-[570px] overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+    <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+      <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
+        <RotateCcw size={13} /> รีเซ็ตการปรับแต่ง
+      </h3>
+
+      <p className="mt-1 text-[11px] text-slate-400">
+        ล้างฟิลเตอร์ มุมเอียง และกรอบครอป
+      </p>
+
+      <button
+        type="button"
+        onClick={handleResetToDefault}
+        className="mt-3 w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+      >
+        <RefreshCw size={13} /> กลับไปใช้ภาพต้นฉบับ
+      </button>
+    </div>
+
+    <div className="border-t border-slate-100 pt-4">
+      <div className="flex justify-between items-center">
+        <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
+          <Crop size={13} className="text-blue-600" /> ครอปภาพ
+        </h3>
+
+        <span
+          className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
+            isCropped
+              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+              : "bg-slate-50 text-slate-400"
+          }`}
+        >
+          {isCropped ? "ครอปแล้ว" : "พร้อม"}
+        </span>
+      </div>
+
+      <div className="mt-3">
+        {!isCropped ? (
+          isCropActive ? (
+            <button
+              type="button"
+              onClick={handleInstantLocalCrop}
+              className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <Scissors size={13} /> ครอปหน้าปัจจุบัน
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleActivateCrop}
+              className="w-full py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-slate-50"
+            >
+              <Crop size={13} /> เปิดเครื่องมือครอป
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            onClick={handleModifyCrop}
+            className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+          >
+            <RefreshCw size={13} /> แก้ไขพื้นที่ครอป
+          </button>
+        )}
+      </div>
+    </div>
+
+    <div className="border-t border-slate-100 pt-4">
+      <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
+        <FlipHorizontal size={13} className="text-slate-500" /> พลิกภาพ
+      </h3>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => updateCurrentConfig({ flipH: !flipH })}
+          className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 ${
+            flipH
+              ? "bg-blue-50 text-blue-700 border-blue-400 font-bold"
+              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          <FlipHorizontal size={13} /> ซ้าย-ขวา
+        </button>
+
+        <button
+          type="button"
+          onClick={() => updateCurrentConfig({ flipV: !flipV })}
+          className={`py-1.5 text-xs font-semibold rounded-lg border flex items-center justify-center gap-1.5 ${
+            flipV
+              ? "bg-blue-50 text-blue-700 border-blue-400 font-bold"
+              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          <FlipVertical size={13} /> บน-ล่าง
+        </button>
+      </div>
+    </div>
+
+    <div className="border-t border-slate-100 pt-4 space-y-3">
+      <div className="flex justify-between items-center">
+        <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
+          <Maximize2 size={13} /> ปรับระนาบภาพ
+        </h3>
+
+        <button
+          type="button"
+          onClick={() =>
+            updateCurrentConfig({ perspectiveV: 0, perspectiveH: 0 })
+          }
+          className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
+        >
+          <RefreshCw size={10} className="inline mr-0.5" /> ล้างมุมเอียง
+        </button>
+      </div>
+
+      {[
+        ["เอียงแนวตั้ง", perspectiveV, "perspectiveV"],
+        ["เอียงแนวนอน", perspectiveH, "perspectiveH"],
+      ].map(([label, value, key]) => (
+        <div key={key as string} className="space-y-1">
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-slate-500">{label}</span>
+            <span className="text-slate-800 font-mono font-bold">
+              {value as number}°
+            </span>
+          </div>
+
+          <input
+            type="range"
+            min="-20"
+            max="20"
+            value={value as number}
+            onChange={(e) =>
+              updateCurrentConfig({
+                [key as keyof PageConfig]: Number(e.target.value),
+              })
+            }
+            className="w-full accent-blue-600 h-1 bg-slate-200 rounded cursor-pointer"
+          />
+        </div>
+      ))}
+    </div>
+
+    {[
+      {
+        label: "หมุนภาพ",
+        value: rotation,
+        min: -180,
+        max: 180,
+        unit: "°",
+        icon: <RotateCw size={12} />,
+        key: "rotation" as keyof PageConfig,
+        resetVal: 0,
+        step: 90,
+      },
+      {
+        label: "ความสว่าง",
+        value: brightness,
+        min: 50,
+        max: 150,
+        unit: "%",
+        icon: <Sparkles size={12} />,
+        key: "brightness" as keyof PageConfig,
+        resetVal: 100,
+        step: 5,
+      },
+      {
+        label: "คอนทราสต์",
+        value: contrast,
+        min: 50,
+        max: 150,
+        unit: "%",
+        icon: <Sparkles size={12} />,
+        key: "contrast" as keyof PageConfig,
+        resetVal: 100,
+        step: 5,
+      },
+      {
+        label: "ความคมชัดตัวอักษร",
+        value: sharpness,
+        min: 0,
+        max: 100,
+        unit: "%",
+        icon: <Sparkles size={12} />,
+        key: "sharpness" as keyof PageConfig,
+        resetVal: 0,
+        step: 10,
+      },
+    ].map((item) => (
+      <div
+        key={item.key}
+        className="border-t border-slate-100 pt-4 space-y-2"
+      >
+        <div className="flex justify-between items-center">
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+            {item.icon} {item.label}
+          </label>
+
+          <span className="text-xs font-mono font-bold text-slate-800">
+            {item.value}
+            {item.unit}
+          </span>
+        </div>
+
+        <input
+          type="range"
+          min={item.min}
+          max={item.max}
+          value={Number(item.value)}
+          onChange={(e) =>
+            updateCurrentConfig({ [item.key]: Number(e.target.value) })
+          }
+          className="w-full accent-blue-600 h-1 bg-slate-200 rounded cursor-pointer"
+        />
+
+        <div className="flex gap-1.5 items-center pt-1">
+          <button
+            type="button"
+            onClick={() =>
+              updateCurrentConfig({
+                [item.key]: Math.max(item.min, Number(item.value) - item.step),
+              })
+            }
+            className="text-[10px] font-bold bg-white border border-slate-200 px-2.5 py-0.5 rounded text-slate-600 hover:bg-slate-50"
+          >
+            -{item.step}
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              updateCurrentConfig({
+                [item.key]: Math.min(item.max, Number(item.value) + item.step),
+              })
+            }
+            className="text-[10px] font-bold bg-white border border-slate-200 px-2.5 py-0.5 rounded text-slate-600 hover:bg-slate-50"
+          >
+            +{item.step}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateCurrentConfig({ [item.key]: item.resetVal })}
+            className="text-[10px] font-semibold text-slate-400 ml-auto hover:text-slate-600"
+          >
+            <RefreshCw size={9} className="inline mr-0.5" />
+            รีเซ็ต
+          </button>
+        </div>
+      </div>
+    ))}
+  </div>
+
+  <div className="-mt-px rounded-b-xl border border-t-0 border-slate-200 bg-white p-4 shadow-sm">
+    <button
+      type="button"
+      disabled={isProcessing}
+      onClick={handleConfirmAll}
+      className="w-full px-6 bg-[#0052cc] hover:bg-[#0043a4] disabled:bg-slate-400 text-white py-3.5 rounded-xl text-xs font-bold tracking-wider uppercase shadow-md active:scale-98 transition-all flex items-center justify-center gap-2"
+    >
+      {isProcessing ? (
+        <>
+          <RefreshCw size={14} className="animate-spin" />
+          กำลังประมวลผลภาพ...
+        </>
+      ) : (
+        <>
+          <Check size={14} />
+          ยืนยันภาพและกำหนด ROI
+        </>
+      )}
+    </button>
+  </div>
+</div>
+    </div>
+  </div>
+);
+}

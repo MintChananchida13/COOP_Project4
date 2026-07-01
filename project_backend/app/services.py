@@ -1,4 +1,7 @@
+import os
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -28,6 +31,84 @@ def _now() -> str:
 
 def _stub_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
+
+
+def _db_path() -> Path:
+    database_url = os.getenv("DATABASE_URL", "")
+    if database_url.startswith("file:"):
+        raw_path = database_url.replace("file:", "", 1).strip('"')
+        candidate = Path(raw_path)
+        if candidate.is_absolute():
+            return candidate
+        cwd_candidate = Path.cwd() / candidate
+        if cwd_candidate.exists():
+            return cwd_candidate
+
+    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_db_path())
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return dict(row)
+
+
+def _request_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "requested_by": item["requested_by"],
+        "request_title": item["request_title"],
+        "document_type": item["document_type"],
+        "sample_file_url": item["sample_file_url"],
+        "request_mode": item["request_mode"],
+        "status": item["status"],
+        "user_note": item["user_note"],
+        "admin_note": item["admin_note"],
+        "converted_template_id": item["converted_template_id"],
+        "page_count": item["page_count"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_request_id": item["template_request_id"],
+        "page_number": item["page_number"],
+        "sample_image_url": item["sample_image_url"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_request_id": item["template_request_id"],
+        "template_request_page_id": item["template_request_page_id"],
+        "page_number": item["page_number"],
+        "field_name": item["field_name"],
+        "display_label": item["display_label"],
+        "roi": {
+            "page_number": item["page_number"],
+            "x_ratio": item["roi_x_ratio"],
+            "y_ratio": item["roi_y_ratio"],
+            "width_ratio": item["roi_width_ratio"],
+            "height_ratio": item["roi_height_ratio"],
+        },
+        "user_note": item["user_note"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
 
 
 class PageSplitService:
@@ -213,18 +294,94 @@ class DocumentService:
 class TemplateRequestService:
     def create(self, payload: TemplateRequestCreate) -> Dict[str, Any]:
         request_id = _stub_id("tpl_req")
-        return {
-            "id": request_id,
-            **payload.model_dump(),
-            "status": "draft",
-            "created_at": _now(),
-        }
+        source_pages = payload.pages or [
+            {
+                "page_number": 1,
+                "original_image_url": payload.sample_file_url,
+                "normalized_image_url": payload.sample_file_url,
+            }
+        ]
+
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO template_requests (
+                    id, requested_by, request_title, document_type, sample_file_url,
+                    request_mode, status, user_note, page_count, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    request_id,
+                    payload.requested_by,
+                    payload.request_title,
+                    payload.document_type,
+                    payload.sample_file_url,
+                    payload.request_mode,
+                    payload.user_note,
+                    payload.page_count,
+                ),
+            )
+
+            for page in source_pages:
+                page_number = page.page_number if hasattr(page, "page_number") else page["page_number"]
+                sample_image_url = (
+                    page.normalized_image_url or page.original_image_url
+                    if hasattr(page, "normalized_image_url")
+                    else page.get("normalized_image_url") or page.get("original_image_url")
+                )
+                conn.execute(
+                    """
+                    INSERT INTO template_request_pages (
+                        id, template_request_id, page_number, sample_image_url, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (_stub_id("tpl_req_page"), request_id, page_number, sample_image_url),
+                )
+
+            conn.commit()
+
+        return self.get(request_id)
 
     def list(self) -> Dict[str, Any]:
-        return {"template_requests": []}
+        with _connect() as conn:
+            request_rows = conn.execute(
+                "SELECT * FROM template_requests ORDER BY created_at DESC"
+            ).fetchall()
+
+        return {"template_requests": [self.get(row["id"]) for row in request_rows]}
 
     def get(self, request_id: str) -> Dict[str, Any]:
-        return {"id": request_id, "status": "stubbed", "pages": [], "requested_fields": []}
+        with _connect() as conn:
+            request_row = conn.execute(
+                "SELECT * FROM template_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+            if request_row is None:
+                return {"id": request_id, "status": "not_found", "pages": [], "requested_fields": []}
+
+            page_rows = conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+            ).fetchall()
+            field_rows = conn.execute(
+                """
+                SELECT * FROM requested_fields
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC, created_at ASC
+                """,
+                (request_id,),
+            ).fetchall()
+
+        return {
+            **_request_row_to_api(request_row),
+            "pages": [_page_row_to_api(row) for row in page_rows],
+            "requested_fields": [_field_row_to_api(row) for row in field_rows],
+        }
 
     def update(self, request_id: str, payload: TemplateRequestUpdate) -> Dict[str, Any]:
         return {"id": request_id, **payload.model_dump(exclude_unset=True), "updated_at": _now()}
@@ -233,13 +390,90 @@ class TemplateRequestService:
         return {"id": request_id, "deleted": True}
 
     def submit(self, request_id: str) -> Dict[str, Any]:
-        return {"id": request_id, "status": "submitted", "submitted_at": _now()}
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET status = 'submitted', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (request_id,),
+            )
+            conn.commit()
+        return self.get(request_id)
 
     def pages(self, request_id: str) -> Dict[str, Any]:
-        return {"template_request_id": request_id, "pages": []}
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+            ).fetchall()
+        return {"template_request_id": request_id, "pages": [_page_row_to_api(row) for row in rows]}
 
     def add_requested_field(self, request_id: str, payload: RequestedFieldCreate) -> Dict[str, Any]:
-        return {"id": _stub_id("req_field"), "template_request_id": request_id, **payload.model_dump()}
+        field_id = _stub_id("req_field")
+        with _connect() as conn:
+            page_row = conn.execute(
+                """
+                SELECT id FROM template_request_pages
+                WHERE template_request_id = ? AND (id = ? OR page_number = ?)
+                ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                (
+                    request_id,
+                    payload.template_request_page_id,
+                    payload.page_number,
+                    payload.template_request_page_id,
+                ),
+            ).fetchone()
+            if page_row is None:
+                page_id = _stub_id("tpl_req_page")
+                conn.execute(
+                    """
+                    INSERT INTO template_request_pages (
+                        id, template_request_id, page_number, sample_image_url, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (page_id, request_id, payload.page_number),
+                )
+            else:
+                page_id = page_row["id"]
+
+            conn.execute(
+                """
+                INSERT INTO requested_fields (
+                    id, template_request_id, template_request_page_id, page_number,
+                    field_name, display_label,
+                    roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                    user_note, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    field_id,
+                    request_id,
+                    page_id,
+                    payload.page_number,
+                    payload.field_name,
+                    payload.display_label,
+                    payload.roi.x_ratio,
+                    payload.roi.y_ratio,
+                    payload.roi.width_ratio,
+                    payload.roi.height_ratio,
+                    payload.user_note,
+                ),
+            )
+            conn.commit()
+
+            row = conn.execute("SELECT * FROM requested_fields WHERE id = ?", (field_id,)).fetchone()
+
+        return _field_row_to_api(row)
 
     def update_requested_field(
         self, request_id: str, field_id: str, payload: RequestedFieldUpdate

@@ -32,3 +32,115 @@ export interface OCRResult {
   weight?: number;
   points?: { x: number; y: number }[];
 }
+
+export type TemplateRequestMode = 'image_only' | 'image_with_roi';
+
+export interface RoiRatio {
+  pageNumber: number;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
+}
+
+export interface RequestedField {
+  id: string;
+  fieldName: string;
+  displayLabel: string;
+  roi: RoiRatio;
+  userNote?: string;
+}
+
+export interface TemplateRequestDraft {
+  requestTitle: string;
+  documentType?: string;
+  requestMode: TemplateRequestMode;
+  pageCount: number;
+  userNote?: string;
+  requestedFields: RequestedField[];
+}
+
+export type TemplateStatus =
+  | 'draft'
+  | 'pending_review'
+  | 'embedding_generated'
+  | 'testing'
+  | 'approved'
+  | 'rejected'
+  | 'disabled';
+
+export interface Template {
+  id: string;
+  name: string;
+  documentType?: string;
+  category?: string;
+  status: TemplateStatus;
+  version: number;
+  pageCount: number;
+  similarityThreshold: number;
+  finalConfidenceThreshold: number;
+  rejectionReason?: string;
+}
+
+export interface TemplatePage {
+  id: string;
+  templateId: string;
+  pageNumber: number;
+  pageName?: string;
+  sampleImageUrl?: string;
+  normalizedImageUrl?: string;
+  qdrantPointId?: string;
+  similarityThreshold: number;
+  finalConfidenceThreshold: number;
+}
+
+export interface TemplateField {
+  id: string;
+  templateId: string;
+  templatePageId: string;
+  pageNumber: number;
+  fieldName: string;
+  displayLabel: string;
+  roi: RoiRatio;
+  dataType?: RoiDataType;
+  userSelectable: boolean;
+  defaultSelected: boolean;
+  useForVerification: boolean;
+  expectedText?: string;
+  matchType?: string;
+  requiredForVerification: boolean;
+  extractionMethod: string;
+  sortOrder: number;
+}
+
+export interface IgnoreRegion {
+  id: string;
+  templateId: string;
+  templatePageId: string;
+  pageNumber: number;
+  fieldName: string;
+  roi: RoiRatio;
+}
+
+export type TemplateRequestStatus = 'draft' | 'submitted' | 'in_review' | 'converted' | 'rejected';
+
+export interface TemplateRequestPage {
+  id: string;
+  templateRequestId: string;
+  pageNumber: number;
+  sampleImageUrl?: string;
+}
+
+export interface AdminTemplateRequest {
+  id: string;
+  requestTitle: string;
+  documentType?: string;
+  requestMode: TemplateRequestMode;
+  status: TemplateRequestStatus;
+  userNote?: string;
+  adminNote?: string;
+  convertedTemplateId?: string;
+  pageCount: number;
+  pages: TemplateRequestPage[];
+  requestedFields: RequestedField[];
+}

@@ -140,12 +140,12 @@ export default function GroundTruthEditorZone({
 
 
   const currentPageRois = useMemo(() => {
-    return rois.filter(roi => roi.pageIndex === currentImageIndex);
+    return rois.filter(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === currentImageIndex);
   }, [rois, currentImageIndex]);
 
 
   const currentPageOcrResults = useMemo(() => {
-    return ocrResults.filter(res => res.pageIndex === currentImageIndex);
+    return ocrResults.filter(res => (res.pageIndex !== undefined ? Number(res.pageIndex) : 0) === currentImageIndex);
   }, [ocrResults, currentImageIndex]);
 
   const getRoiByFieldName = (fieldName: string) => {
@@ -173,7 +173,7 @@ export default function GroundTruthEditorZone({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-fade-in">
+    <div className="max-w-7xl mx-auto space-y-4 pb-4 animate-fade-in">
       
       {/* Step progress bar */}
       <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
@@ -194,10 +194,10 @@ export default function GroundTruthEditorZone({
       </div>
 
       {/* Main editor layout */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 min-h-[720px] items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 xl:h-[720px] items-stretch">
         
 
-        <div className="xl:col-span-5 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-hidden flex flex-col min-h-[620px] relative shadow-md">
+        <div className="xl:col-span-5 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-hidden flex flex-col min-h-[620px] xl:min-h-0 xl:h-full relative shadow-md">
           {/* Header controls for left canvas */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200">
             <span className="text-xs font-black text-slate-600 uppercase tracking-wider">Document Preview</span>
@@ -355,8 +355,9 @@ export default function GroundTruthEditorZone({
         </div>
 
         {/* OCR results table */}
-        <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col min-h-[620px] overflow-hidden">
-          <div className="p-4 border-b flex justify-between items-center bg-slate-50/50">
+        <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col min-h-[620px] xl:min-h-0 xl:h-full overflow-hidden">
+          <div className="p-4 border-b flex flex-col gap-3 bg-slate-50/50">
+            <div className="flex justify-between items-center">
             <button
               type="button"
               onClick={onBackToStudio}
@@ -367,9 +368,53 @@ export default function GroundTruthEditorZone({
             <h3 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
               <CheckCircle size={15} className="text-indigo-600" /> Review and edit OCR results
             </h3>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                Page Results
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handlePrevImage}
+                  disabled={currentImageIndex === 0}
+                  className="h-8 w-8 rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-30 hover:bg-slate-50 flex items-center justify-center"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                {imageList.map((_, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      if (onImageIndexChange) onImageIndexChange(idx);
+                      setActiveFieldId(null);
+                    }}
+                    className={`h-8 min-w-8 rounded-lg border px-2 text-xs font-black transition-all ${
+                      currentImageIndex === idx
+                        ? "border-indigo-500 bg-indigo-600 text-white"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={handleNextImage}
+                  disabled={currentImageIndex === imageList.length - 1}
+                  className="h-8 w-8 rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-30 hover:bg-slate-50 flex items-center justify-center"
+                  aria-label="Next page"
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="overflow-y-auto flex-1">
+          <div className="overflow-y-auto flex-1 min-h-0">
             <table className="min-w-full text-xs text-left text-slate-600 table-fixed border-collapse">
               <thead className="bg-slate-50 font-sans text-slate-500 font-semibold border-b border-slate-100 sticky top-0 z-10">
                 <tr>

@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import AdjustZone from "../components/AdjustZone";
 import WorkspaceZone from "../components/WorkspaceZone";
 import GroundTruthEditorZone from "../components/GroundTruthEditorZone";
+import TemplateRequestPanel from "../components/TemplateRequestPanel";
 import { ROI, OCRResult } from "../types/ocr";
 
 interface PageConfig {
@@ -107,6 +108,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [ocrResults, setOcrResults] = useState<(OCRResult & { pageIndex?: number })[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
+  const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number } | null>(null);
 
   const handleUploadSuccess = (urls: string[]) => {
     setImagesList(urls);
@@ -169,18 +172,20 @@ export default function Home() {
 
     setIsLoading(true);
     setOcrResults([]);
+    setOcrProgress({ currentPage: 0, totalPages: imagesList.length });
 
     try {
-      const activePageIndexes = Array.from(
-        new Set(activeRois.map((roi) => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0)))
-      );
+      const combinedResults: (OCRResult & { pageIndex?: number })[] = [];
 
-      const allPagePromises = activePageIndexes.map(async (pageIdx) => {
+      for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length });
         const pageRois = rois.filter(
-          (roi) => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
+          (roi) => roi.enabled !== false && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
         );
 
-        if (pageRois.length === 0) return [];
+        if (pageRois.length === 0) {
+          continue;
+        }
 
         const currentImgUrl = imagesList[pageIdx];
         const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -244,14 +249,12 @@ export default function Home() {
         });
 
         const roiResults = await Promise.all(roiPromises);
-        return roiResults.filter((r) => r !== null) as (OCRResult & { pageIndex?: number })[];
-      });
-
-      const resolvedResultsArray = await Promise.all(allPagePromises);
-      const combinedResults = resolvedResultsArray.flat();
+        combinedResults.push(...(roiResults.filter((r) => r !== null) as (OCRResult & { pageIndex?: number })[]));
+      }
 
       if (combinedResults.length > 0) {
         setOcrResults(combinedResults);
+        setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
         alert("ไม่สามารถดึงข้อมูล OCR ได้ กรุณาตรวจสอบเอนจินระบบ");
@@ -261,39 +264,50 @@ export default function Home() {
       alert("เกิดข้อผิดพลาดในการประมวลผลภาพรวมพร้อมกันทุกหน้า");
     } finally {
       setIsLoading(false);
+      setOcrProgress(null);
     }
   };
 
   const handleRunFullPageOCR = async () => {
     setIsLoading(true);
     setOcrResults([]);
+    setOcrProgress({ currentPage: 0, totalPages: imagesList.length });
 
     try {
-      const currentImgUrl = imagesList[currentIndex];
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const imageObj = new Image();
-        imageObj.onload = () => resolve(imageObj);
-        imageObj.onerror = (err) => reject(err);
-        imageObj.src = currentImgUrl;
-      });
+      const allRoisFromOcr: (ROI & { pageIndex?: number })[] = [];
+      const allOcrResults: (OCRResult & { pageIndex?: number })[] = [];
 
-      const renderedWidth = 750;
-      const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
-      const scaleX = img.naturalWidth / renderedWidth;
-      const scaleY = img.naturalHeight / renderedHeight;
+      for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length });
 
-      const response = await fetch("http://localhost:8000/api/ai/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: currentImgUrl,
-          rois: [],
-        }),
-      });
+        const currentImgUrl = imagesList[pageIdx];
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const imageObj = new Image();
+          imageObj.onload = () => resolve(imageObj);
+          imageObj.onerror = (err) => reject(err);
+          imageObj.src = currentImgUrl;
+        });
 
-      const aiData = await response.json();
-      if (aiData.success && aiData.extracted_data.length > 0) {
-        const newRoisFromOcr: (ROI & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
+        const renderedWidth = 750;
+        const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
+        const scaleX = img.naturalWidth / renderedWidth;
+        const scaleY = img.naturalHeight / renderedHeight;
+
+        const response = await fetch("http://localhost:8000/api/ai/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: currentImgUrl,
+            rois: [],
+          }),
+        });
+
+        const aiData = await response.json();
+        if (!aiData.success || aiData.extracted_data.length === 0) {
+          continue;
+        }
+
+        const pageRoisFromOcr: (ROI & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
           const rx = item.x / scaleX;
           const ry = item.y / scaleY;
           const rw = item.width / scaleX;
@@ -307,13 +321,13 @@ export default function Home() {
             : undefined;
 
           return {
-            id: Date.now() + idx + Math.floor(Math.random() * 1000000),
+            id: Date.now() + pageIdx * 100000 + idx + Math.floor(Math.random() * 1000000),
             fieldName: item.fieldName || `line_${idx + 1}`,
             x: rx,
             y: ry,
             width: rw,
             height: rh,
-            pageIndex: currentIndex,
+            pageIndex: pageIdx,
             type: "text",
             dataType: "string",
             role: "data_extraction",
@@ -321,14 +335,7 @@ export default function Home() {
           };
         });
 
-        setRois((prev) => {
-          const otherPagesRois = prev.filter(
-            (r) => (r.pageIndex !== undefined ? Number(r.pageIndex) : 0) !== currentIndex
-          );
-          return [...otherPagesRois, ...newRoisFromOcr];
-        });
-
-        const newOcrResults: (OCRResult & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
+        const pageOcrResults: (OCRResult & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
           const pts = item.bbox
             ? item.bbox.map((pt: any) => ({
                 x: pt[0] / scaleX,
@@ -337,14 +344,14 @@ export default function Home() {
             : undefined;
 
           return {
-            id: Date.now() + idx + 1000000 + Math.floor(Math.random() * 1000000),
+            id: Date.now() + pageIdx * 100000 + idx + 1000000 + Math.floor(Math.random() * 1000000),
             fieldName: item.fieldName || `line_${idx + 1}`,
             bbox: [],
             extractedText: item.text,
             originalText: item.text,
             confidence: item.confidence,
             saved_path: item.saved_path || "",
-            pageIndex: currentIndex,
+            pageIndex: pageIdx,
             type: "text",
             dataType: "string",
             role: "data_extraction",
@@ -352,16 +359,28 @@ export default function Home() {
           };
         });
 
-        setOcrResults(newOcrResults);
+        allRoisFromOcr.push(...pageRoisFromOcr);
+        allOcrResults.push(...pageOcrResults);
+      }
+
+      if (allOcrResults.length > 0) {
+        setRois((prev) => {
+          const nonGeneratedRois = prev.filter((r) => !r.fieldName.startsWith("line_"));
+          return [...nonGeneratedRois, ...allRoisFromOcr];
+        });
+
+        setOcrResults(allOcrResults);
+        setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
-        alert("ไม่พบข้อความใดๆ บนหน้ากระดาษใบนี้จากการสแกนด้วย AI Engine");
+        alert("ไม่พบข้อความใดๆ บนเอกสารจากการสแกนด้วย AI Engine");
       }
     } catch (err) {
       console.error(err);
-      alert("เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งหน้ากระดาษ");
+      alert("เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งเอกสาร");
     } finally {
       setIsLoading(false);
+      setOcrProgress(null);
     }
   };
 
@@ -413,6 +432,12 @@ export default function Home() {
           </div>
 
           <div className="flex items-center">
+            <a
+              href="/admin"
+              className="mr-3 flex items-center gap-1.5 text-xs font-bold px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-indigo-600 hover:border-indigo-200 transition-all shadow-sm active:scale-98"
+            >
+              Admin
+            </a>
             {imagesList.length > 0 && (
               <button
                 type="button"
@@ -459,6 +484,7 @@ export default function Home() {
             isLoading={isLoading}
             onRunOCR={handleRunOCR}
             onRunFullPageOCR={handleRunFullPageOCR}
+            ocrProgress={ocrProgress}
             currentIndex={currentIndex}
             imagesList={imagesList}
             onIndexChange={(nextIdx) => {
@@ -469,17 +495,56 @@ export default function Home() {
         )}
 
         {currentStep === "editor" && (
-          <GroundTruthEditorZone
-            previewUrl={imagesList[currentIndex] || previewUrl}
-            rois={rois}
-            ocrResults={ocrResults}
-            setOcrResults={setOcrResults}
-            onBackToStudio={() => setCurrentStep("studio")}
-            onApproveAndSave={handleApproveAndSave}
-            imageList={imagesList}
-            currentImageIndex={currentIndex}
-            onImageIndexChange={(nextIdx) => setCurrentIndex(nextIdx)}
-          />
+          <>
+            <GroundTruthEditorZone
+              previewUrl={imagesList[currentIndex] || previewUrl}
+              rois={rois}
+              ocrResults={ocrResults}
+              setOcrResults={setOcrResults}
+              onBackToStudio={() => setCurrentStep("studio")}
+              onApproveAndSave={handleApproveAndSave}
+              imageList={imagesList}
+              currentImageIndex={currentIndex}
+              onImageIndexChange={(nextIdx) => setCurrentIndex(nextIdx)}
+            />
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+              <div>
+                <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Additional Actions</h2>
+                <p className="text-xs font-semibold text-slate-500">
+                  Export the OCR result or send this session to admin review.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => console.info("Export action is not implemented yet.")}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={() => console.info("Download action is a placeholder.")}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsTemplateRequestOpen(true)}
+                  className="rounded-xl bg-indigo-600 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-indigo-700"
+                >
+                  Request New Template
+                </button>
+              </div>
+            </section>
+            <TemplateRequestPanel
+              imagesList={imagesList}
+              rois={rois}
+              isOpen={isTemplateRequestOpen}
+              onClose={() => setIsTemplateRequestOpen(false)}
+            />
+          </>
         )}
       </div>
     </main>
