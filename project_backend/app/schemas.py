@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class ApiResponse(BaseModel):
@@ -77,6 +77,8 @@ class RequestedFieldCreate(BaseModel):
     field_name: str
     display_label: str
     roi: RoiRatio
+    data_type: Optional[str] = Field(default=None, validation_alias=AliasChoices("data_type", "dataType"))
+    extraction_method: Optional[str] = Field(default=None, validation_alias=AliasChoices("extraction_method", "extractionMethod"))
     user_note: Optional[str] = None
 
 
@@ -84,6 +86,8 @@ class RequestedFieldUpdate(BaseModel):
     field_name: Optional[str] = None
     display_label: Optional[str] = None
     roi: Optional[RoiRatio] = None
+    data_type: Optional[str] = Field(default=None, validation_alias=AliasChoices("data_type", "dataType"))
+    extraction_method: Optional[str] = Field(default=None, validation_alias=AliasChoices("extraction_method", "extractionMethod"))
     user_note: Optional[str] = None
 
 

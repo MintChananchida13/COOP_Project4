@@ -12,6 +12,12 @@ const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   return <FileText size={size} className="shrink-0" />;
 };
 
+const roiTypePatch = (type: 'text' | 'table' | 'image'): Partial<ROI> => ({
+  type,
+  dataType: type,
+  extractionMethod: type === 'table' ? 'ocr_table' : type === 'image' ? 'extract_image' : 'ocr_text',
+});
+
 export interface WorkspaceCustomEditorProps {
   previewUrl: string;
   image: string | null;
@@ -309,6 +315,8 @@ export default function WorkspaceCustomEditor({
         height: bbox.height,
         pageIndex: currentIndex,
         type: 'text' as const,
+        dataType: 'text' as const,
+        extractionMethod: 'ocr_text' as const,
         points: activeDrawPoints
       };
       setRois(prev => [...prev, newBox]);
@@ -358,6 +366,8 @@ export default function WorkspaceCustomEditor({
             height: bbox.height,
             pageIndex: currentIndex,
             type: 'text' as const,
+            dataType: 'text' as const,
+            extractionMethod: 'ocr_text' as const,
             points: updatedPoints
           };
           setRois(prev => [...prev, newBox]);
@@ -383,6 +393,8 @@ export default function WorkspaceCustomEditor({
               height: bbox.height,
               pageIndex: currentIndex,
               type: 'text' as const,
+              dataType: 'text' as const,
+              extractionMethod: 'ocr_text' as const,
               points: finalPoints
             };
             setRois(prev => [...prev, newBox]);
@@ -443,7 +455,8 @@ export default function WorkspaceCustomEditor({
         y: dragBox.y,
         width: dragBox.w,
         height: dragBox.h,
-        pageIndex: currentIndex 
+        pageIndex: currentIndex,
+        ...roiTypePatch('text'),
       };
       setRois([...rois, newBox]);
       setSelectedId(newBox.id);
@@ -889,7 +902,7 @@ export default function WorkspaceCustomEditor({
                             <div className="grid grid-cols-3 gap-1">
                               <button
                                 type="button"
-                                onClick={() => updateROI(roi.id, { type: 'text' })}
+                                onClick={() => updateROI(roi.id, roiTypePatch('text'))}
                                 className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
                                   (roi.type || 'text') === 'text' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
@@ -900,7 +913,7 @@ export default function WorkspaceCustomEditor({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => updateROI(roi.id, { type: 'table' })}
+                                onClick={() => updateROI(roi.id, roiTypePatch('table'))}
                                 className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
                                   roi.type === 'table' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
@@ -911,7 +924,7 @@ export default function WorkspaceCustomEditor({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => updateROI(roi.id, { type: 'image' })}
+                                onClick={() => updateROI(roi.id, roiTypePatch('image'))}
                                 className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
                                   roi.type === 'image' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
@@ -993,7 +1006,7 @@ export default function WorkspaceCustomEditor({
                         />
                         <select
                           value={roi.type || 'text'}
-                          onChange={(e) => updateROI(roi.id, { type: e.target.value as any })}
+                          onChange={(e) => updateROI(roi.id, roiTypePatch(e.target.value as 'text' | 'table' | 'image'))}
                           onClick={(e) => e.stopPropagation()}
                           className="text-[9.5px] font-bold bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shrink-0 select-none"
                         >

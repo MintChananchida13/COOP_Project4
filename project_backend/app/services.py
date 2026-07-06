@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from fastapi import HTTPException
+
 from .schemas import (
     CustomOcrRequest,
     DocumentUploadRequest,
@@ -33,6 +35,18 @@ def _stub_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+def _normalize_extraction_method(value: Optional[str]) -> str:
+    if value in {"ocr_text", "ocr_table", "extract_image"}:
+        return value
+    return "ocr_text"
+
+
+def _normalize_data_type(value: Optional[str]) -> str:
+    if value in {"text", "number", "date", "table", "image", "string", "address", "currency"}:
+        return "text" if value == "string" else value
+    return "text"
+
+
 def _db_path() -> Path:
     database_url = os.getenv("DATABASE_URL", "")
     if database_url.startswith("file:"):
@@ -51,7 +65,20 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    _ensure_requested_field_metadata_columns(conn)
     return conn
+
+
+def _ensure_requested_field_metadata_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(requested_fields)").fetchall()
+    }
+    if columns and "data_type" not in columns:
+        conn.execute("ALTER TABLE requested_fields ADD COLUMN data_type TEXT DEFAULT 'text'")
+    if columns and "extraction_method" not in columns:
+        conn.execute("ALTER TABLE requested_fields ADD COLUMN extraction_method TEXT DEFAULT 'ocr_text'")
+    conn.commit()
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -105,7 +132,95 @@ def _field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
             "width_ratio": item["roi_width_ratio"],
             "height_ratio": item["roi_height_ratio"],
         },
+        "data_type": _normalize_data_type(item.get("data_type")),
+        "extraction_method": _normalize_extraction_method(item.get("extraction_method")),
         "user_note": item["user_note"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _template_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "document_type": item["document_type"],
+        "category": item["category"],
+        "status": item["status"],
+        "version": item["version"],
+        "page_count": item["page_count"],
+        "similarity_threshold": item["similarity_threshold"],
+        "final_confidence_threshold": item["final_confidence_threshold"],
+        "rejection_reason": item["rejection_reason"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_id": item["template_id"],
+        "page_number": item["page_number"],
+        "page_name": item["page_name"],
+        "sample_image_url": item["sample_image_url"],
+        "normalized_image_url": item["normalized_image_url"],
+        "qdrant_point_id": item["qdrant_point_id"],
+        "similarity_threshold": item["similarity_threshold"],
+        "final_confidence_threshold": item["final_confidence_threshold"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _template_field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_id": item["template_id"],
+        "template_page_id": item["template_page_id"],
+        "page_number": item["page_number"],
+        "field_name": item["field_name"],
+        "display_label": item["display_label"],
+        "roi": {
+            "page_number": item["page_number"],
+            "x_ratio": item["roi_x_ratio"],
+            "y_ratio": item["roi_y_ratio"],
+            "width_ratio": item["roi_width_ratio"],
+            "height_ratio": item["roi_height_ratio"],
+        },
+        "data_type": item["data_type"],
+        "user_selectable": bool(item["user_selectable"]),
+        "default_selected": bool(item["default_selected"]),
+        "use_for_verification": bool(item["use_for_verification"]),
+        "expected_text": item["expected_text"],
+        "match_type": item["match_type"],
+        "required_for_verification": bool(item["required_for_verification"]),
+        "extraction_method": _normalize_extraction_method(item["extraction_method"]),
+        "roi_padding": item["roi_padding"],
+        "sort_order": item["sort_order"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _ignore_region_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_id": item["template_id"],
+        "template_page_id": item["template_page_id"],
+        "page_number": item["page_number"],
+        "field_name": item["field_name"],
+        "roi": {
+            "page_number": item["page_number"],
+            "x_ratio": item["roi_x_ratio"],
+            "y_ratio": item["roi_y_ratio"],
+            "width_ratio": item["roi_width_ratio"],
+            "height_ratio": item["roi_height_ratio"],
+        },
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
     }
@@ -387,7 +502,43 @@ class TemplateRequestService:
         return {"id": request_id, **payload.model_dump(exclude_unset=True), "updated_at": _now()}
 
     def delete(self, request_id: str) -> Dict[str, Any]:
-        return {"id": request_id, "deleted": True}
+        with _connect() as conn:
+            request_row = conn.execute(
+                "SELECT * FROM template_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
+            if request_row is None:
+                raise HTTPException(status_code=404, detail="Template request not found.")
+
+            try:
+                conn.execute("BEGIN")
+                deleted_fields = conn.execute(
+                    "DELETE FROM requested_fields WHERE template_request_id = ?",
+                    (request_id,),
+                ).rowcount
+                deleted_pages = conn.execute(
+                    "DELETE FROM template_request_pages WHERE template_request_id = ?",
+                    (request_id,),
+                ).rowcount
+                deleted_requests = conn.execute(
+                    "DELETE FROM template_requests WHERE id = ?",
+                    (request_id,),
+                ).rowcount
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "id": request_id,
+            "deleted": True,
+            "converted_template_id": request_row["converted_template_id"],
+            "deleted_records": {
+                "template_requests": deleted_requests,
+                "template_request_pages": deleted_pages,
+                "requested_fields": deleted_fields,
+            },
+        }
 
     def submit(self, request_id: str) -> Dict[str, Any]:
         with _connect() as conn:
@@ -451,9 +602,9 @@ class TemplateRequestService:
                     id, template_request_id, template_request_page_id, page_number,
                     field_name, display_label,
                     roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
-                    user_note, created_at, updated_at
+                    data_type, extraction_method, user_note, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     field_id,
@@ -466,24 +617,79 @@ class TemplateRequestService:
                     payload.roi.y_ratio,
                     payload.roi.width_ratio,
                     payload.roi.height_ratio,
+                    _normalize_data_type(payload.data_type),
+                    _normalize_extraction_method(payload.extraction_method),
                     payload.user_note,
                 ),
             )
             conn.commit()
 
             row = conn.execute("SELECT * FROM requested_fields WHERE id = ?", (field_id,)).fetchone()
+            print(
+                "requested_field_saved",
+                {
+                    "id": field_id,
+                    "request_id": request_id,
+                    "data_type": _normalize_data_type(payload.data_type),
+                    "extraction_method": _normalize_extraction_method(payload.extraction_method),
+                },
+                flush=True,
+            )
 
         return _field_row_to_api(row)
 
     def update_requested_field(
         self, request_id: str, field_id: str, payload: RequestedFieldUpdate
     ) -> Dict[str, Any]:
-        return {
-            "id": field_id,
-            "template_request_id": request_id,
-            **payload.model_dump(exclude_unset=True),
-            "updated_at": _now(),
+        patch = payload.model_dump(exclude_unset=True)
+        column_values: Dict[str, Any] = {}
+        direct_columns = {
+            "field_name": "field_name",
+            "display_label": "display_label",
+            "data_type": "data_type",
+            "extraction_method": "extraction_method",
+            "user_note": "user_note",
         }
+        for key, column in direct_columns.items():
+            if key in patch:
+                value = patch[key]
+                if key == "data_type":
+                    value = _normalize_data_type(value)
+                if key == "extraction_method":
+                    value = _normalize_extraction_method(value)
+                column_values[column] = value
+
+        if payload.roi is not None:
+            column_values.update(
+                {
+                    "page_number": payload.roi.page_number,
+                    "roi_x_ratio": payload.roi.x_ratio,
+                    "roi_y_ratio": payload.roi.y_ratio,
+                    "roi_width_ratio": payload.roi.width_ratio,
+                    "roi_height_ratio": payload.roi.height_ratio,
+                }
+            )
+
+        with _connect() as conn:
+            if column_values:
+                set_clause = ", ".join(f"{column} = ?" for column in column_values.keys())
+                conn.execute(
+                    f"""
+                    UPDATE requested_fields
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND template_request_id = ?
+                    """,
+                    [*column_values.values(), field_id, request_id],
+                )
+                conn.commit()
+            row = conn.execute(
+                "SELECT * FROM requested_fields WHERE id = ? AND template_request_id = ?",
+                (field_id, request_id),
+            ).fetchone()
+
+        if row is None:
+            return {"id": field_id, "template_request_id": request_id, "status": "not_found"}
+        return _field_row_to_api(row)
 
     def delete_requested_field(self, request_id: str, field_id: str) -> Dict[str, Any]:
         return {"id": field_id, "template_request_id": request_id, "deleted": True}
@@ -507,64 +713,572 @@ class AdminTemplateService:
         return {"template_count": 0, "pending_request_count": 0, "status": "stubbed"}
 
     def create_template(self, payload: TemplateCreate) -> Dict[str, Any]:
-        return {"id": _stub_id("tpl"), **payload.model_dump(), "status": "draft", "created_at": _now()}
+        template_id = _stub_id("tpl")
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO templates (
+                    id, name, document_type, category, status, version, page_count,
+                    similarity_threshold, final_confidence_threshold, created_by,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    template_id,
+                    payload.name,
+                    payload.document_type,
+                    payload.category,
+                    payload.page_count,
+                    payload.similarity_threshold,
+                    payload.final_confidence_threshold,
+                    payload.created_by,
+                ),
+            )
+            conn.commit()
+        return self.get_template(template_id)
 
     def list_templates(self) -> Dict[str, Any]:
-        return {"templates": []}
+        with _connect() as conn:
+            rows = conn.execute("SELECT * FROM templates ORDER BY created_at DESC").fetchall()
+        return {"templates": [_template_row_to_api(row) for row in rows]}
 
     def get_template(self, template_id: str) -> Dict[str, Any]:
-        return {"id": template_id, "status": "stubbed", "pages": []}
+        with _connect() as conn:
+            template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if template_row is None:
+                return {
+                    "id": template_id,
+                    "status": "not_found",
+                    "pages": [],
+                    "fields": [],
+                    "ignore_regions": [],
+                }
+
+            page_rows = conn.execute(
+                """
+                SELECT * FROM template_pages
+                WHERE template_id = ?
+                ORDER BY page_number ASC
+                """,
+                (template_id,),
+            ).fetchall()
+            field_rows = conn.execute(
+                """
+                SELECT * FROM template_fields
+                WHERE template_id = ?
+                ORDER BY page_number ASC, sort_order ASC, created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
+            ignore_rows = conn.execute(
+                """
+                SELECT * FROM ignore_regions
+                WHERE template_id = ?
+                ORDER BY page_number ASC, created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
+
+        return {
+            **_template_row_to_api(template_row),
+            "pages": [_template_page_row_to_api(row) for row in page_rows],
+            "fields": [_template_field_row_to_api(row) for row in field_rows],
+            "ignore_regions": [_ignore_region_row_to_api(row) for row in ignore_rows],
+        }
 
     def update_template(self, template_id: str, payload: TemplateUpdate) -> Dict[str, Any]:
-        return {"id": template_id, **payload.model_dump(exclude_unset=True), "updated_at": _now()}
+        patch = payload.model_dump(exclude_unset=True)
+        column_map = {
+            "name": "name",
+            "document_type": "document_type",
+            "category": "category",
+            "status": "status",
+            "page_count": "page_count",
+            "similarity_threshold": "similarity_threshold",
+            "final_confidence_threshold": "final_confidence_threshold",
+            "rejection_reason": "rejection_reason",
+        }
+        updates = [(column_map[key], value) for key, value in patch.items() if key in column_map]
+        if updates:
+            set_clause = ", ".join(f"{column} = ?" for column, _ in updates)
+            values = [value for _, value in updates]
+            with _connect() as conn:
+                conn.execute(
+                    f"UPDATE templates SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    [*values, template_id],
+                )
+                conn.commit()
+        return self.get_template(template_id)
 
     def delete_template(self, template_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+            conn.commit()
         return {"id": template_id, "deleted": True}
 
     def list_template_pages(self, template_id: str) -> Dict[str, Any]:
-        return {"template_id": template_id, "pages": []}
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM template_pages
+                WHERE template_id = ?
+                ORDER BY page_number ASC
+                """,
+                (template_id,),
+            ).fetchall()
+        return {"template_id": template_id, "pages": [_template_page_row_to_api(row) for row in rows]}
 
     def create_template_page(self, template_id: str, payload: TemplatePageCreate) -> Dict[str, Any]:
-        return {"id": _stub_id("tpl_page"), "template_id": template_id, **payload.model_dump()}
+        page_id = _stub_id("tpl_page")
+        with _connect() as conn:
+            template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            similarity_threshold = template_row["similarity_threshold"] if template_row else 0.75
+            final_confidence_threshold = template_row["final_confidence_threshold"] if template_row else 0.8
+            conn.execute(
+                """
+                INSERT INTO template_pages (
+                    id, template_id, page_number, page_name, sample_image_url,
+                    normalized_image_url, similarity_threshold, final_confidence_threshold,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    page_id,
+                    template_id,
+                    payload.page_number,
+                    payload.page_name,
+                    payload.sample_image_url,
+                    payload.normalized_image_url,
+                    similarity_threshold,
+                    final_confidence_threshold,
+                ),
+            )
+            page_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM template_pages WHERE template_id = ?",
+                (template_id,),
+            ).fetchone()["count"]
+            conn.execute(
+                "UPDATE templates SET page_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (page_count, template_id),
+            )
+            conn.commit()
+        return self.get_template(template_id)
 
     def update_template_page(
         self, template_id: str, page_id: str, payload: TemplatePageUpdate
     ) -> Dict[str, Any]:
-        return {"id": page_id, "template_id": template_id, **payload.model_dump(exclude_unset=True)}
+        patch = payload.model_dump(exclude_unset=True)
+        column_map = {
+            "page_number": "page_number",
+            "page_name": "page_name",
+            "sample_image_url": "sample_image_url",
+            "normalized_image_url": "normalized_image_url",
+            "similarity_threshold": "similarity_threshold",
+            "final_confidence_threshold": "final_confidence_threshold",
+        }
+        updates = [(column_map[key], value) for key, value in patch.items() if key in column_map]
+        if updates:
+            set_clause = ", ".join(f"{column} = ?" for column, _ in updates)
+            values = [value for _, value in updates]
+            with _connect() as conn:
+                conn.execute(
+                    f"""
+                    UPDATE template_pages
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND template_id = ?
+                    """,
+                    [*values, page_id, template_id],
+                )
+                if "page_number" in patch:
+                    conn.execute(
+                        "UPDATE template_fields SET page_number = ?, updated_at = CURRENT_TIMESTAMP WHERE template_page_id = ?",
+                        (patch["page_number"], page_id),
+                    )
+                    conn.execute(
+                        "UPDATE ignore_regions SET page_number = ?, updated_at = CURRENT_TIMESTAMP WHERE template_page_id = ?",
+                        (patch["page_number"], page_id),
+                    )
+                conn.commit()
+        return self.get_template(template_id)
 
     def delete_template_page(self, template_id: str, page_id: str) -> Dict[str, Any]:
-        return {"id": page_id, "template_id": template_id, "deleted": True}
+        with _connect() as conn:
+            conn.execute("DELETE FROM template_pages WHERE id = ? AND template_id = ?", (page_id, template_id))
+            page_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM template_pages WHERE template_id = ?",
+                (template_id,),
+            ).fetchone()["count"]
+            conn.execute(
+                "UPDATE templates SET page_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (page_count, template_id),
+            )
+            conn.commit()
+        return self.get_template(template_id)
 
     def create_template_field(self, template_id: str, payload: TemplateFieldCreate) -> Dict[str, Any]:
-        return {"id": _stub_id("tpl_field"), "template_id": template_id, **payload.model_dump()}
+        field_id = _stub_id("tpl_field")
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO template_fields (
+                    id, template_id, template_page_id, page_number,
+                    field_name, display_label,
+                    roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                    data_type, user_selectable, default_selected,
+                    use_for_verification, expected_text, match_type,
+                    required_for_verification, extraction_method,
+                    anchor_text, regex_pattern, roi_padding, sort_order,
+                    created_at, updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """,
+                (
+                    field_id,
+                    template_id,
+                    payload.template_page_id,
+                    payload.page_number,
+                    payload.field_name,
+                    payload.display_label,
+                    payload.roi.x_ratio,
+                    payload.roi.y_ratio,
+                    payload.roi.width_ratio,
+                    payload.roi.height_ratio,
+                    payload.data_type or "text",
+                    int(payload.user_selectable),
+                    int(payload.default_selected),
+                    int(payload.use_for_verification),
+                    payload.expected_text,
+                    payload.match_type,
+                    int(payload.required_for_verification),
+                    _normalize_extraction_method(payload.extraction_method),
+                    payload.anchor_text,
+                    payload.regex_pattern,
+                    payload.roi_padding if payload.roi_padding is not None else 0,
+                    payload.sort_order,
+                ),
+            )
+            conn.commit()
+        return self.get_template(template_id)
 
     def update_template_field(
         self, template_id: str, field_id: str, payload: TemplateFieldUpdate
     ) -> Dict[str, Any]:
-        return {"id": field_id, "template_id": template_id, **payload.model_dump(exclude_unset=True)}
+        patch = payload.model_dump(exclude_unset=True)
+        column_values: Dict[str, Any] = {}
+        direct_columns = {
+            "template_page_id": "template_page_id",
+            "page_number": "page_number",
+            "field_name": "field_name",
+            "display_label": "display_label",
+            "data_type": "data_type",
+            "user_selectable": "user_selectable",
+            "default_selected": "default_selected",
+            "use_for_verification": "use_for_verification",
+            "expected_text": "expected_text",
+            "match_type": "match_type",
+            "required_for_verification": "required_for_verification",
+            "extraction_method": "extraction_method",
+            "anchor_text": "anchor_text",
+            "regex_pattern": "regex_pattern",
+            "roi_padding": "roi_padding",
+            "sort_order": "sort_order",
+        }
+        for key, column in direct_columns.items():
+            if key in patch:
+                value = patch[key]
+                if key in {"user_selectable", "default_selected", "use_for_verification", "required_for_verification"}:
+                    value = int(value)
+                if key == "extraction_method":
+                    value = _normalize_extraction_method(value)
+                column_values[column] = value
+        if payload.roi is not None:
+            column_values.update(
+                {
+                    "page_number": payload.roi.page_number,
+                    "roi_x_ratio": payload.roi.x_ratio,
+                    "roi_y_ratio": payload.roi.y_ratio,
+                    "roi_width_ratio": payload.roi.width_ratio,
+                    "roi_height_ratio": payload.roi.height_ratio,
+                }
+            )
+        if column_values:
+            set_clause = ", ".join(f"{column} = ?" for column in column_values.keys())
+            with _connect() as conn:
+                conn.execute(
+                    f"""
+                    UPDATE template_fields
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND template_id = ?
+                    """,
+                    [*column_values.values(), field_id, template_id],
+                )
+                conn.commit()
+        return self.get_template(template_id)
 
     def delete_template_field(self, template_id: str, field_id: str) -> Dict[str, Any]:
-        return {"id": field_id, "template_id": template_id, "deleted": True}
+        with _connect() as conn:
+            conn.execute("DELETE FROM template_fields WHERE id = ? AND template_id = ?", (field_id, template_id))
+            conn.commit()
+        return self.get_template(template_id)
 
     def create_ignore_region(self, template_id: str, payload: IgnoreRegionCreate) -> Dict[str, Any]:
-        return {"id": _stub_id("ignore_region"), "template_id": template_id, **payload.model_dump()}
+        region_id = _stub_id("ignore_region")
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ignore_regions (
+                    id, template_id, template_page_id, page_number, field_name,
+                    roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    region_id,
+                    template_id,
+                    payload.template_page_id,
+                    payload.page_number,
+                    payload.field_name,
+                    payload.roi.x_ratio,
+                    payload.roi.y_ratio,
+                    payload.roi.width_ratio,
+                    payload.roi.height_ratio,
+                ),
+            )
+            conn.commit()
+        return self.get_template(template_id)
 
     def update_ignore_region(
         self, template_id: str, region_id: str, payload: IgnoreRegionUpdate
     ) -> Dict[str, Any]:
-        return {"id": region_id, "template_id": template_id, **payload.model_dump(exclude_unset=True)}
+        patch = payload.model_dump(exclude_unset=True)
+        column_values: Dict[str, Any] = {}
+        direct_columns = {
+            "template_page_id": "template_page_id",
+            "page_number": "page_number",
+            "field_name": "field_name",
+        }
+        for key, column in direct_columns.items():
+            if key in patch:
+                column_values[column] = patch[key]
+        if payload.roi is not None:
+            column_values.update(
+                {
+                    "page_number": payload.roi.page_number,
+                    "roi_x_ratio": payload.roi.x_ratio,
+                    "roi_y_ratio": payload.roi.y_ratio,
+                    "roi_width_ratio": payload.roi.width_ratio,
+                    "roi_height_ratio": payload.roi.height_ratio,
+                }
+            )
+        if column_values:
+            set_clause = ", ".join(f"{column} = ?" for column in column_values.keys())
+            with _connect() as conn:
+                conn.execute(
+                    f"""
+                    UPDATE ignore_regions
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND template_id = ?
+                    """,
+                    [*column_values.values(), region_id, template_id],
+                )
+                conn.commit()
+        return self.get_template(template_id)
 
     def delete_ignore_region(self, template_id: str, region_id: str) -> Dict[str, Any]:
-        return {"id": region_id, "template_id": template_id, "deleted": True}
+        with _connect() as conn:
+            conn.execute("DELETE FROM ignore_regions WHERE id = ? AND template_id = ?", (region_id, template_id))
+            conn.commit()
+        return self.get_template(template_id)
 
     def start_review(self, request_id: str) -> Dict[str, Any]:
         return {"id": request_id, "status": "in_review", "updated_at": _now()}
 
     def convert_request_to_template(self, request_id: str) -> Dict[str, Any]:
+        template_id = _stub_id("tpl")
+        created_template_page_ids: Dict[int, str] = {}
+
+        with _connect() as conn:
+            request_row = conn.execute(
+                "SELECT * FROM template_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
+            if request_row is None:
+                return {
+                    "template_request_id": request_id,
+                    "converted_template_id": None,
+                    "status": "not_found",
+                }
+
+            if request_row["converted_template_id"]:
+                return {
+                    "template_request_id": request_id,
+                    "converted_template_id": request_row["converted_template_id"],
+                    "template_id": request_row["converted_template_id"],
+                    "status": "already_converted",
+                }
+
+            request_pages = conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+            ).fetchall()
+            requested_fields = conn.execute(
+                """
+                SELECT * FROM requested_fields
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC, created_at ASC
+                """,
+                (request_id,),
+            ).fetchall()
+
+            conn.execute(
+                """
+                INSERT INTO templates (
+                    id, name, document_type, category, status, version, page_count,
+                    similarity_threshold, final_confidence_threshold,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, NULL, 'draft', 1, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    template_id,
+                    request_row["request_title"],
+                    request_row["document_type"],
+                    request_row["page_count"],
+                ),
+            )
+
+            if not request_pages:
+                page_id = _stub_id("tpl_page")
+                created_template_page_ids[1] = page_id
+                conn.execute(
+                    """
+                    INSERT INTO template_pages (
+                        id, template_id, page_number, page_name, sample_image_url,
+                        normalized_image_url, similarity_threshold, final_confidence_threshold,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, 1, 'Page 1', ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (page_id, template_id, request_row["sample_file_url"], request_row["sample_file_url"]),
+                )
+            else:
+                for page in request_pages:
+                    page_id = _stub_id("tpl_page")
+                    created_template_page_ids[page["page_number"]] = page_id
+                    conn.execute(
+                        """
+                        INSERT INTO template_pages (
+                            id, template_id, page_number, page_name, sample_image_url,
+                            normalized_image_url, similarity_threshold, final_confidence_threshold,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            page_id,
+                            template_id,
+                            page["page_number"],
+                            f"Page {page['page_number']}",
+                            page["sample_image_url"],
+                            page["sample_image_url"],
+                        ),
+                    )
+
+            for index, field in enumerate(requested_fields):
+                template_page_id = created_template_page_ids.get(field["page_number"])
+                if template_page_id is None:
+                    template_page_id = _stub_id("tpl_page")
+                    created_template_page_ids[field["page_number"]] = template_page_id
+                    conn.execute(
+                        """
+                        INSERT INTO template_pages (
+                            id, template_id, page_number, page_name, sample_image_url,
+                            normalized_image_url, similarity_threshold, final_confidence_threshold,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, NULL, NULL, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """,
+                        (template_page_id, template_id, field["page_number"], f"Page {field['page_number']}"),
+                    )
+
+                conn.execute(
+                    """
+                    INSERT INTO template_fields (
+                        id, template_id, template_page_id, page_number,
+                        field_name, display_label,
+                        roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                        data_type, user_selectable, default_selected,
+                        use_for_verification, expected_text, match_type,
+                        required_for_verification, extraction_method,
+                        anchor_text, regex_pattern, roi_padding, sort_order,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, 1, 1,
+                        0, NULL, NULL,
+                        0, ?,
+                        NULL, NULL, 0, ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    """,
+                    (
+                        _stub_id("tpl_field"),
+                        template_id,
+                        template_page_id,
+                        field["page_number"],
+                        field["field_name"],
+                        field["display_label"],
+                        field["roi_x_ratio"],
+                        field["roi_y_ratio"],
+                        field["roi_width_ratio"],
+                        field["roi_height_ratio"],
+                        _normalize_data_type(field["data_type"]),
+                        _normalize_extraction_method(field["extraction_method"]),
+                        index + 1,
+                    ),
+                )
+
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET status = 'converted_to_template',
+                    converted_template_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id, request_id),
+            )
+            conn.commit()
+
         return {
             "template_request_id": request_id,
-            "converted_template_id": _stub_id("tpl"),
-            "status": "conversion_stubbed",
+            "converted_template_id": template_id,
+            "template_id": template_id,
+            "status": "converted_to_template",
+            "created_records": {
+                "templates": 1,
+                "template_pages": len(created_template_page_ids),
+                "template_fields": len(requested_fields),
+            },
         }
 
     def reject_request(self, request_id: str, reason: Optional[str]) -> Dict[str, Any]:

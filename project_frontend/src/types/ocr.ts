@@ -12,6 +12,7 @@ export interface ROI {
   pageIndex?: number;
   type?: 'text' | 'table' | 'image';
   dataType?: RoiDataType;
+  extractionMethod?: 'ocr_text' | 'ocr_table' | 'extract_image';
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
@@ -48,6 +49,8 @@ export interface RequestedField {
   fieldName: string;
   displayLabel: string;
   roi: RoiRatio;
+  dataType?: RoiDataType;
+  extractionMethod?: string;
   userNote?: string;
 }
 

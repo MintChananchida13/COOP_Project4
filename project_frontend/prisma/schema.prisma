@@ -167,6 +167,8 @@ model RequestedField {
   roiYRatio             Float    @map("roi_y_ratio")
   roiWidthRatio         Float    @map("roi_width_ratio")
   roiHeightRatio        Float    @map("roi_height_ratio")
+  dataType              String?  @map("data_type")
+  extractionMethod      String   @default("ocr_text") @map("extraction_method")
   userNote              String?  @map("user_note")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")

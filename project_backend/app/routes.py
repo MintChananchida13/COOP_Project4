@@ -167,6 +167,11 @@ def admin_get_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.get(request_id))
 
 
+@router.delete("/admin/template-requests/{request_id}", response_model=ApiResponse)
+def admin_delete_template_request(request_id: str) -> ApiResponse:
+    return ok(template_requests.delete(request_id))
+
+
 @router.post("/admin/template-requests/{request_id}/start-review", response_model=ApiResponse)
 def admin_start_review(request_id: str) -> ApiResponse:
     return ok(admin_templates.start_review(request_id))

@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ROI, RequestedField, TemplateRequestMode } from "../../types/ocr";
+import { ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
+import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
 
 type PageAwareRoi = ROI & { pageIndex?: number };
 
@@ -34,6 +35,14 @@ const WORKSPACE_RENDERED_WIDTH = 750;
 
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
 
+const roiTypeToDataType = (roi: PageAwareRoi): RoiDataType => {
+  if (roi.type === "table") return "table";
+  if (roi.type === "image") return "image";
+  if (roi.type === "text") return "text";
+  if (roi.dataType) return roi.dataType;
+  return "text";
+};
+
 const loadImageSize = (src: string): Promise<ImageSize> =>
   new Promise((resolve, reject) => {
     const img = new Image();
@@ -44,10 +53,14 @@ const loadImageSize = (src: string): Promise<ImageSize> =>
 
 const toRequestedField = (roi: PageAwareRoi, renderedHeight: number, index: number): RequestedField => {
   const pageIndex = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
+  const dataType = roiTypeToDataType(roi);
+  const extractionMethod = roi.extractionMethod || defaultExtractionMethodForDataType(dataType);
   return {
     id: `requested_field_${roi.id}`,
     fieldName: roi.fieldName || `field_${index + 1}`,
     displayLabel: roi.fieldName || `Field ${index + 1}`,
+    dataType,
+    extractionMethod,
     roi: {
       pageNumber: pageIndex + 1,
       xRatio: clampRatio(roi.x / WORKSPACE_RENDERED_WIDTH),
@@ -119,28 +132,33 @@ export default function TemplateRequestPanel({ imagesList, rois, isOpen, onClose
 
     if (requestMode === "image_with_roi") {
       await Promise.all(
-        requestedFields.map((field) =>
-          fetch(`${API_BASE_URL}/template-requests/${requestId}/requested-fields`, {
+        requestedFields.map((field) => {
+          const requestedFieldPayload = {
+            template_request_page_id:
+              createdRequest?.pages?.find((page) => page.page_number === field.roi.pageNumber)?.id ||
+              `template_request_page_${field.roi.pageNumber}`,
+            page_number: field.roi.pageNumber,
+            field_name: field.fieldName,
+            display_label: field.displayLabel,
+            data_type: field.dataType || "text",
+            extraction_method: field.extractionMethod || defaultExtractionMethodForDataType(field.dataType),
+            roi: {
+              page_number: field.roi.pageNumber,
+              x_ratio: field.roi.xRatio,
+              y_ratio: field.roi.yRatio,
+              width_ratio: field.roi.widthRatio,
+              height_ratio: field.roi.heightRatio,
+            },
+            user_note: field.userNote || null,
+          };
+          console.info("Template request requested-field payload", requestedFieldPayload);
+
+          return fetch(`${API_BASE_URL}/template-requests/${requestId}/requested-fields`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              template_request_page_id:
-                createdRequest?.pages?.find((page) => page.page_number === field.roi.pageNumber)?.id ||
-                `template_request_page_${field.roi.pageNumber}`,
-              page_number: field.roi.pageNumber,
-              field_name: field.fieldName,
-              display_label: field.displayLabel,
-              roi: {
-                page_number: field.roi.pageNumber,
-                x_ratio: field.roi.xRatio,
-                y_ratio: field.roi.yRatio,
-                width_ratio: field.roi.widthRatio,
-                height_ratio: field.roi.heightRatio,
-              },
-              user_note: field.userNote || null,
-            }),
-          })
-        )
+            body: JSON.stringify(requestedFieldPayload),
+          });
+        })
       );
     }
 

@@ -456,21 +456,10 @@ export default function WorkspaceTemplateEditor({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (document.activeElement instanceof HTMLElement) {
-                        document.activeElement.blur();
-                      }
-                    }}
+                    onClick={onRunTestMode}
                     className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white"
                   >
-                    Save OCR Configuration
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onGenerateEmbedding}
-                    className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white"
-                  >
-                    Next: Embedding
+                    Test Mode
                   </button>
                 </div>
               </div>

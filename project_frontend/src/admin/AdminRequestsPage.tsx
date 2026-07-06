@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { AdminTemplateRequest } from "../types/ocr";
+import { fetchTemplateRequests } from "./adminApi";
 import { useAdminState } from "./AdminState";
 
 const formatDate = (value?: string) => {
@@ -11,7 +14,34 @@ const formatDate = (value?: string) => {
 };
 
 export default function AdminRequestsPage() {
-  const { requests } = useAdminState();
+  const { requests: fallbackRequests } = useAdminState();
+  const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRequests = async () => {
+      setLoadStatus("loading");
+      try {
+        const persistedRequests = await fetchTemplateRequests();
+        if (cancelled) return;
+        setRequests(persistedRequests);
+        setLoadStatus("loaded");
+      } catch (error) {
+        console.warn("Using mock template request fallback because backend is unavailable.", error);
+        if (cancelled) return;
+        setRequests(fallbackRequests);
+        setLoadStatus("fallback");
+      }
+    };
+
+    loadRequests();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackRequests]);
 
   return (
     <section className="space-y-4">
@@ -23,6 +53,17 @@ export default function AdminRequestsPage() {
           Review submitted template requests from the OCR Studio.
         </p>
       </div>
+
+      {loadStatus === "loading" && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500 shadow-sm">
+          Loading persisted template requests...
+        </div>
+      )}
+      {loadStatus === "fallback" && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-700 shadow-sm">
+          Backend unavailable. Showing demo fallback requests only.
+        </div>
+      )}
 
       {requests.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">

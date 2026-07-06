@@ -8,8 +8,9 @@ import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics
 import RoiLayer from "../shared/workspace/RoiLayer";
 import { WorkspaceRoi } from "../shared/workspace/RoiBox";
 import WorkspaceCanvas from "../shared/workspace/WorkspaceCanvas";
+import { extractionMethodOptions, normalizeExtractionMethod } from "../shared/workspace/extractionMethods";
 import { AdminTemplateRequest, TemplateRequestPage } from "../types/ocr";
-import { ADMIN_API_BASE_URL, fetchTemplateRequest, fetchTemplateRequestPages } from "./adminApi";
+import { ADMIN_API_BASE_URL, convertTemplateRequestToTemplate, deleteTemplateRequest, fetchTemplateRequest, fetchTemplateRequestPages } from "./adminApi";
 import { samplePage } from "./adminMockData";
 import { useAdminState } from "./AdminState";
 
@@ -19,6 +20,7 @@ const toWorkspaceRoi = (
   imageMetrics: WorkspaceImageMetrics
 ): WorkspaceRoi & { kind: string; pageNumber: number } => {
   const box = ratioToImageBox(field.roi, imageMetrics);
+  const method = normalizeExtractionMethod(field.extractionMethod);
   return {
     id: Number(field.id.replace(/\D/g, "").slice(-8)) || index + 1,
     fieldName: field.displayLabel || field.fieldName,
@@ -29,13 +31,16 @@ const toWorkspaceRoi = (
     pageIndex: field.roi.pageNumber - 1,
     pageNumber: field.roi.pageNumber,
     kind: "requested_field",
-    type: "text",
+    type: method === "ocr_table" ? "table" : method === "extract_image" ? "image" : "text",
   };
 };
 
+const extractionMethodLabel = (value?: string) =>
+  extractionMethodOptions.find((option) => option.value === normalizeExtractionMethod(value))?.label || "OCR Text inside ROI";
+
 export default function AdminRequestDetailPage({ requestId }: { requestId: string }) {
   const router = useRouter();
-  const { requests, convertRequestToTemplate, rejectRequest } = useAdminState();
+  const { requests, rejectRequest } = useAdminState();
   const fallbackRequest = requests.find((request) => request.id === requestId);
   const [request, setRequest] = useState<AdminTemplateRequest | null>(fallbackRequest || null);
   const [pages, setPages] = useState<TemplateRequestPage[]>(fallbackRequest?.pages || []);
@@ -44,6 +49,10 @@ export default function AdminRequestDetailPage({ requestId }: { requestId: strin
   const [adminNote, setAdminNote] = useState("");
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback" | "error">("loading");
   const [actionStatus, setActionStatus] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [isConverting, setIsConverting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,11 +130,52 @@ export default function AdminRequestDetailPage({ requestId }: { requestId: strin
     }
   };
 
-  const handleConvert = () => {
+  const handleConvert = async () => {
     if (!request) return;
-    const templateId = convertRequestToTemplate(request.id, adminNote, request);
-    if (templateId) {
-      router.push(`/admin/templates/${templateId}/edit`);
+    setActionError("");
+    setActionStatus("");
+
+    if (loadStatus !== "loaded") {
+      setActionError("Cannot convert a demo/fallback request. Reload backend data and try again.");
+      return;
+    }
+
+    setIsConverting(true);
+    try {
+      const result = await convertTemplateRequestToTemplate(request.id);
+      setRequest({ ...request, status: "converted", convertedTemplateId: result.templateId, adminNote });
+      setActionStatus("Request converted to a persisted template draft.");
+      router.push(`/admin/templates/${result.templateId}/edit`);
+    } catch (error) {
+      console.warn("Template request conversion failed.", error);
+      setActionError("Convert failed. No local template was created. Please check backend/database and try again.");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!request) return;
+    setActionError("");
+    setActionStatus("");
+
+    if (loadStatus !== "loaded") {
+      setActionError("Cannot delete a demo/fallback request. Reload backend data and try again.");
+      setIsDeleteConfirmOpen(false);
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await deleteTemplateRequest(request.id);
+      setActionStatus("Template request deleted.");
+      setIsDeleteConfirmOpen(false);
+      setTimeout(() => router.push("/admin/requests"), 300);
+    } catch (error) {
+      console.warn("Template request delete failed.", error);
+      setActionError(error instanceof Error ? error.message : "Delete failed. Please try again.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -204,6 +254,14 @@ export default function AdminRequestDetailPage({ requestId }: { requestId: strin
                 <div key={field.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-700">
                   <div className="font-black text-slate-900">{field.displayLabel}</div>
                   <div className="mt-1 text-slate-500">{field.fieldName}</div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="rounded bg-white px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">
+                      {field.dataType || "text"}
+                    </span>
+                    <span className="rounded bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                      {extractionMethodLabel(field.extractionMethod)}
+                    </span>
+                  </div>
                   <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] font-bold text-slate-500">
                     <span>x: {field.roi.xRatio.toFixed(3)}</span>
                     <span>y: {field.roi.yRatio.toFixed(3)}</span>
@@ -227,17 +285,58 @@ export default function AdminRequestDetailPage({ requestId }: { requestId: strin
           </label>
 
           {actionStatus && <p className="text-xs font-bold text-emerald-600">{actionStatus}</p>}
+          {actionError && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{actionError}</p>}
 
           <div className="grid gap-2">
             <button type="button" onClick={handleReject} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
               Reject
             </button>
-            <button type="button" onClick={handleConvert} className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white">
-              Convert to Template Draft
+            <button
+              type="button"
+              onClick={handleConvert}
+              disabled={isConverting || loadStatus !== "loaded"}
+              className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            >
+              {isConverting ? "Converting..." : "Convert to Template Draft"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsDeleteConfirmOpen(true)}
+              disabled={isDeleting || loadStatus !== "loaded"}
+              className="rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400"
+            >
+              {isDeleting ? "Deleting..." : "Delete Request"}
             </button>
           </div>
         </aside>
       </div>
+
+      {isDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h3 className="text-base font-black text-slate-900">Delete this template request?</h3>
+            <p className="mt-2 text-sm font-semibold text-slate-500">This action cannot be undone.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDeleteConfirmOpen(false)}
+                disabled={isDeleting}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-700 disabled:bg-slate-300 disabled:text-slate-500"
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -32,16 +32,22 @@ export default function RoiBox({
   onSelect,
 }: RoiBoxProps) {
   const hasPoints = roi.points && roi.points.length > 0;
+  const roiKind = (roi as WorkspaceRoi & { kind?: string }).kind;
+  const isIgnoreRegion = roiKind === "ignore_region";
   const isDimmed = !selected && (dimmed || !checked);
   const boxClass = selected
     ? "border-sky-500 bg-sky-400/25 ring-4 ring-sky-300/45 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
     : checked
-      ? "border-indigo-600 bg-indigo-500/15 ring-2 ring-indigo-500/20"
+      ? isIgnoreRegion
+        ? "border-amber-600 bg-amber-400/20 ring-2 ring-amber-500/20"
+        : "border-indigo-600 bg-indigo-500/15 ring-2 ring-indigo-500/20"
       : "border-slate-400 bg-slate-400/5";
   const labelClass = selected
     ? "bg-sky-600 border-sky-600 text-white"
     : checked
-      ? "bg-indigo-600 border-indigo-600 text-white"
+      ? isIgnoreRegion
+        ? "bg-amber-600 border-amber-600 text-white"
+        : "bg-indigo-600 border-indigo-600 text-white"
       : "bg-white border-slate-200 text-slate-500";
 
   return (
