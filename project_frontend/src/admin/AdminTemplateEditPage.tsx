@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import AdjustZone from "../components/AdjustZone";
-import WorkspaceZone from "../components/WorkspaceZone";
+import AdjustZone from "../user/components/AdjustZone";
+import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditor";
 import { samplePage, templateStatuses } from "./adminMockData";
 import { useAdminState } from "./AdminState";
-import type { ROI, TemplateStatus } from "../types/ocr";
+import type { TemplateStatus } from "../types/ocr";
 
 type EditorStep = "adjust" | "workspace";
 
@@ -67,8 +67,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     generateEmbedding,
     markTesting,
   } = useAdminState();
-  const [rois, setRois] = useState<(ROI & { pageIndex?: number })[]>([]);
-  const [selectedRoiId, setSelectedRoiId] = useState<number | null>(null);
   const [editorStep, setEditorStep] = useState<EditorStep>("adjust");
   const [currentPage, setCurrentPage] = useState(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
@@ -232,24 +230,21 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onBatchConfirm={handleConfirmAdjustedImages}
             />
           ) : (
-            <WorkspaceZone
-              previewUrl={workspacePages[safeCurrentPage]?.src || samplePage}
-              image={workspacePages[safeCurrentPage]?.src || null}
-              brightness={100}
-              contrast={100}
-              rotation={0}
-              rois={rois}
-              setRois={setRois}
-              selectedId={selectedRoiId}
-              setSelectedId={setSelectedRoiId}
+            <WorkspaceTemplateEditor
+              pages={workspacePages}
+              currentPage={safeCurrentPage}
+              onPageChange={setCurrentPage}
+              fields={selectedTemplateFields}
+              ignoreRegions={selectedIgnoreRegions}
               onBackToAdjust={() => setEditorStep("adjust")}
-              deleteROI={(id) => setRois((prev) => prev.filter((roi) => roi.id !== id))}
-              isLoading={false}
-              onRunOCR={() => {}}
-              onRunFullPageOCR={async () => {}}
-              currentIndex={safeCurrentPage}
-              imagesList={workspacePages.map((page) => page.src)}
-              onIndexChange={setCurrentPage}
+              onAddField={(roi) => addField(templateId, currentTemplatePage.id, roi)}
+              onUpdateField={updateField}
+              onDeleteField={deleteField}
+              onAddIgnoreRegion={(roi) => addIgnoreRegion(templateId, currentTemplatePage.id, roi)}
+              onUpdateIgnoreRegion={updateIgnoreRegion}
+              onDeleteIgnoreRegion={deleteIgnoreRegion}
+              onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
+              onRunTestMode={() => markTesting(templateId)}
             />
           )}
         </div>

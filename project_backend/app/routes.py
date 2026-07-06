@@ -179,7 +179,7 @@ def admin_convert_request_to_template(request_id: str) -> ApiResponse:
 
 @router.post("/admin/template-requests/{request_id}/reject", response_model=ApiResponse)
 def admin_reject_template_request(request_id: str, payload: RejectRequest) -> ApiResponse:
-    return ok(admin_templates.reject_request(request_id, payload.reason))
+    return ok(template_requests.reject(request_id, payload.reason))
 
 
 @router.post("/admin/templates", response_model=ApiResponse)

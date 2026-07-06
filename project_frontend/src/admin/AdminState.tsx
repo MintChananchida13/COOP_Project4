@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
-import { AdminTemplateRequest, IgnoreRegion, Template, TemplateField, TemplatePage } from "../types/ocr";
+import { AdminTemplateRequest, IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage } from "../types/ocr";
 import { AdminDashboardSummary } from "./adminTypes";
 import {
   defaultRoi,
@@ -13,74 +13,7 @@ import {
   mockRequests,
   samplePage,
 } from "./adminMockData";
-
-const API_BASE_URL = "http://localhost:8000";
-
-interface ApiTemplateRequestPage {
-  id: string;
-  template_request_id: string;
-  page_number: number;
-  sample_image_url?: string | null;
-}
-
-interface ApiRequestedField {
-  id: string;
-  field_name: string;
-  display_label: string;
-  user_note?: string | null;
-  roi: {
-    page_number: number;
-    x_ratio: number;
-    y_ratio: number;
-    width_ratio: number;
-    height_ratio: number;
-  };
-}
-
-interface ApiTemplateRequest {
-  id: string;
-  request_title: string;
-  document_type?: string | null;
-  request_mode: "image_only" | "image_with_roi";
-  status: AdminTemplateRequest["status"];
-  user_note?: string | null;
-  admin_note?: string | null;
-  converted_template_id?: string | null;
-  page_count: number;
-  pages?: ApiTemplateRequestPage[];
-  requested_fields?: ApiRequestedField[];
-}
-
-const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest => ({
-  id: request.id,
-  requestTitle: request.request_title,
-  documentType: request.document_type || undefined,
-  requestMode: request.request_mode,
-  status: request.status,
-  userNote: request.user_note || undefined,
-  adminNote: request.admin_note || undefined,
-  convertedTemplateId: request.converted_template_id || undefined,
-  pageCount: request.page_count,
-  pages: (request.pages || []).map((page) => ({
-    id: page.id,
-    templateRequestId: page.template_request_id,
-    pageNumber: page.page_number,
-    sampleImageUrl: page.sample_image_url || undefined,
-  })),
-  requestedFields: (request.requested_fields || []).map((field) => ({
-    id: field.id,
-    fieldName: field.field_name,
-    displayLabel: field.display_label,
-    userNote: field.user_note || undefined,
-    roi: {
-      pageNumber: field.roi.page_number,
-      xRatio: field.roi.x_ratio,
-      yRatio: field.roi.y_ratio,
-      widthRatio: field.roi.width_ratio,
-      heightRatio: field.roi.height_ratio,
-    },
-  })),
-});
+import { fetchTemplateRequests } from "./adminApi";
 
 interface AdminStateValue {
   requests: AdminTemplateRequest[];
@@ -90,14 +23,14 @@ interface AdminStateValue {
   ignoreRegions: IgnoreRegion[];
   dashboard: AdminDashboardSummary;
   rejectRequest: (requestId: string, adminNote: string) => void;
-  convertRequestToTemplate: (requestId: string, adminNote: string) => string | null;
+  convertRequestToTemplate: (requestId: string, adminNote: string, sourceRequest?: AdminTemplateRequest) => string | null;
   updateTemplate: (templateId: string, patch: Partial<Template>) => void;
   addPage: (templateId: string) => void;
   removePage: (templateId: string, pageId: string) => void;
-  addField: (templateId: string, pageId: string) => void;
+  addField: (templateId: string, pageId: string, roi?: RoiRatio) => void;
   updateField: (fieldId: string, patch: Partial<TemplateField>) => void;
   deleteField: (fieldId: string) => void;
-  addIgnoreRegion: (templateId: string, pageId: string) => void;
+  addIgnoreRegion: (templateId: string, pageId: string, roi?: RoiRatio) => void;
   updateIgnoreRegion: (regionId: string, patch: Partial<IgnoreRegion>) => void;
   deleteIgnoreRegion: (regionId: string) => void;
   generateEmbedding: (templateId: string, pageId: string) => void;
@@ -118,14 +51,9 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
 
     const loadTemplateRequests = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/template-requests`);
-        if (!response.ok) {
-          throw new Error(`Template request load failed with ${response.status}`);
-        }
-        const json = await response.json();
-        const apiRequests = json?.data?.template_requests as ApiTemplateRequest[] | undefined;
-        if (!cancelled && apiRequests && apiRequests.length > 0) {
-          setRequests(apiRequests.map(mapApiRequest));
+        const persistedRequests = await fetchTemplateRequests();
+        if (!cancelled && persistedRequests.length > 0) {
+          setRequests(persistedRequests);
         }
       } catch (error) {
         console.warn("Using mock template requests because backend is unavailable.", error);
@@ -157,8 +85,8 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  const convertRequestToTemplate = (requestId: string, adminNote: string) => {
-    const selectedRequest = requests.find((request) => request.id === requestId);
+  const convertRequestToTemplate = (requestId: string, adminNote: string, sourceRequest?: AdminTemplateRequest) => {
+    const selectedRequest = sourceRequest || requests.find((request) => request.id === requestId);
     if (!selectedRequest) return null;
 
     const templateId = `tpl_${Date.now()}`;
@@ -234,7 +162,7 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
     updateTemplate(templateId, { pageCount: templatePages.length - 1 });
   };
 
-  const addField = (templateId: string, pageId: string) => {
+  const addField = (templateId: string, pageId: string, roi?: RoiRatio) => {
     const page = pages.find((item) => item.id === pageId);
     if (!page) return;
     setFields((prev) => [
@@ -246,7 +174,7 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
         pageNumber: page.pageNumber,
         fieldName: `field_${prev.length + 1}`,
         displayLabel: `Field ${prev.length + 1}`,
-        roi: defaultRoi(page.pageNumber),
+        roi: roi || defaultRoi(page.pageNumber),
         dataType: "string",
         userSelectable: true,
         defaultSelected: false,
@@ -254,7 +182,8 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
         expectedText: "",
         matchType: "",
         requiredForVerification: false,
-        extractionMethod: "fixed_roi",
+        extractionMethod: "ocr_text",
+        roiPadding: 0,
         sortOrder: prev.length + 1,
       },
     ]);
@@ -268,7 +197,7 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
     setFields((prev) => prev.filter((field) => field.id !== fieldId));
   };
 
-  const addIgnoreRegion = (templateId: string, pageId: string) => {
+  const addIgnoreRegion = (templateId: string, pageId: string, roi?: RoiRatio) => {
     const page = pages.find((item) => item.id === pageId);
     if (!page) return;
     setIgnoreRegions((prev) => [
@@ -279,7 +208,7 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
         templatePageId: pageId,
         pageNumber: page.pageNumber,
         fieldName: `ignore_region_${prev.length + 1}`,
-        roi: { pageNumber: page.pageNumber, xRatio: 0.5, yRatio: 0.25, widthRatio: 0.22, heightRatio: 0.08 },
+        roi: roi || { pageNumber: page.pageNumber, xRatio: 0.5, yRatio: 0.25, widthRatio: 0.22, heightRatio: 0.08 },
       },
     ]);
   };

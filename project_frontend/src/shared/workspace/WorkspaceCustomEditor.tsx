@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2 } from 'lucide-react';
 import { Rnd } from "react-rnd";
 import { ROI } from '../../types/ocr';
+import { WorkspaceImageMetrics } from './roiGeometry';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0" />;
@@ -33,6 +34,25 @@ export interface WorkspaceCustomEditorProps {
   currentIndex: number;
   imagesList: string[]; 
   onIndexChange: (index: number) => void;
+  hideOcrActions?: boolean;
+  readOnly?: boolean;
+  hideStepProgress?: boolean;
+  hideRightPanel?: boolean;
+  hideFooter?: boolean;
+  workspaceHeightClassName?: string;
+  rootClassName?: string;
+  rightPanelRenderer?: (api: {
+    currentPageRois: (ROI & { pageIndex?: number })[];
+    selectedId: number | null;
+    setSelectedId: React.Dispatch<React.SetStateAction<number | null>>;
+    updateROI: (id: number, fields: Partial<ROI>) => void;
+    deleteROI: (id: number) => void;
+    moveROI: (index: number, direction: 'up' | 'down') => void;
+  }) => React.ReactNode;
+  toolbarExtra?: React.ReactNode;
+  getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
+  getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
+  onImageMetricsChange?: (metrics: WorkspaceImageMetrics) => void;
 }
 
 export default function WorkspaceCustomEditor({
@@ -50,8 +70,20 @@ export default function WorkspaceCustomEditor({
   currentIndex,
   imagesList,    
   onIndexChange,
+  hideOcrActions = false,
+  readOnly = false,
+  hideStepProgress = false,
+  hideRightPanel = false,
+  hideFooter = false,
+  workspaceHeightClassName = "h-[620px]",
+  rootClassName = "max-w-7xl mx-auto space-y-6 pb-20",
+  rightPanelRenderer,
+  toolbarExtra,
+  getRoiClassName,
+  getRoiLabelClassName,
+  onImageMetricsChange,
 }: WorkspaceCustomEditorProps) {
-  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>('box');
+  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly ? 'pan' : 'box');
   const [activeDrawPoints, setActiveDrawPoints] = useState<{ x: number; y: number }[]>([]);
 
   // Calculate the bounding box for custom ROI points.
@@ -87,6 +119,26 @@ export default function WorkspaceCustomEditor({
   const imageRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const currentZoomRef = useRef(currentZoom);
+
+  useEffect(() => {
+    currentZoomRef.current = currentZoom;
+  }, [currentZoom]);
+
+  const reportImageMetrics = React.useCallback(() => {
+    if (!imageRef.current || !containerRef.current || !onImageMetricsChange) return;
+    const imageRect = imageRef.current.getBoundingClientRect();
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const measuredZoom = currentZoomRef.current || 1;
+    onImageMetricsChange({
+      imageOffsetX: (imageRect.left - containerRect.left) / measuredZoom,
+      imageOffsetY: (imageRect.top - containerRect.top) / measuredZoom,
+      imageWidth: imageRect.width / measuredZoom,
+      imageHeight: imageRect.height / measuredZoom,
+      naturalWidth: imageRef.current.naturalWidth,
+      naturalHeight: imageRef.current.naturalHeight,
+    });
+  }, [onImageMetricsChange]);
 
   // Toggle field labels and keep undo/redo history.
   const [showLabels, setShowLabels] = useState(true);
@@ -144,7 +196,7 @@ export default function WorkspaceCustomEditor({
 
   useEffect(() => {
     setSelectedId(null);
-  }, [currentIndex, setSelectedId]);
+  }, [currentIndex]);
 
       // Delete selected ROI.
   useEffect(() => {
@@ -188,8 +240,16 @@ export default function WorkspaceCustomEditor({
   useEffect(() => {
     if (imageRef.current && previewUrl) {
       imageRef.current.src = previewUrl;
+      reportImageMetrics();
     }
-  }, [previewUrl, currentIndex]);
+  }, [previewUrl, currentIndex, reportImageMetrics]);
+
+  useEffect(() => {
+    if (!onImageMetricsChange) return;
+    const handleResize = () => reportImageMetrics();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [onImageMetricsChange, reportImageMetrics]);
 
   useEffect(() => {
   if (!isLoading || !ocrProgress) {
@@ -235,6 +295,7 @@ export default function WorkspaceCustomEditor({
   };
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (readOnly) return;
     if (activeTool === 'polygon' && activeDrawPoints.length >= 3) {
       e.preventDefault();
       e.stopPropagation();
@@ -259,7 +320,7 @@ export default function WorkspaceCustomEditor({
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!containerRef.current || !viewportRef.current) return;
 
-    if (activeTool === 'pan' || e.button === 1) {
+    if (readOnly || activeTool === 'pan' || e.button === 1) {
       setIsPanning(true);
       setPanStart({
         scrollLeft: viewportRef.current.scrollLeft,
@@ -390,7 +451,7 @@ export default function WorkspaceCustomEditor({
       setSelectedId(null);
     }
     setDragBox(null);
-    setActiveTool('box');
+    if (!readOnly) setActiveTool('box');
   };
 
   const updateROI = (id: number, fields: Partial<ROI>) => {
@@ -532,10 +593,10 @@ export default function WorkspaceCustomEditor({
 }, [isLoading, ocrDone]);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 pb-20">
+    <div className={rootClassName}>
       
       {/* Step progress bar */}
-      <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
+      {!hideStepProgress && <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
           <div className="flex items-center gap-2.5 z-10 relative bg-white pr-4">
             <div className="w-7 h-7 rounded-full bg-green-100 border border-green-300 text-green-600 font-bold text-xs flex items-center justify-center">✓</div>
@@ -560,11 +621,11 @@ export default function WorkspaceCustomEditor({
             </div>
           </div>
         </div>
-      </div>
+      </div>}
 
 
       {/* Main canvas row */}
-      <div className="grid h-[620px] grid-cols-[64px_minmax(0,1fr)_320px] gap-5 items-stretch">
+      <div className={`grid ${workspaceHeightClassName} ${hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]"} gap-5 items-stretch`}>
         
         {/* Left toolbar */}
                 <div className="flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto">
@@ -576,52 +637,60 @@ export default function WorkspaceCustomEditor({
           >
             <Hand size={20} />
           </button>
-          <button 
-            type="button"
-            onClick={() => { setActiveTool('box'); setSelectedId(null); setActiveDrawPoints([]); }}
-            className={`p-2.5 rounded-lg transition-all ${activeTool === 'box' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-            title="Standard Box Tool (Rectangle)"
-          >
-            <Square size={20} />
-          </button>
-          <button 
-            type="button"
-            onClick={() => { setActiveTool('quad'); setSelectedId(null); setActiveDrawPoints([]); }}
-            className={`p-2.5 rounded-lg transition-all ${activeTool === 'quad' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-            title="4-Corner Quad Tool (Tilted Text)"
-          >
-            <Grid size={20} />
-          </button>
-          <button 
-            type="button"
-            onClick={() => { setActiveTool('polygon'); setSelectedId(null); setActiveDrawPoints([]); }}
-            className={`p-2.5 rounded-lg transition-all ${activeTool === 'polygon' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-            title="Freeform Polygon Tool"
-          >
-            <PenTool size={20} />
-          </button>
+          {!readOnly && (
+            <>
+              <button 
+                type="button"
+                onClick={() => { setActiveTool('box'); setSelectedId(null); setActiveDrawPoints([]); }}
+                className={`p-2.5 rounded-lg transition-all ${activeTool === 'box' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
+                title="Standard Box Tool (Rectangle)"
+              >
+                <Square size={20} />
+              </button>
+              <button 
+                type="button"
+                onClick={() => { setActiveTool('quad'); setSelectedId(null); setActiveDrawPoints([]); }}
+                className={`p-2.5 rounded-lg transition-all ${activeTool === 'quad' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
+                title="4-Corner Quad Tool (Tilted Text)"
+              >
+                <Grid size={20} />
+              </button>
+              <button 
+                type="button"
+                onClick={() => { setActiveTool('polygon'); setSelectedId(null); setActiveDrawPoints([]); }}
+                className={`p-2.5 rounded-lg transition-all ${activeTool === 'polygon' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
+                title="Freeform Polygon Tool"
+              >
+                <PenTool size={20} />
+              </button>
+            </>
+          )}
 
-          <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
+          {!readOnly && <div className="w-8 h-[1px] bg-slate-200 my-2"></div>}
 
           {/* Undo and redo buttons */}
-          <button 
-            type="button"
-            onClick={handleUndo}
-            disabled={historyIndex <= 0}
-            className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-20 transition-all"
-            title="ย้อนกลับ (Ctrl+Z)"
-          >
-            <Undo2 size={20} />
-          </button>
-          <button 
-            type="button"
-            onClick={handleRedo}
-            disabled={historyIndex >= history.length - 1}
-            className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-20 transition-all"
-            title="ทำซ้ำ (Ctrl+Y)"
-          >
-            <Redo2 size={20} />
-          </button>
+          {!readOnly && (
+            <>
+              <button 
+                type="button"
+                onClick={handleUndo}
+                disabled={historyIndex <= 0}
+                className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-20 transition-all"
+                title="ย้อนกลับ (Ctrl+Z)"
+              >
+                <Undo2 size={20} />
+              </button>
+              <button 
+                type="button"
+                onClick={handleRedo}
+                disabled={historyIndex >= history.length - 1}
+                className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-20 transition-all"
+                title="ทำซ้ำ (Ctrl+Y)"
+              >
+                <Redo2 size={20} />
+              </button>
+            </>
+          )}
 
           <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
 
@@ -668,7 +737,7 @@ export default function WorkspaceCustomEditor({
 
           <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
           
-          <button 
+          {!readOnly && <button 
             type="button"
             onClick={() => { 
               setRois(prev => prev.filter(roi => {
@@ -681,7 +750,9 @@ export default function WorkspaceCustomEditor({
             title="ล้างกล่องทั้งหมดในหน้านี้"
           >
             <Trash2 size={20} />
-          </button>
+          </button>}
+
+          {toolbarExtra}
         </div>
 
         {/* Center document canvas */}
@@ -710,6 +781,7 @@ export default function WorkspaceCustomEditor({
                   src={previewUrl} 
                   alt="Workspace" 
                   draggable="false" 
+                  onLoad={reportImageMetrics}
                   className="w-full h-auto block select-none pointer-events-none border border-slate-300 shadow-xl rounded bg-white"
                 />
               )}
@@ -748,23 +820,28 @@ export default function WorkspaceCustomEditor({
               <div className="absolute inset-0 top-0 left-0 w-full h-full pointer-events-auto">
                 {currentPageRois.map((roi) => {
                   const hasPoints = roi.points && roi.points.length > 0;
+                  const selected = selectedId === roi.id;
+                  const customRoiClassName = getRoiClassName?.(roi, selected, activeTool);
                   return (
                     <Rnd
                       key={roi.id}
                       size={{ width: roi.width, height: roi.height }}
                       position={{ x: roi.x, y: roi.y }}
                       onMouseDown={(e) => { e.stopPropagation(); setSelectedId(roi.id); }}
-                      onDragStop={(e, d) => updateROI(roi.id, { x: d.x, y: d.y })}
+                      onDragStop={(e, d) => {
+                        if (!readOnly) updateROI(roi.id, { x: d.x, y: d.y });
+                      }}
                       onResizeStop={(e, dir, ref, delta, pos) => {
-                        updateROI(roi.id, { width: parseInt(ref.style.width), height: parseInt(ref.style.height), ...pos });
+                        if (!readOnly) updateROI(roi.id, { width: parseInt(ref.style.width), height: parseInt(ref.style.height), ...pos });
                       }}
                       bounds="parent"
                       scale={currentZoom}
-                      className={`rnd-box-item border transition-shadow ${
+                      className={customRoiClassName || `rnd-box-item border transition-shadow ${
                         activeTool !== 'pan' && selectedId !== roi.id ? 'pointer-events-none' : 'pointer-events-auto'
                       } ${hasPoints ? 'border-transparent bg-transparent shadow-none' : (selectedId === roi.id ? "border-indigo-600 bg-indigo-600/10 shadow-md z-30 ring-2 ring-indigo-500/20" : "border-indigo-400/80 bg-indigo-50/5 hover:border-indigo-500 hover:bg-indigo-50/10 z-20")}`}
-                      resizeHandleStyles={selectedId === roi.id ? { topLeft: handleStyle, topRight: handleStyle, bottomLeft: handleStyle, bottomRight: handleStyle, top: handleStyle, right: handleStyle, bottom: handleStyle, left: handleStyle } : {}}
-                      disableDragging={activeTool === 'pan'}
+                      resizeHandleStyles={!readOnly && selectedId === roi.id ? { topLeft: handleStyle, topRight: handleStyle, bottomLeft: handleStyle, bottomRight: handleStyle, top: handleStyle, right: handleStyle, bottom: handleStyle, left: handleStyle } : {}}
+                      enableResizing={!readOnly && selectedId === roi.id}
+                      disableDragging={readOnly || activeTool === 'pan'}
                     >
                       <div className={`w-full h-full relative ${activeTool !== 'pan' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
                         {/* SVG Polygon overlay for Quad/Polygon ROIs */}
@@ -783,7 +860,7 @@ export default function WorkspaceCustomEditor({
                         {showLabels && (
                           <span 
                             onMouseDown={(e) => { e.stopPropagation(); setSelectedId(roi.id); }}
-                            className={`absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${selectedId === roi.id ? "bg-indigo-600 border-indigo-600 text-white font-extrabold" : "bg-white border-indigo-200 text-indigo-700 font-bold"}`}
+                            className={getRoiLabelClassName?.(roi, selected) || `absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${selectedId === roi.id ? "bg-indigo-600 border-indigo-600 text-white font-extrabold" : "bg-white border-indigo-200 text-indigo-700 font-bold"}`}
                           >
                             {renderTypeIcon(roi.type, 10)}
                             <span>{roi.fieldName || "(Unnamed)"}</span>
@@ -791,7 +868,7 @@ export default function WorkspaceCustomEditor({
                         )}
 
                       {/* Floating Menu Popover */}
-                      {selectedId === roi.id && (
+                      {!readOnly && selectedId === roi.id && (
                         <div 
                           className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-60 bg-white border border-slate-200 rounded-xl shadow-xl p-3 z-50 text-slate-800 flex flex-col gap-2 pointer-events-auto"
                           onMouseDown={(e) => e.stopPropagation()}
@@ -871,73 +948,79 @@ export default function WorkspaceCustomEditor({
         </div>
 
         {/* Right properties panel */}
-        <div className="min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-          <button
-            type="button"
-            onClick={onBackToAdjust}
-            className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
-          >
-            <ArrowLeft size={14} /> กลับไปหน้าปรับภาพ
-          </button>
+        {!hideRightPanel && <div className="min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+          {rightPanelRenderer ? (
+            rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI })
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onBackToAdjust}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+              >
+                <ArrowLeft size={14} /> กลับไปหน้าปรับภาพ
+              </button>
 
-          <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
-            <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ฟิลด์ที่เลือก ({currentPageRois.length})</h3>
-            <div className="space-y-1.5 max-h-[440px] overflow-y-auto pr-1">
-              {currentPageRois.map((roi, idx) => (
-                <div 
-                  key={roi.id} 
-                  onClick={() => setSelectedId(roi.id)} 
-                  draggable={true}
-                  onDragStart={(e) => handleDragStart(e, idx)}
-                  onDragOver={(e) => handleDragOver(e, idx)}
-                  onDragEnd={handleDragEnd}
-                  className={`flex items-center justify-between p-2 rounded border text-xs cursor-grab active:cursor-grabbing select-none transition-all ${
-                    roi.enabled === false
-                      ? 'opacity-50 bg-slate-50 border-slate-200'
-                      : draggedItemIdx === idx 
-                      ? 'opacity-40 border-dashed border-indigo-400 bg-indigo-50/50' 
-                      : (selectedId === roi.id 
-                          ? "bg-indigo-50 border-indigo-300 text-slate-800 font-bold shadow-xs" 
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")
-                  }`}
-                >
-                  <div className="flex items-center gap-2 w-full mr-1.5 min-w-0">
-                    <Move size={11} className="text-slate-400 shrink-0 cursor-grab" />
-                    <input 
-                      type="text" 
-                      value={roi.fieldName} 
-                      onChange={(e) => updateROI(roi.id, { fieldName: e.target.value })} 
-                      className="bg-transparent border-b border-transparent focus:border-indigo-500 focus:outline-none text-[11px] text-slate-700 w-full min-w-0 cursor-text" 
-                      onClick={(e) => e.stopPropagation()} 
-                    />
-                    <select
-                      value={roi.type || 'text'}
-                      onChange={(e) => updateROI(roi.id, { type: e.target.value as any })}
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-[9.5px] font-bold bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shrink-0 select-none"
+              <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ฟิลด์ที่เลือก ({currentPageRois.length})</h3>
+                <div className="space-y-1.5 max-h-[440px] overflow-y-auto pr-1">
+                  {currentPageRois.map((roi, idx) => (
+                    <div 
+                      key={roi.id} 
+                      onClick={() => setSelectedId(roi.id)} 
+                      draggable={true}
+                      onDragStart={(e) => handleDragStart(e, idx)}
+                      onDragOver={(e) => handleDragOver(e, idx)}
+                      onDragEnd={handleDragEnd}
+                      className={`flex items-center justify-between p-2 rounded border text-xs cursor-grab active:cursor-grabbing select-none transition-all ${
+                        roi.enabled === false
+                          ? 'opacity-50 bg-slate-50 border-slate-200'
+                          : draggedItemIdx === idx 
+                          ? 'opacity-40 border-dashed border-indigo-400 bg-indigo-50/50' 
+                          : (selectedId === roi.id 
+                              ? "bg-indigo-50 border-indigo-300 text-slate-800 font-bold shadow-xs" 
+                              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")
+                      }`}
                     >
-                      <option value="text">Text</option>
-                      <option value="table">Table</option>
-                      <option value="image">Image</option>
-                    </select>
-                  </div>
-                  <button 
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); deleteROI(roi.id); }} 
-                    className="text-slate-400 hover:text-red-500 transition-colors p-1 ml-1 shrink-0"
-                    title="ลบกล่อง"
-                  >
-                    <X size={14} />
-                  </button>
+                      <div className="flex items-center gap-2 w-full mr-1.5 min-w-0">
+                        <Move size={11} className="text-slate-400 shrink-0 cursor-grab" />
+                        <input 
+                          type="text" 
+                          value={roi.fieldName} 
+                          onChange={(e) => updateROI(roi.id, { fieldName: e.target.value })} 
+                          className="bg-transparent border-b border-transparent focus:border-indigo-500 focus:outline-none text-[11px] text-slate-700 w-full min-w-0 cursor-text" 
+                          onClick={(e) => e.stopPropagation()} 
+                        />
+                        <select
+                          value={roi.type || 'text'}
+                          onChange={(e) => updateROI(roi.id, { type: e.target.value as any })}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[9.5px] font-bold bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shrink-0 select-none"
+                        >
+                          <option value="text">Text</option>
+                          <option value="table">Table</option>
+                          <option value="image">Image</option>
+                        </select>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); deleteROI(roi.id); }} 
+                        className="text-slate-400 hover:text-red-500 transition-colors p-1 ml-1 shrink-0"
+                        title="ลบกล่อง"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
+              </div>
+            </>
+          )}
+        </div>}
       </div>
 
       {/* Footer carousel and action buttons */}
-      <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
+      {!hideFooter && <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
         <div className="flex items-center gap-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
             เอกสารในคิว: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
@@ -987,7 +1070,7 @@ export default function WorkspaceCustomEditor({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+        {!hideOcrActions && <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="flex flex-col gap-2 w-full sm:w-auto">
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
               <button 
@@ -1035,8 +1118,8 @@ export default function WorkspaceCustomEditor({
                 </div>
               )}
           </div>
-        </div>
-      </div>
+        </div>}
+      </div>}
 
     </div>
   );

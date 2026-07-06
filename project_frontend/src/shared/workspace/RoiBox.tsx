@@ -32,7 +32,17 @@ export default function RoiBox({
   onSelect,
 }: RoiBoxProps) {
   const hasPoints = roi.points && roi.points.length > 0;
-  const isDimmed = dimmed || !checked;
+  const isDimmed = !selected && (dimmed || !checked);
+  const boxClass = selected
+    ? "border-sky-500 bg-sky-400/25 ring-4 ring-sky-300/45 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+    : checked
+      ? "border-indigo-600 bg-indigo-500/15 ring-2 ring-indigo-500/20"
+      : "border-slate-400 bg-slate-400/5";
+  const labelClass = selected
+    ? "bg-sky-600 border-sky-600 text-white"
+    : checked
+      ? "bg-indigo-600 border-indigo-600 text-white"
+      : "bg-white border-slate-200 text-slate-500";
 
   return (
     <button
@@ -40,7 +50,7 @@ export default function RoiBox({
       onClick={() => onSelect?.(roi.id)}
       className={`absolute text-left transition-all ${readonly && !editable ? "cursor-default" : "cursor-pointer"} ${
         isDimmed ? "opacity-25" : "opacity-100"
-      } ${selected || checked ? "z-30" : "z-20"}`}
+      } ${selected ? "z-40" : checked ? "z-30" : "z-20"}`}
       style={{
         left: roi.x,
         top: roi.y,
@@ -50,18 +60,14 @@ export default function RoiBox({
       aria-label={roi.fieldName}
     >
       <div
-        className={`relative w-full h-full border ${
-          selected || checked
-            ? "border-indigo-600 bg-indigo-500/15 ring-2 ring-indigo-500/20"
-            : "border-slate-400 bg-slate-400/5"
-        } ${readonly ? "border-dashed" : "border-solid"}`}
+        className={`relative w-full h-full border ${boxClass} ${readonly ? "border-dashed" : "border-solid"}`}
       >
         {hasPoints && (
           <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
             <polygon
               points={roi.points?.map((p) => `${p.x - roi.x},${p.y - roi.y}`).join(" ")}
-              fill={selected || checked ? "rgba(79, 70, 229, 0.18)" : "rgba(100, 116, 139, 0.08)"}
-              stroke={selected || checked ? "#4f46e5" : "#64748b"}
+              fill={selected ? "rgba(14, 165, 233, 0.24)" : checked ? "rgba(79, 70, 229, 0.18)" : "rgba(100, 116, 139, 0.08)"}
+              stroke={selected ? "#0284c7" : checked ? "#4f46e5" : "#64748b"}
               strokeWidth="2"
               strokeDasharray={readonly ? "4,3" : "0"}
             />
@@ -69,11 +75,7 @@ export default function RoiBox({
         )}
         {showLabel && (
           <span
-            className={`absolute -top-5 left-0 max-w-[220px] truncate px-1.5 py-0.5 text-[9px] font-bold rounded border shadow-sm ${
-              selected || checked
-                ? "bg-indigo-600 border-indigo-600 text-white"
-                : "bg-white border-slate-200 text-slate-500"
-            }`}
+            className={`absolute -top-5 left-0 max-w-[220px] truncate px-1.5 py-0.5 text-[9px] font-bold rounded border shadow-sm ${labelClass}`}
           >
             {roi.fieldName || "Unnamed"}
           </span>

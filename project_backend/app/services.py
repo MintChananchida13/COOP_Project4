@@ -488,6 +488,19 @@ class TemplateRequestService:
     def delete_requested_field(self, request_id: str, field_id: str) -> Dict[str, Any]:
         return {"id": field_id, "template_request_id": request_id, "deleted": True}
 
+    def reject(self, request_id: str, reason: Optional[str]) -> Dict[str, Any]:
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET status = 'rejected', admin_note = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (reason, request_id),
+            )
+            conn.commit()
+        return self.get(request_id)
+
 
 class AdminTemplateService:
     def dashboard(self) -> Dict[str, Any]:

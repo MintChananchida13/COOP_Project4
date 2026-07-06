@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import AdjustZone from "../components/AdjustZone";
-import WorkspaceZone from "../components/WorkspaceZone";
-import GroundTruthEditorZone from "../components/GroundTruthEditorZone";
-import TemplateRequestPanel from "../components/TemplateRequestPanel";
+import AdjustZone from "../user/components/AdjustZone";
+import WorkspaceZone from "../user/components/WorkspaceZone";
+import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
+import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
 import { ROI, OCRResult } from "../types/ocr";
 
 interface PageConfig {
@@ -31,7 +31,7 @@ interface PageConfig {
   croppedLocalUrl: string | null;
 }
 
-const UploadZone = dynamic(() => import("../components/UploadZone"), {
+const UploadZone = dynamic(() => import("../user/components/UploadZone"), {
   ssr: false,
   loading: () => (
     <div className="w-full max-w-3xl mx-auto py-12 px-4 text-center text-slate-500 font-medium text-xs">

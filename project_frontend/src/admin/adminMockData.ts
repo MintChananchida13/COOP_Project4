@@ -135,7 +135,7 @@ export const initialFields: TemplateField[] = [
     expectedText: "",
     matchType: "contains",
     requiredForVerification: false,
-    extractionMethod: "fixed_roi",
+    extractionMethod: "ocr_text",
     sortOrder: 1,
   },
 ];
@@ -171,6 +171,6 @@ export const fieldFromRequestedField = (
   expectedText: "",
   matchType: "",
   requiredForVerification: false,
-  extractionMethod: "fixed_roi",
+  extractionMethod: "ocr_text",
   sortOrder: index + 1,
 });

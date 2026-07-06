@@ -1,4 +1,4 @@
-export type RoiDataType = 'string' | 'text' | 'number' | 'date' | 'address' | 'currency';
+export type RoiDataType = 'string' | 'text' | 'number' | 'date' | 'address' | 'currency' | 'table' | 'image';
 
 export interface ROI {
   id: number;
@@ -110,6 +110,7 @@ export interface TemplateField {
   matchType?: string;
   requiredForVerification: boolean;
   extractionMethod: string;
+  roiPadding?: number;
   sortOrder: number;
 }
 
@@ -143,4 +144,6 @@ export interface AdminTemplateRequest {
   pageCount: number;
   pages: TemplateRequestPage[];
   requestedFields: RequestedField[];
+  createdAt?: string;
+  updatedAt?: string;
 }

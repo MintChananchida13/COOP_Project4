@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ROI, RequestedField, TemplateRequestMode } from "../types/ocr";
+import { ROI, RequestedField, TemplateRequestMode } from "../../types/ocr";
 
 type PageAwareRoi = ROI & { pageIndex?: number };
 

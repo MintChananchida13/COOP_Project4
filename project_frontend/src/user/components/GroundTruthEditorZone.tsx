@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff } from 'lucide-react';
-import { ROI, OCRResult } from '../types/ocr';
+import { ROI, OCRResult } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
