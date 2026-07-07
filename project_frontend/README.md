@@ -40,3 +40,11 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 .\venv\Scripts\activate
 
 uvicorn main:app --reload
+
+
+PS D:\coop\COOP_Project4> cd .\project_backend\                
+PS D:\coop\COOP_Project4\project_backend> .\venv\Scripts\activate              
+(venv) PS D:\coop\COOP_Project4\project_backend> $env:VISION_EMBEDDING_MODE="dinov2" 
+(venv) PS D:\coop\COOP_Project4\project_backend> $env:VECTOR_STORE_MODE="qdrant"     
+(venv) PS D:\coop\COOP_Project4\project_backend> $env:QDRANT_COLLECTION="templates"  
+(venv) PS D:\coop\COOP_Project4\project_backend> uvicorn main:app    

@@ -1,9 +1,16 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
-import { DetectionDevResult, detectTemplateDev } from "./adminApi";
+import { DetectionCandidate, DetectionDevResult, detectTemplateDev } from "./adminApi";
 
 const formatScore = (score?: number | null) => (typeof score === "number" && score !== null ? score.toFixed(4) : "N/A");
+const readText = (value: unknown) => (typeof value === "string" && value.trim() ? value : "N/A");
+const readScore = (value: unknown) => (typeof value === "number" ? formatScore(value) : "N/A");
+const verificationFields = (candidate?: DetectionCandidate | null) => {
+  const verification = candidate?.verification || {};
+  const fields = verification.verification_details || verification.checked_fields;
+  return Array.isArray(fields) ? (fields as Record<string, unknown>[]) : [];
+};
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -27,6 +34,8 @@ export default function AdminDetectionLabPage() {
   const currentPage = pages[pageIndex] || pages[0] || null;
   const bestCandidate = result?.bestCandidate || null;
   const visibleCandidates = currentPage?.candidates.length ? currentPage.candidates : result?.candidates || [];
+  const verificationCandidate = bestCandidate || currentPage?.bestCandidate || visibleCandidates[0] || null;
+  const currentVerificationFields = verificationFields(verificationCandidate);
   const isPdf = file?.type === "application/pdf";
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
   const convertedPageCount = typeof result?.debug?.converted_page_count === "number" ? result.debug.converted_page_count : 0;
@@ -157,15 +166,18 @@ export default function AdminDetectionLabPage() {
                     <div className="mt-2 grid gap-1 sm:grid-cols-2">
                       <p>Template: {bestCandidate.templateName || "N/A"}</p>
                       <p>Template ID: {bestCandidate.templateId || "N/A"}</p>
-                      <p>Score (Max): {formatScore(bestCandidate.score)}</p>
-                      <p>Average Score: {formatScore(bestCandidate.averageScore)}</p>
+                      <p>Final Score: {formatScore(bestCandidate.finalScore ?? bestCandidate.score)}</p>
+                      <p>Retrieval Score: {formatScore(bestCandidate.retrievalScore)}</p>
+                      <p>Verification Score: {formatScore(bestCandidate.verificationScore)}</p>
                       <p>Matched Pages: {bestCandidate.matchedPages ?? "N/A"}</p>
+                      <p>Decision: {bestCandidate.decisionReason || "N/A"}</p>
                       <p>Status: {bestCandidate.templateStatus || "N/A"}</p>
                       <p>Vector ID: {bestCandidate.vectorId || "N/A"}</p>
                       <p>Pages: {bestCandidate.pageCount ?? "N/A"}</p>
                       <p>Fields: {bestCandidate.fieldCount ?? "N/A"}</p>
                       <p>Model: {bestCandidate.modelName || "N/A"}</p>
                       <p>Vector Store: {bestCandidate.vectorStoreEngine || "N/A"}</p>
+                      <p>Threshold: {formatScore(bestCandidate.finalConfidenceThreshold)}</p>
                     </div>
                   </div>
                 ) : result.message ? (
@@ -221,7 +233,7 @@ export default function AdminDetectionLabPage() {
                   {currentPage && (
                     <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-700">
                       Page {currentPage.pageIndex}: {currentPage.matched ? "Matched" : "No match"}
-                      {currentPage.bestCandidate ? `, score ${formatScore(currentPage.bestCandidate.score)}` : ""}
+                      {currentPage.bestCandidate ? `, final score ${formatScore(currentPage.bestCandidate.finalScore ?? currentPage.bestCandidate.score)}` : ""}
                     </div>
                   )}
                 </div>
@@ -254,6 +266,66 @@ export default function AdminDetectionLabPage() {
             </section>
           )}
 
+          {result && (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <details>
+                <summary className="cursor-pointer text-xs font-black uppercase tracking-wider text-slate-700">
+                  Verification Details
+                </summary>
+                {!verificationCandidate ? (
+                  <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">No candidate available for verification details.</p>
+                ) : currentVerificationFields.length === 0 ? (
+                  <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                    {readText(verificationCandidate.verification?.status)}. No verification fields were checked.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+                      Candidate: {verificationCandidate.templateName || "N/A"} · Decision: {verificationCandidate.decisionPath || verificationCandidate.decisionReason || "N/A"}
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2">Field</th>
+                            <th className="px-3 py-2">Expected</th>
+                            <th className="px-3 py-2">Actual</th>
+                            <th className="px-3 py-2">Normalized</th>
+                            <th className="px-3 py-2">Match</th>
+                            <th className="px-3 py-2">Required</th>
+                            <th className="px-3 py-2">OCR</th>
+                            <th className="px-3 py-2">Score</th>
+                            <th className="px-3 py-2">Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
+                          {currentVerificationFields.map((field, index) => (
+                            <tr key={`${readText(field.field_id)}-${index}`}>
+                              <td className="px-3 py-2">{readText(field.field_name)}</td>
+                              <td className="px-3 py-2">{readText(field.expected_text)}</td>
+                              <td className="px-3 py-2">{readText(field.actual_text)}</td>
+                              <td className="px-3 py-2">
+                                <div>Exp: {readText(field.normalized_expected)}</div>
+                                <div>Act: {readText(field.normalized_actual)}</div>
+                              </td>
+                              <td className="px-3 py-2">{readText(field.match_type)}</td>
+                              <td className="px-3 py-2">{field.required ? "Yes" : "No"}</td>
+                              <td className="px-3 py-2">{readScore(field.ocr_confidence)}</td>
+                              <td className="px-3 py-2">
+                                {readScore(field.score)} {field.passed ? "passed" : "failed"}
+                              </td>
+                              <td className="px-3 py-2">{readText(field.failure_reason || field.error)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </details>
+            </section>
+          )}
+
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Candidates</h3>
             <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
@@ -262,7 +334,10 @@ export default function AdminDetectionLabPage() {
                   <tr>
                     <th className="px-3 py-2">Rank</th>
                     <th className="px-3 py-2">Template Name</th>
-                    <th className="px-3 py-2">Score</th>
+                    <th className="px-3 py-2">Final</th>
+                    <th className="px-3 py-2">Retrieval</th>
+                    <th className="px-3 py-2">Verification</th>
+                    <th className="px-3 py-2">Decision</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Vector ID</th>
                     <th className="px-3 py-2">Pages</th>
@@ -272,7 +347,7 @@ export default function AdminDetectionLabPage() {
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
                   {visibleCandidates.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-4 text-center text-slate-500">
+                      <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
                         No candidates to display.
                       </td>
                     </tr>
@@ -281,7 +356,13 @@ export default function AdminDetectionLabPage() {
                       <tr key={`${candidate.vectorId || "candidate"}-${index}`}>
                         <td className="px-3 py-2">{index + 1}</td>
                         <td className="px-3 py-2">{candidate.templateName || "N/A"}</td>
-                        <td className="px-3 py-2">{formatScore(candidate.score)}</td>
+                        <td className="px-3 py-2">{formatScore(candidate.finalScore ?? candidate.score)}</td>
+                        <td className="px-3 py-2">{formatScore(candidate.retrievalScore)}</td>
+                        <td className="px-3 py-2">
+                          {formatScore(candidate.verificationScore)}
+                          {candidate.verificationPassed === false ? " failed" : candidate.verificationPassed === true ? " passed" : ""}
+                        </td>
+                        <td className="px-3 py-2">{candidate.decisionReason || "N/A"}</td>
                         <td className="px-3 py-2">{candidate.templateStatus || "N/A"}</td>
                         <td className="px-3 py-2">{candidate.vectorId || "N/A"}</td>
                         <td className="px-3 py-2">{candidate.pageCount ?? "N/A"}</td>

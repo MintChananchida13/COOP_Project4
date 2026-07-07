@@ -136,6 +136,15 @@ export interface DetectionCandidate {
   templateId?: string | null;
   vectorId?: string | null;
   score: number;
+  retrievalScore?: number | null;
+  verificationScore?: number | null;
+  verificationPassed?: boolean | null;
+  finalScore?: number | null;
+  finalPassed?: boolean | null;
+  decisionReason?: string | null;
+  decisionPath?: string | null;
+  finalConfidenceThreshold?: number | null;
+  verification?: Record<string, unknown>;
   averageScore?: number | null;
   matchedPages?: number | null;
   templateName?: string | null;
@@ -289,6 +298,15 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   templateId: (candidate.template_id as string | null | undefined) ?? null,
   vectorId: (candidate.vector_id as string | null | undefined) ?? null,
   score: typeof candidate.score === "number" ? candidate.score : 0,
+  retrievalScore: typeof candidate.retrieval_score === "number" ? candidate.retrieval_score : null,
+  verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
+  verificationPassed: typeof candidate.verification_passed === "boolean" ? candidate.verification_passed : null,
+  finalScore: typeof candidate.final_score === "number" ? candidate.final_score : null,
+  finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
+  decisionReason: (candidate.decision_reason as string | null | undefined) ?? null,
+  decisionPath: (candidate.decision_path as string | null | undefined) ?? null,
+  finalConfidenceThreshold: typeof candidate.final_confidence_threshold === "number" ? candidate.final_confidence_threshold : null,
+  verification: (candidate.verification as Record<string, unknown> | undefined) || undefined,
   averageScore: typeof candidate.average_score === "number" ? candidate.average_score : null,
   matchedPages: typeof candidate.matched_pages === "number" ? candidate.matched_pages : null,
   templateName: (candidate.template_name as string | null | undefined) ?? null,
@@ -481,6 +499,28 @@ export const fetchTemplates = async () => {
   const json = await response.json();
   const templates = json?.data?.templates as ApiTemplate[] | undefined;
   return (templates || []).map(mapApiTemplate);
+};
+
+export const deleteTemplateApi = async (templateId: string) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
+    method: "DELETE",
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Delete failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Delete failed with ${response.status}`);
+  }
+  return json?.data as {
+    id: string;
+    deleted: boolean;
+    deleted_records?: {
+      templates: number;
+      template_pages: number;
+      template_fields: number;
+      ignore_regions: number;
+      embedding_jobs: number;
+    };
+  };
 };
 
 const isTemplateBundle = (data: Partial<ApiTemplate> | null | undefined): data is ApiTemplate =>

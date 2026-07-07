@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Template, TemplateStatus } from "../types/ocr";
 import { templateStatuses } from "./adminMockData";
-import { fetchTemplates } from "./adminApi";
+import { deleteTemplateApi, fetchTemplates } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
 import { useAdminState } from "./AdminState";
 
@@ -13,6 +13,9 @@ export default function AdminTemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<AdminStatusFilter>("all");
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback">("loading");
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [deleteMessage, setDeleteMessage] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +44,31 @@ export default function AdminTemplatesPage() {
 
   const filteredTemplates = selectedStatus === "all" ? templates : templates.filter((template) => template.status === selectedStatus);
 
+  const handleDeleteTemplate = async (template: Template) => {
+    if (loadStatus !== "loaded") {
+      setDeleteError("Demo fallback templates cannot be deleted from the database.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete template "${template.name}"?\n\nThis will permanently delete the template, pages, fields, ignore regions, and embedding jobs from the database. This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeletingTemplateId(template.id);
+    setDeleteMessage("");
+    setDeleteError("");
+    try {
+      await deleteTemplateApi(template.id);
+      setTemplates((current) => current.filter((item) => item.id !== template.id));
+      setDeleteMessage(`Deleted template "${template.name}".`);
+    } catch (error) {
+      console.warn("Template delete failed.", error);
+      setDeleteError(error instanceof Error ? error.message : "Template delete failed.");
+    } finally {
+      setDeletingTemplateId(null);
+    }
+  };
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -65,6 +93,12 @@ export default function AdminTemplatesPage() {
           Backend unavailable. Showing clearly labeled demo fallback templates only.
         </p>
       )}
+      {deleteMessage && (
+        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{deleteMessage}</p>
+      )}
+      {deleteError && (
+        <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{deleteError}</p>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filteredTemplates.map((template) => (
@@ -88,6 +122,14 @@ export default function AdminTemplatesPage() {
               <Link href={`/admin/templates/${template.id}/test`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">
                 Test
               </Link>
+              <button
+                type="button"
+                onClick={() => handleDeleteTemplate(template)}
+                disabled={loadStatus !== "loaded" || deletingTemplateId === template.id}
+                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-600 disabled:border-slate-200 disabled:text-slate-400"
+              >
+                {deletingTemplateId === template.id ? "Deleting..." : "Delete"}
+              </button>
             </div>
           </div>
         ))}

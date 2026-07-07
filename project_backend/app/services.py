@@ -1,7 +1,10 @@
 import os
+import re
 import sqlite3
 import time
+import unicodedata
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -9,6 +12,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .embedding_service import EmbeddingContextError, embedding_result_to_json, generate_template_embedding
+from .ocr_adapter import OcrUnavailableError, ocr_roi
 from .schemas import (
     CustomOcrRequest,
     DocumentUploadRequest,
@@ -549,12 +553,178 @@ class OCRService:
 
 
 class VerificationService:
-    def verify_candidate(self, document_page_id: str, template_page_id: str) -> Dict[str, Any]:
+    FUZZY_THRESHOLD = 0.85
+    ZERO_WIDTH_CHARS = {
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\ufeff",
+    }
+
+    def load_verification_fields(self, template_id: str) -> List[Dict[str, Any]]:
+        with _connect() as conn:
+            template_row = conn.execute("SELECT id FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if template_row is None:
+                raise HTTPException(status_code=404, detail="Template not found")
+
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM template_fields
+                WHERE template_id = ?
+                  AND use_for_verification = 1
+                ORDER BY page_number ASC, sort_order ASC, created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
+
+        return [_template_field_row_to_api(row) for row in rows]
+
+    def _normalize_text(self, value: Optional[str]) -> str:
+        normalized = unicodedata.normalize("NFKC", value or "")
+        for char in self.ZERO_WIDTH_CHARS:
+            normalized = normalized.replace(char, "")
+        return " ".join(normalized.strip().lower().split())
+
+    def _score_match(self, expected_text: Optional[str], actual_text: Optional[str], match_type: Optional[str]) -> Dict[str, Any]:
+        expected = self._normalize_text(expected_text)
+        actual = self._normalize_text(actual_text)
+        normalized_match_type = (match_type or "contains").strip().lower()
+        failure_reason = None
+
+        if not expected:
+            score = 0.0
+            failure_reason = "missing_expected_text"
+        elif normalized_match_type == "exact":
+            score = 1.0 if actual == expected else 0.0
+            if score < 1.0:
+                failure_reason = "exact_mismatch"
+        elif normalized_match_type == "regex":
+            try:
+                score = 1.0 if re.search(expected, actual, flags=re.IGNORECASE) else 0.0
+                if score < 1.0:
+                    failure_reason = "regex_no_match"
+            except re.error:
+                score = 0.0
+                failure_reason = "invalid_regex"
+        elif normalized_match_type == "fuzzy":
+            score = SequenceMatcher(None, expected, actual).ratio() if expected or actual else 1.0
+            if score < self.FUZZY_THRESHOLD:
+                failure_reason = "fuzzy_below_threshold"
+        else:
+            normalized_match_type = "contains"
+            score = 1.0 if expected in actual else 0.0
+            if score < 1.0:
+                failure_reason = "expected_text_not_found"
+
+        threshold = self.FUZZY_THRESHOLD if normalized_match_type == "fuzzy" else 1.0
+        return {
+            "match_type": normalized_match_type,
+            "normalized_expected": expected,
+            "normalized_actual": actual,
+            "score": round(float(score), 4),
+            "passed": float(score) >= threshold,
+            "failure_reason": failure_reason,
+        }
+
+    def verify_template(self, template_id: str, page_image_paths: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+        fields = self.load_verification_fields(template_id)
+        if not fields:
+            return {
+                "template_id": template_id,
+                "status": "no_verification_fields",
+                "passed": True,
+                "score": 1.0,
+                "required_passed": True,
+                "checked_fields": [],
+            }
+
+        checked_fields = []
+        for field in fields:
+            expected_text = field.get("expected_text")
+            page_number = int(field["page_number"])
+            image_path = (page_image_paths or {}).get(page_number)
+            actual_text = ""
+            ocr_confidence = 0.0
+            field_error = None
+            if image_path:
+                try:
+                    ocr_result = ocr_roi(image_path, field["roi"])
+                    actual_text = str(ocr_result.get("text") or "")
+                    ocr_confidence = float(ocr_result.get("confidence") or 0.0)
+                except OcrUnavailableError as error:
+                    field_error = str(error)
+                except Exception as error:
+                    field_error = f"ROI OCR failed: {error}"
+            else:
+                field_error = f"No query page image available for page {page_number}"
+
+            match = self._score_match(expected_text, actual_text, field.get("match_type")) if not field_error else {
+                "match_type": (field.get("match_type") or "contains").strip().lower(),
+                "normalized_expected": self._normalize_text(expected_text),
+                "normalized_actual": self._normalize_text(actual_text),
+                "score": 0.0,
+                "passed": False,
+                "failure_reason": field_error,
+            }
+            checked_fields.append(
+                {
+                    "field_id": field["id"],
+                    "field_name": field["field_name"],
+                    "display_label": field["display_label"],
+                    "page_number": page_number,
+                    "expected_text": expected_text,
+                    "actual_text": actual_text,
+                    "normalized_expected": match["normalized_expected"],
+                    "normalized_actual": match["normalized_actual"],
+                    "ocr_confidence": ocr_confidence,
+                    "match_type": match["match_type"],
+                    "required": bool(field["required_for_verification"]),
+                    "passed": match["passed"],
+                    "score": match["score"],
+                    "failure_reason": match["failure_reason"],
+                    "roi": field["roi"],
+                    "error": field_error,
+                }
+            )
+
+        required_fields = [field for field in checked_fields if field["required"]]
+        required_passed = all(field["passed"] for field in required_fields)
+        score = sum(field["score"] for field in checked_fields) / len(checked_fields)
+        passed = required_passed
+        ocr_unavailable = any(
+            field.get("error") and ("EasyOCR" in field["error"] or "OCR verification requires" in field["error"])
+            for field in checked_fields
+        )
+        return {
+            "template_id": template_id,
+            "status": "ocr_unavailable" if ocr_unavailable else "verified" if passed else "failed",
+            "passed": passed,
+            "score": round(float(score), 4),
+            "required_passed": required_passed,
+            "checked_fields": checked_fields,
+            "verification_details": checked_fields,
+        }
+
+    def verify_candidate(
+        self,
+        document_page_id: Optional[str] = None,
+        template_page_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+        page_image_paths: Optional[Dict[int, str]] = None,
+    ) -> Dict[str, Any]:
+        if template_id:
+            return {
+                **self.verify_template(template_id, page_image_paths),
+                "document_page_id": document_page_id,
+                "template_page_id": template_page_id,
+            }
         return {
             "document_page_id": document_page_id,
             "template_page_id": template_page_id,
             "verification_score": None,
-            "status": "verification_stubbed",
+            "status": "template_id_required",
+            "passed": False,
         }
 
 
@@ -643,6 +813,67 @@ class DocumentService:
 
     def get_page(self, document_id: str, page_id: str) -> Dict[str, Any]:
         return {"document_id": document_id, "id": page_id, "page_number": None, "status": "stubbed"}
+
+
+class DecisionService:
+    MIN_RETRIEVAL_SCORE = 0.75
+    HIGH_RETRIEVAL_SCORE = 0.95
+    DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.8
+
+    def final_confidence_threshold(self, template: Optional[Dict[str, Any]], metadata: Dict[str, Any]) -> float:
+        raw_threshold = template.get("final_confidence_threshold") if template else metadata.get("final_confidence_threshold")
+        try:
+            threshold = float(raw_threshold)
+        except (TypeError, ValueError):
+            threshold = self.DEFAULT_FINAL_CONFIDENCE_THRESHOLD
+        if threshold <= 0 or threshold > 1:
+            return self.DEFAULT_FINAL_CONFIDENCE_THRESHOLD
+        return threshold
+
+    def decide_candidate(
+        self,
+        retrieval_score: float,
+        verification: Dict[str, Any],
+        final_confidence_threshold: float,
+    ) -> Dict[str, Any]:
+        retrieval_score = round(float(retrieval_score), 4)
+        verification_score = round(float(verification.get("score", 0.0) or 0.0), 4)
+        verification_passed = bool(verification.get("passed"))
+        required_passed = bool(verification.get("required_passed", verification_passed))
+        final_score = retrieval_score
+        final_passed = False
+
+        if verification.get("status") == "ocr_unavailable":
+            decision_path = "ocr_unavailable"
+        elif retrieval_score < self.MIN_RETRIEVAL_SCORE:
+            decision_path = "retrieval_below_minimum"
+        elif not required_passed:
+            decision_path = "verification_required_failed"
+        elif verification.get("status") == "no_verification_fields":
+            final_passed = retrieval_score >= self.HIGH_RETRIEVAL_SCORE
+            decision_path = "no_verification_fields" if final_passed else "weighted_confidence_failed"
+            if not final_passed and retrieval_score >= self.MIN_RETRIEVAL_SCORE:
+                final_score = round((0.7 * retrieval_score) + (0.3 * verification_score), 4)
+                final_passed = final_score >= final_confidence_threshold
+                decision_path = "weighted_confidence_passed" if final_passed else "weighted_confidence_failed"
+        elif retrieval_score >= self.HIGH_RETRIEVAL_SCORE:
+            final_passed = True
+            decision_path = "retrieval_high_auto_accept"
+        else:
+            final_score = round((0.7 * retrieval_score) + (0.3 * verification_score), 4)
+            final_passed = final_score >= final_confidence_threshold
+            decision_path = "weighted_confidence_passed" if final_passed else "weighted_confidence_failed"
+
+        return {
+            "retrieval_score": retrieval_score,
+            "verification_score": verification_score,
+            "verification_passed": verification_passed,
+            "final_score": round(float(final_score), 4),
+            "final_passed": final_passed,
+            "decision_reason": decision_path,
+            "decision_path": decision_path,
+            "final_confidence_threshold": final_confidence_threshold,
+        }
 
 
 class TemplateRequestService:
@@ -1052,9 +1283,45 @@ class AdminTemplateService:
 
     def delete_template(self, template_id: str) -> Dict[str, Any]:
         with _connect() as conn:
+            template_row = conn.execute("SELECT id FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if template_row is None:
+                raise HTTPException(status_code=404, detail="Template not found")
+
+            counts = {
+                "embedding_jobs": conn.execute(
+                    "SELECT COUNT(*) AS count FROM embedding_jobs WHERE template_id = ?",
+                    (template_id,),
+                ).fetchone()["count"],
+                "ignore_regions": conn.execute(
+                    "SELECT COUNT(*) AS count FROM ignore_regions WHERE template_id = ?",
+                    (template_id,),
+                ).fetchone()["count"],
+                "template_fields": conn.execute(
+                    "SELECT COUNT(*) AS count FROM template_fields WHERE template_id = ?",
+                    (template_id,),
+                ).fetchone()["count"],
+                "template_pages": conn.execute(
+                    "SELECT COUNT(*) AS count FROM template_pages WHERE template_id = ?",
+                    (template_id,),
+                ).fetchone()["count"],
+                "templates": 1,
+            }
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET converted_template_id = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE converted_template_id = ?
+                """,
+                (template_id,),
+            )
+            conn.execute("DELETE FROM embedding_jobs WHERE template_id = ?", (template_id,))
+            conn.execute("DELETE FROM ignore_regions WHERE template_id = ?", (template_id,))
+            conn.execute("DELETE FROM template_fields WHERE template_id = ?", (template_id,))
+            conn.execute("DELETE FROM template_pages WHERE template_id = ?", (template_id,))
             conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
             conn.commit()
-        return {"id": template_id, "deleted": True}
+        return {"id": template_id, "deleted": True, "deleted_records": counts}
 
     def list_template_pages(self, template_id: str) -> Dict[str, Any]:
         with _connect() as conn:

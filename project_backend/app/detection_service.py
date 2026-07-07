@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .services import DecisionService, VerificationService
 from .vector_store_adapter import search_similar_templates
 from .vision_embedding_adapter import encode_images
 
@@ -15,6 +16,8 @@ from .vision_embedding_adapter import encode_images
 DETECTION_THRESHOLD = 0.75
 DETECTION_VERSION = "phase7.0"
 PDF_RENDER_SCALE = 2.0
+verification_service = VerificationService()
+decision_service = DecisionService()
 
 
 def _db_path() -> Path:
@@ -134,16 +137,19 @@ def _prepare_query_pages(query_id: str, file_bytes: bytes) -> List[Path]:
     return [_save_query_image(query_id, file_bytes, 1)]
 
 
-def _candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _candidate_from_result(result: Dict[str, Any], page_image_paths: Dict[int, str]) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
     template_id = _template_id_from_metadata(metadata, vector_id)
     template = _fetch_template(template_id)
+    if template_id and template is None:
+        return None
     
     if template:
         template_status = template.get("status")
         template_name = template.get("name")
         page_count = template.get("page_count")
+        final_confidence_threshold = decision_service.final_confidence_threshold(template, metadata)
         with _connect() as conn:
             field_count = conn.execute(
                 "SELECT COUNT(*) as count FROM template_fields WHERE template_id = ?",
@@ -154,36 +160,57 @@ def _candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         template_name = metadata.get("template_name")
         page_count = metadata.get("page_count")
         field_count = metadata.get("field_count")
+        final_confidence_threshold = decision_service.final_confidence_threshold(None, metadata)
 
     if template_status != "active":
         return None
+    verification = verification_service.verify_template(template_id, page_image_paths) if template_id else {
+        "status": "failed",
+        "passed": False,
+        "score": 0.0,
+        "required_passed": False,
+        "checked_fields": [],
+    }
+    retrieval_score = float(result.get("score", 0.0) or 0.0)
+    decision = decision_service.decide_candidate(retrieval_score, verification, final_confidence_threshold)
 
     return {
         "template_id": template_id,
         "vector_id": vector_id,
-        "score": float(result.get("score", 0.0) or 0.0),
-        "average_score": float(result.get("score", 0.0) or 0.0),
-        "matched_pages": 1 if float(result.get("score", 0.0) or 0.0) >= DETECTION_THRESHOLD else 0,
+        "score": decision["final_score"],
+        "retrieval_score": decision["retrieval_score"],
+        "average_score": decision["retrieval_score"],
+        "matched_pages": 1 if decision["final_passed"] else 0,
         "template_name": template_name,
         "template_status": template_status,
         "page_count": page_count,
         "field_count": field_count,
         "model_name": metadata.get("model_name"),
         "vector_store_engine": metadata.get("vector_store_engine"),
+        "verification": verification,
+        "verification_score": decision["verification_score"],
+        "verification_passed": decision["verification_passed"],
+        "final_score": decision["final_score"],
+        "final_passed": decision["final_passed"],
+        "decision_reason": decision["decision_reason"],
+        "decision_path": decision["decision_path"],
+        "final_confidence_threshold": decision["final_confidence_threshold"],
         "metadata": metadata,
     }
 
 
-def _detect_page(page_index: int, saved_image_path: Path) -> Dict[str, Any]:
+def _detect_page(page_index: int, saved_image_path: Path, page_image_paths: Dict[int, str]) -> Dict[str, Any]:
     embedding = encode_images([str(saved_image_path)])
     raw_results = search_similar_templates(embedding.vector, limit=5)
     candidates = [
         candidate
-        for candidate in (_candidate_from_result(result) for result in raw_results)
+        for candidate in (_candidate_from_result(result, page_image_paths) for result in raw_results)
         if candidate is not None
     ]
-    best_candidate = candidates[0] if candidates else None
-    matched = bool(best_candidate and best_candidate["score"] >= DETECTION_THRESHOLD)
+    candidates = sorted(candidates, key=lambda item: item["final_score"], reverse=True)
+    passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
+    best_candidate = passing_candidates[0] if passing_candidates else None
+    matched = best_candidate is not None
     return {
         "page_index": page_index,
         "matched": matched,
@@ -213,17 +240,30 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     aggregated = []
     for template_id, page_candidates in by_template.items():
-        best_page_cand = max(page_candidates, key=lambda c: c["score"])
-        scores = [c["score"] for c in page_candidates]
-        max_score = max(scores)
-        avg_score = sum(scores) / len(scores)
-        matched_pages_count = sum(1 for s in scores if s >= DETECTION_THRESHOLD)
+        best_page_cand = max(page_candidates, key=lambda c: c["retrieval_score"])
+        retrieval_scores = [c["retrieval_score"] for c in page_candidates]
+        max_retrieval_score = max(retrieval_scores)
+        avg_retrieval_score = sum(retrieval_scores) / len(retrieval_scores)
+        matched_pages_count = sum(1 for candidate in page_candidates if candidate["final_passed"])
+        verification = best_page_cand.get("verification") or {
+            "status": "failed",
+            "passed": False,
+            "score": 0.0,
+            "required_passed": False,
+            "checked_fields": [],
+        }
+        decision = decision_service.decide_candidate(
+            max_retrieval_score,
+            verification,
+            float(best_page_cand.get("final_confidence_threshold") or DecisionService.DEFAULT_FINAL_CONFIDENCE_THRESHOLD),
+        )
 
         aggregated.append({
             "template_id": template_id,
             "vector_id": best_page_cand["vector_id"],
-            "score": max_score,
-            "average_score": avg_score,
+            "score": decision["final_score"],
+            "retrieval_score": decision["retrieval_score"],
+            "average_score": avg_retrieval_score,
             "matched_pages": matched_pages_count,
             "template_name": best_page_cand["template_name"],
             "template_status": best_page_cand["template_status"],
@@ -231,10 +271,18 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "field_count": best_page_cand["field_count"],
             "model_name": best_page_cand["model_name"],
             "vector_store_engine": best_page_cand["vector_store_engine"],
+            "verification": best_page_cand.get("verification"),
+            "verification_score": decision["verification_score"],
+            "verification_passed": decision["verification_passed"],
+            "final_score": decision["final_score"],
+            "final_passed": decision["final_passed"],
+            "decision_reason": decision["decision_reason"],
+            "decision_path": decision["decision_path"],
+            "final_confidence_threshold": decision["final_confidence_threshold"],
             "metadata": best_page_cand.get("metadata", {}),
         })
 
-    return sorted(aggregated, key=lambda item: item["score"], reverse=True)
+    return sorted(aggregated, key=lambda item: item["final_score"], reverse=True)
 
 
 def _detection_engine(pages: List[Dict[str, Any]]) -> str:
@@ -249,10 +297,12 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
     source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
     page_paths = _prepare_query_pages(query_id, file_bytes)
-    pages = [_detect_page(index + 1, page_path) for index, page_path in enumerate(page_paths)]
+    page_image_paths = {index + 1: str(page_path) for index, page_path in enumerate(page_paths)}
+    pages = [_detect_page(index + 1, page_path, page_image_paths) for index, page_path in enumerate(page_paths)]
     candidates = _aggregate_candidates(pages)
-    best_candidate = candidates[0] if candidates else None
-    matched = bool(best_candidate and best_candidate["score"] >= DETECTION_THRESHOLD)
+    passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
+    best_candidate = passing_candidates[0] if passing_candidates else None
+    matched = best_candidate is not None
 
     return {
         "query_id": query_id,
@@ -263,7 +313,7 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "best_candidate": best_candidate,
         "candidates": candidates,
         "pages": pages,
-        "message": None if candidates else "No active embedded templates available.",
+        "message": None if matched else "No candidate passed verification and final confidence." if candidates else "No active embedded templates available.",
         "debug": {
             "vector_store_mode": os.getenv("VECTOR_STORE_MODE", "stub").strip().lower() or "stub",
             "vision_embedding_mode": os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower() or "stub",
