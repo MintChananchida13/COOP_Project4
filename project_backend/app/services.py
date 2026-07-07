@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .embedding_service import EmbeddingContextError, embedding_result_to_json, generate_template_embedding
 from .schemas import (
     CustomOcrRequest,
     DocumentUploadRequest,
@@ -66,6 +68,7 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_requested_field_metadata_columns(conn)
+    _ensure_embedding_jobs_table(conn)
     return conn
 
 
@@ -78,6 +81,29 @@ def _ensure_requested_field_metadata_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE requested_fields ADD COLUMN data_type TEXT DEFAULT 'text'")
     if columns and "extraction_method" not in columns:
         conn.execute("ALTER TABLE requested_fields ADD COLUMN extraction_method TEXT DEFAULT 'ocr_text'")
+    conn.commit()
+
+
+def _ensure_embedding_jobs_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS embedding_jobs (
+            id TEXT NOT NULL PRIMARY KEY,
+            template_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at DATETIME,
+            completed_at DATETIME,
+            error_message TEXT,
+            vector_id TEXT,
+            metadata_json TEXT,
+            FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)"
+    )
     conn.commit()
 
 
@@ -226,6 +252,23 @@ def _ignore_region_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def _embedding_job_row_to_api(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_id": item["template_id"],
+        "status": item["status"],
+        "requested_at": item["requested_at"],
+        "started_at": item["started_at"],
+        "completed_at": item["completed_at"],
+        "error_message": item["error_message"],
+        "vector_id": item["vector_id"],
+        "metadata_json": item["metadata_json"],
+    }
+
+
 class PageSplitService:
     def create_document_pages(self, document_id: str, payload: DocumentUploadRequest) -> List[Dict[str, Any]]:
         source_pages = payload.pages or [
@@ -272,6 +315,202 @@ class EmbeddingService:
     def __init__(self) -> None:
         self.encoder = ImageEncoderService()
         self.qdrant = QdrantService()
+
+    def _fetch_template_or_404(self, conn: sqlite3.Connection, template_id: str) -> sqlite3.Row:
+        template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+        if template_row is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template_row
+
+    def _job_with_template(self, conn: sqlite3.Connection, job_id: str) -> Dict[str, Any]:
+        job_row = conn.execute("SELECT * FROM embedding_jobs WHERE id = ?", (job_id,)).fetchone()
+        if job_row is None:
+            raise HTTPException(status_code=404, detail="Embedding job not found")
+
+        template_row = self._fetch_template_or_404(conn, job_row["template_id"])
+        return {
+            "job": _embedding_job_row_to_api(job_row),
+            "template": _template_row_to_api(template_row),
+        }
+
+    def create_embedding_job(self, template_id: str) -> Dict[str, Any]:
+        job_id = _stub_id("emb_job")
+        with _connect() as conn:
+            template_row = self._fetch_template_or_404(conn, template_id)
+            if template_row["status"] != "validated":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Template must be validated before creating an embedding job",
+                )
+
+            conn.execute(
+                """
+                INSERT INTO embedding_jobs (
+                    id, template_id, status, requested_at, metadata_json
+                )
+                VALUES (?, ?, 'queued', CURRENT_TIMESTAMP, ?)
+                """,
+                (job_id, template_id, '{"source":"admin_template_test","mode":"stub"}'),
+            )
+            conn.execute(
+                """
+                UPDATE templates
+                SET status = 'embedding_pending', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id,),
+            )
+            conn.commit()
+            return self._job_with_template(conn, job_id)
+
+    def latest_embedding_job(self, template_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            self._fetch_template_or_404(conn, template_id)
+            job_row = conn.execute(
+                """
+                SELECT * FROM embedding_jobs
+                WHERE template_id = ?
+                ORDER BY requested_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (template_id,),
+            ).fetchone()
+        return {"template_id": template_id, "job": _embedding_job_row_to_api(job_row)}
+
+    def complete_job_dev(self, job_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            job_row = conn.execute("SELECT * FROM embedding_jobs WHERE id = ?", (job_id,)).fetchone()
+            if job_row is None:
+                raise HTTPException(status_code=404, detail="Embedding job not found")
+
+            template_id = job_row["template_id"]
+            self._fetch_template_or_404(conn, template_id)
+            conn.execute(
+                """
+                UPDATE embedding_jobs
+                SET status = 'completed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = NULL,
+                    vector_id = ?
+                WHERE id = ?
+                """,
+                (f"vec_{template_id}", job_id),
+            )
+            conn.execute(
+                """
+                UPDATE templates
+                SET status = 'active', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id,),
+            )
+            conn.commit()
+            return self._job_with_template(conn, job_id)
+
+    def run_job_dev(self, job_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            job_row = conn.execute("SELECT * FROM embedding_jobs WHERE id = ?", (job_id,)).fetchone()
+            if job_row is None:
+                raise HTTPException(status_code=404, detail="Embedding job not found")
+            if job_row["status"] != "queued":
+                raise HTTPException(status_code=409, detail="Embedding job must be queued before it can run")
+
+            template_id = job_row["template_id"]
+            template_row = self._fetch_template_or_404(conn, template_id)
+            conn.execute(
+                """
+                UPDATE embedding_jobs
+                SET status = 'running',
+                    started_at = CURRENT_TIMESTAMP,
+                    error_message = NULL
+                WHERE id = ?
+                """,
+                (job_id,),
+            )
+            conn.commit()
+
+        time.sleep(1)
+
+        try:
+            result = generate_template_embedding(template_id)
+        except (EmbeddingContextError, ValueError, RuntimeError) as error:
+            error_message = str(error)
+            with _connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE embedding_jobs
+                    SET status = 'failed',
+                        completed_at = CURRENT_TIMESTAMP,
+                        error_message = ?
+                    WHERE id = ?
+                    """,
+                    (error_message, job_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE templates
+                    SET status = 'validated', updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (template_id,),
+                )
+                conn.commit()
+                return self._job_with_template(conn, job_id)
+
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE embedding_jobs
+                SET status = 'completed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = NULL,
+                    vector_id = ?,
+                    metadata_json = ?
+                WHERE id = ?
+                """,
+                (result.vector_id, embedding_result_to_json(result), job_id),
+            )
+            conn.execute(
+                """
+                UPDATE templates
+                SET status = 'active', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id,),
+            )
+            conn.commit()
+            return self._job_with_template(conn, job_id)
+
+    def fail_job_dev(self, job_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            job_row = conn.execute("SELECT * FROM embedding_jobs WHERE id = ?", (job_id,)).fetchone()
+            if job_row is None:
+                raise HTTPException(status_code=404, detail="Embedding job not found")
+            if job_row["status"] not in {"queued", "running"}:
+                raise HTTPException(status_code=409, detail="Only queued or running embedding jobs can fail in dev mode")
+
+            template_id = job_row["template_id"]
+            self._fetch_template_or_404(conn, template_id)
+            conn.execute(
+                """
+                UPDATE embedding_jobs
+                SET status = 'failed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = ?
+                WHERE id = ?
+                """,
+                ("Embedding job failed in dev mode.", job_id),
+            )
+            conn.execute(
+                """
+                UPDATE templates
+                SET status = 'validated', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id,),
+            )
+            conn.commit()
+            return self._job_with_template(conn, job_id)
 
     def generate_for_template(self, template_id: str) -> Dict[str, Any]:
         return {

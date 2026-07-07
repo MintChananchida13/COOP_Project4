@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 
 from .schemas import (
     ApiResponse,
@@ -20,6 +20,7 @@ from .schemas import (
     TemplateTestRequest,
     TemplateUpdate,
 )
+from .detection_service import detect_template_dev
 from .services import (
     AdminTemplateService,
     DocumentService,
@@ -45,9 +46,59 @@ def ok(data: dict) -> ApiResponse:
     return ApiResponse(data=data)
 
 
+def _extract_multipart_file(content_type: str, body: bytes) -> bytes:
+    boundary_token = "boundary="
+    if boundary_token not in content_type:
+        raise HTTPException(status_code=400, detail="Multipart upload is missing boundary")
+    boundary = content_type.split(boundary_token, 1)[1].split(";", 1)[0].strip().strip('"')
+    if not boundary:
+        raise HTTPException(status_code=400, detail="Multipart upload is missing boundary")
+
+    delimiter = f"--{boundary}".encode("utf-8")
+    for part in body.split(delimiter):
+        if b"Content-Disposition" not in part or b"filename=" not in part:
+            continue
+        if b"\r\n\r\n" not in part:
+            continue
+        _, data = part.split(b"\r\n\r\n", 1)
+        data = data.rsplit(b"\r\n", 1)[0]
+        if data.endswith(b"--"):
+            data = data[:-2]
+        if data:
+            return data
+    raise HTTPException(status_code=400, detail="No uploaded image file found")
+
+
+async def _read_dev_detection_image(request: Request) -> bytes:
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+
+    content_type = request.headers.get("content-type", "")
+    content_type_lower = content_type.lower()
+    if "multipart/form-data" in content_type_lower:
+        return _extract_multipart_file(content_type, body)
+    if content_type_lower.startswith("image/") or content_type_lower.startswith("application/pdf") or content_type_lower in {"application/octet-stream", ""}:
+        return body
+    raise HTTPException(status_code=400, detail="Upload must be multipart/form-data, image, or PDF")
+
+
 @router.post("/documents/upload", response_model=ApiResponse)
 def upload_document(payload: DocumentUploadRequest) -> ApiResponse:
     return ok(documents.upload(payload))
+
+
+@router.post("/api/templates/detect-dev")
+async def detect_template_dev_route(request: Request) -> dict:
+    image_bytes = await _read_dev_detection_image(request)
+    try:
+        return {"status": "success", "data": detect_template_dev(image_bytes)}
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/documents/{document_id}", response_model=ApiResponse)
@@ -267,6 +318,31 @@ def delete_ignore_region(template_id: str, region_id: str) -> ApiResponse:
 @router.post("/admin/templates/{template_id}/generate-layout-embedding", response_model=ApiResponse)
 def generate_template_embedding(template_id: str) -> ApiResponse:
     return ok(embeddings.generate_for_template(template_id))
+
+
+@router.post("/admin/templates/{template_id}/embedding-jobs", response_model=ApiResponse)
+def create_embedding_job(template_id: str) -> ApiResponse:
+    return ok(embeddings.create_embedding_job(template_id))
+
+
+@router.get("/admin/templates/{template_id}/embedding-jobs/latest", response_model=ApiResponse)
+def get_latest_embedding_job(template_id: str) -> ApiResponse:
+    return ok(embeddings.latest_embedding_job(template_id))
+
+
+@router.post("/admin/embedding-jobs/{job_id}/complete-dev", response_model=ApiResponse)
+def complete_embedding_job_dev(job_id: str) -> ApiResponse:
+    return ok(embeddings.complete_job_dev(job_id))
+
+
+@router.post("/admin/embedding-jobs/{job_id}/run-dev", response_model=ApiResponse)
+def run_embedding_job_dev(job_id: str) -> ApiResponse:
+    return ok(embeddings.run_job_dev(job_id))
+
+
+@router.post("/admin/embedding-jobs/{job_id}/fail-dev", response_model=ApiResponse)
+def fail_embedding_job_dev(job_id: str) -> ApiResponse:
+    return ok(embeddings.fail_job_dev(job_id))
 
 
 @router.post("/admin/templates/{template_id}/pages/{page_id}/generate-layout-embedding", response_model=ApiResponse)

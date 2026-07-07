@@ -65,6 +65,9 @@ export interface TemplateRequestDraft {
 
 export type TemplateStatus =
   | 'draft'
+  | 'validated'
+  | 'embedding_pending'
+  | 'active'
   | 'pending_review'
   | 'embedding_generated'
   | 'testing'

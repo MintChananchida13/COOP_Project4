@@ -7,6 +7,7 @@ const navItems = [
   { href: "/admin", label: "Dashboard" },
   { href: "/admin/requests", label: "Requests" },
   { href: "/admin/templates", label: "Templates" },
+  { href: "/admin/detection-lab", label: "Detection Lab", badge: "DEV" },
   { href: "/", label: "OCR Studio" },
 ];
 
@@ -27,6 +28,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 hover:text-indigo-700"
               >
                 {item.label}
+                {"badge" in item && item.badge && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] text-amber-700">{item.badge}</span>}
               </Link>
             ))}
           </nav>

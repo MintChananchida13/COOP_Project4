@@ -34,12 +34,30 @@ model Template {
   pages             TemplatePage[]
   fields            TemplateField[]
   ignoreRegions     IgnoreRegion[]
+  embeddingJobs     EmbeddingJob[]
   convertedRequests TemplateRequest[] @relation("ConvertedTemplate")
   detectedDocuments Document[]        @relation("DetectedTemplate")
   detectedPages     DocumentPage[]    @relation("DetectedPageTemplate")
   candidateLogs     DetectionLog[]    @relation("CandidateTemplate")
 
   @@map("templates")
+}
+
+model EmbeddingJob {
+  id           String   @id @default(uuid())
+  templateId   String   @map("template_id")
+  status       String   @default("queued")
+  requestedAt  DateTime @default(now()) @map("requested_at")
+  startedAt    DateTime? @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+  errorMessage String?  @map("error_message")
+  vectorId     String?  @map("vector_id")
+  metadataJson String?  @map("metadata_json")
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, requestedAt])
+  @@map("embedding_jobs")
 }
 
 model TemplatePage {

@@ -106,6 +106,70 @@ interface ApiTemplate {
   ignore_regions?: ApiIgnoreRegion[];
 }
 
+interface ApiEmbeddingJob {
+  id: string;
+  template_id: string;
+  status: string;
+  requested_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+  vector_id?: string | null;
+  metadata_json?: string | null;
+}
+
+export type EmbeddingJobStatus = "queued" | "running" | "completed" | "failed";
+
+export interface EmbeddingJob {
+  id: string;
+  templateId: string;
+  status: EmbeddingJobStatus;
+  requestedAt?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  errorMessage?: string | null;
+  vectorId?: string | null;
+  metadataJson?: string | null;
+}
+
+export interface DetectionCandidate {
+  templateId?: string | null;
+  vectorId?: string | null;
+  score: number;
+  averageScore?: number | null;
+  matchedPages?: number | null;
+  templateName?: string | null;
+  templateStatus?: string | null;
+  pageCount?: number | null;
+  fieldCount?: number | null;
+  modelName?: string | null;
+  vectorStoreEngine?: string | null;
+  pageIndex?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DetectionPageResult {
+  pageIndex: number;
+  matched: boolean;
+  bestCandidate?: DetectionCandidate | null;
+  candidates: DetectionCandidate[];
+  imagePreviewDataUrl?: string | null;
+  debug?: Record<string, unknown>;
+}
+
+export interface DetectionDevResult {
+  queryId: string;
+  engine: string;
+  version: string;
+  threshold: number;
+  matched: boolean;
+  bestCandidate?: DetectionCandidate | null;
+  candidates: DetectionCandidate[];
+  pages: DetectionPageResult[];
+  message?: string | null;
+  debug?: Record<string, unknown>;
+}
+
 export interface ApiTemplateRequest {
   id: string;
   request_title: string;
@@ -133,6 +197,9 @@ const mapRequestStatus = (status: string): AdminTemplateRequest["status"] => {
 const mapTemplateStatus = (status: string): TemplateStatus => {
   if (
     status === "draft" ||
+    status === "validated" ||
+    status === "embedding_pending" ||
+    status === "active" ||
     status === "pending_review" ||
     status === "embedding_generated" ||
     status === "testing" ||
@@ -148,6 +215,11 @@ const mapTemplateStatus = (status: string): TemplateStatus => {
 const normalizeExtractionMethod = (value?: string | null) => {
   if (value === "ocr_table" || value === "extract_image") return value;
   return "ocr_text";
+};
+
+const mapEmbeddingJobStatus = (status: string): EmbeddingJobStatus => {
+  if (status === "running" || status === "completed" || status === "failed") return status;
+  return "queued";
 };
 
 export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest => ({
@@ -196,6 +268,46 @@ const mapApiTemplate = (template: ApiTemplate): Template => ({
   similarityThreshold: template.similarity_threshold,
   finalConfidenceThreshold: template.final_confidence_threshold,
   rejectionReason: template.rejection_reason || undefined,
+});
+
+const mapApiEmbeddingJob = (job?: ApiEmbeddingJob | null): EmbeddingJob | null => {
+  if (!job) return null;
+  return {
+    id: job.id,
+    templateId: job.template_id,
+    status: mapEmbeddingJobStatus(job.status),
+    requestedAt: job.requested_at || undefined,
+    startedAt: job.started_at || null,
+    completedAt: job.completed_at || null,
+    errorMessage: job.error_message || null,
+    vectorId: job.vector_id || null,
+    metadataJson: job.metadata_json || null,
+  };
+};
+
+const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCandidate => ({
+  templateId: (candidate.template_id as string | null | undefined) ?? null,
+  vectorId: (candidate.vector_id as string | null | undefined) ?? null,
+  score: typeof candidate.score === "number" ? candidate.score : 0,
+  averageScore: typeof candidate.average_score === "number" ? candidate.average_score : null,
+  matchedPages: typeof candidate.matched_pages === "number" ? candidate.matched_pages : null,
+  templateName: (candidate.template_name as string | null | undefined) ?? null,
+  templateStatus: (candidate.template_status as string | null | undefined) ?? null,
+  pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
+  fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
+  modelName: (candidate.model_name as string | null | undefined) ?? null,
+  vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
+  pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
+  metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
+});
+
+const mapDetectionPage = (page: Record<string, unknown>): DetectionPageResult => ({
+  pageIndex: typeof page.page_index === "number" ? page.page_index : 1,
+  matched: Boolean(page.matched),
+  bestCandidate: page.best_candidate ? mapDetectionCandidate(page.best_candidate as Record<string, unknown>) : null,
+  candidates: Array.isArray(page.candidates) ? (page.candidates as Record<string, unknown>[]).map(mapDetectionCandidate) : [],
+  imagePreviewDataUrl: (page.image_preview_data_url as string | null | undefined) ?? null,
+  debug: (page.debug as Record<string, unknown> | undefined) || {},
 });
 
 const mapApiTemplatePage = (page: ApiTemplatePage): TemplatePage => ({
@@ -415,6 +527,108 @@ export const updateTemplateApi = async (templateId: string, patch: Partial<Templ
     }),
     templateId
   );
+
+export const updateTemplateStatus = async (templateId: string, status: TemplateStatus) =>
+  updateTemplateApi(templateId, { status });
+
+const embeddingJobResponseError = async (response: Response, fallback: string) => {
+  const json = await response.json().catch(() => null);
+  const detail = json?.detail || json?.error?.message || json?.error || fallback;
+  return new Error(typeof detail === "string" ? detail : fallback);
+};
+
+const mapEmbeddingJobMutationResponse = async (response: Response) => {
+  if (!response.ok) {
+    throw await embeddingJobResponseError(response, `Embedding job request failed with ${response.status}`);
+  }
+
+  const json = await response.json();
+  const data = json?.data as { job?: ApiEmbeddingJob | null; template?: ApiTemplate } | undefined;
+  const job = mapApiEmbeddingJob(data?.job);
+  if (!job || !data?.template) {
+    throw new Error("Embedding job mutation did not return job and template data");
+  }
+
+  return {
+    job,
+    template: mapApiTemplate(data.template),
+  };
+};
+
+export const createEmbeddingJob = async (templateId: string) =>
+  mapEmbeddingJobMutationResponse(
+    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+export const fetchLatestEmbeddingJob = async (templateId: string) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs/latest`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw await embeddingJobResponseError(response, `Embedding job load failed with ${response.status}`);
+  }
+
+  const json = await response.json();
+  const job = json?.data?.job as ApiEmbeddingJob | null | undefined;
+  return mapApiEmbeddingJob(job);
+};
+
+export const completeEmbeddingJobDev = async (jobId: string) =>
+  mapEmbeddingJobMutationResponse(
+    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/complete-dev`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+export const runEmbeddingJobDev = async (jobId: string) =>
+  mapEmbeddingJobMutationResponse(
+    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/run-dev`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+export const failEmbeddingJobDev = async (jobId: string) =>
+  mapEmbeddingJobMutationResponse(
+    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/fail-dev`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+export const detectTemplateDev = async (file: File): Promise<DetectionDevResult> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${ADMIN_API_BASE_URL}/api/templates/detect-dev`, {
+    method: "POST",
+    body: formData,
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Detection failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Detection failed with ${response.status}`);
+  }
+
+  const data = json?.data as Record<string, unknown> | undefined;
+  const candidates = Array.isArray(data?.candidates) ? (data.candidates as Record<string, unknown>[]).map(mapDetectionCandidate) : [];
+  const pages = Array.isArray(data?.pages) ? (data.pages as Record<string, unknown>[]).map(mapDetectionPage) : [];
+  return {
+    queryId: String(data?.query_id || ""),
+    engine: String(data?.engine || "stub"),
+    version: String(data?.version || "phase7.0"),
+    threshold: typeof data?.threshold === "number" ? data.threshold : 0.75,
+    matched: Boolean(data?.matched),
+    bestCandidate: data?.best_candidate ? mapDetectionCandidate(data.best_candidate as Record<string, unknown>) : null,
+    candidates,
+    pages,
+    message: (data?.message as string | null | undefined) ?? null,
+    debug: (data?.debug as Record<string, unknown> | undefined) || {},
+  };
+};
 
 export const createTemplatePageApi = async (templateId: string, pageNumber: number, sampleImageUrl?: string) =>
   mapTemplateBundleResponse(

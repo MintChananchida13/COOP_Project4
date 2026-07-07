@@ -13,6 +13,9 @@ export const samplePage =
 
 export const templateStatuses: TemplateStatus[] = [
   "draft",
+  "validated",
+  "embedding_pending",
+  "active",
   "pending_review",
   "embedding_generated",
   "testing",
