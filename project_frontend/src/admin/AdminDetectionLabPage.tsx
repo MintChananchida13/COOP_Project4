@@ -290,11 +290,9 @@ export default function AdminDetectionLabPage() {
                             <th className="px-3 py-2">Field</th>
                             <th className="px-3 py-2">Expected</th>
                             <th className="px-3 py-2">Actual</th>
-                            <th className="px-3 py-2">Normalized</th>
                             <th className="px-3 py-2">Match</th>
-                            <th className="px-3 py-2">Required</th>
-                            <th className="px-3 py-2">OCR</th>
                             <th className="px-3 py-2">Score</th>
+                            <th className="px-3 py-2">Result</th>
                             <th className="px-3 py-2">Reason</th>
                           </tr>
                         </thead>
@@ -304,15 +302,10 @@ export default function AdminDetectionLabPage() {
                               <td className="px-3 py-2">{readText(field.field_name)}</td>
                               <td className="px-3 py-2">{readText(field.expected_text)}</td>
                               <td className="px-3 py-2">{readText(field.actual_text)}</td>
-                              <td className="px-3 py-2">
-                                <div>Exp: {readText(field.normalized_expected)}</div>
-                                <div>Act: {readText(field.normalized_actual)}</div>
-                              </td>
                               <td className="px-3 py-2">{readText(field.match_type)}</td>
-                              <td className="px-3 py-2">{field.required ? "Yes" : "No"}</td>
-                              <td className="px-3 py-2">{readScore(field.ocr_confidence)}</td>
-                              <td className="px-3 py-2">
-                                {readScore(field.score)} {field.passed ? "passed" : "failed"}
+                              <td className="px-3 py-2">{readScore(field.field_score ?? field.score)}</td>
+                              <td className={`px-3 py-2 font-black ${field.passed ? "text-emerald-600" : "text-red-600"}`}>
+                                {field.passed ? "Passed" : "Failed"}
                               </td>
                               <td className="px-3 py-2">{readText(field.failure_reason || field.error)}</td>
                             </tr>
@@ -320,6 +313,27 @@ export default function AdminDetectionLabPage() {
                         </tbody>
                       </table>
                     </div>
+                    <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                        Show Debug Details
+                      </summary>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {currentVerificationFields.map((field, index) => (
+                          <div key={`verification-debug-${readText(field.field_id)}-${index}`} className="rounded-lg border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-600">
+                            <div className="font-black text-slate-800">{readText(field.field_name)}</div>
+                            <div className="mt-2 space-y-1">
+                              <p>Normalized Expected: {readText(field.normalized_expected)}</p>
+                              <p>Normalized Actual: {readText(field.normalized_actual)}</p>
+                              <p>Text Similarity: {readScore(field.text_similarity_score)}</p>
+                              <p>OCR Confidence: {readScore(field.ocr_confidence)}</p>
+                              <p>Threshold: {readScore(field.verification_threshold)}</p>
+                              <p>Field Score: {readScore(field.field_score ?? field.score)}</p>
+                              <p>Failure Reason: {readText(field.failure_reason || field.error)}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   </div>
                 )}
               </details>

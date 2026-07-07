@@ -207,7 +207,7 @@ def _detect_page(page_index: int, saved_image_path: Path, page_image_paths: Dict
         for candidate in (_candidate_from_result(result, page_image_paths) for result in raw_results)
         if candidate is not None
     ]
-    candidates = sorted(candidates, key=lambda item: item["final_score"], reverse=True)
+    candidates = sorted(candidates, key=lambda item: (item["final_score"], item["retrieval_score"]), reverse=True)
     passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
     best_candidate = passing_candidates[0] if passing_candidates else None
     matched = best_candidate is not None
@@ -282,7 +282,7 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "metadata": best_page_cand.get("metadata", {}),
         })
 
-    return sorted(aggregated, key=lambda item: item["final_score"], reverse=True)
+    return sorted(aggregated, key=lambda item: (item["final_score"], item["retrieval_score"]), reverse=True)
 
 
 def _detection_engine(pages: List[Dict[str, Any]]) -> str:
@@ -300,7 +300,11 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     page_image_paths = {index + 1: str(page_path) for index, page_path in enumerate(page_paths)}
     pages = [_detect_page(index + 1, page_path, page_image_paths) for index, page_path in enumerate(page_paths)]
     candidates = _aggregate_candidates(pages)
-    passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
+    passing_candidates = sorted(
+        [candidate for candidate in candidates if candidate["final_passed"]],
+        key=lambda item: (item["final_score"], item["retrieval_score"]),
+        reverse=True,
+    )
     best_candidate = passing_candidates[0] if passing_candidates else None
     matched = best_candidate is not None
 

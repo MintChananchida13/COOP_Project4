@@ -554,6 +554,8 @@ class OCRService:
 
 class VerificationService:
     FUZZY_THRESHOLD = 0.85
+    DEFAULT_VERIFICATION_THRESHOLD = 0.75
+    LOW_TEXT_SIMILARITY_GUARD = 0.25
     ZERO_WIDTH_CHARS = {
         "\u200b",
         "\u200c",
@@ -586,44 +588,80 @@ class VerificationService:
             normalized = normalized.replace(char, "")
         return " ".join(normalized.strip().lower().split())
 
-    def _score_match(self, expected_text: Optional[str], actual_text: Optional[str], match_type: Optional[str]) -> Dict[str, Any]:
+    def _normalize_for_similarity(self, value: Optional[str]) -> str:
+        normalized = self._normalize_text(value)
+        normalized = re.sub(r"[^\w\s]", "", normalized, flags=re.UNICODE)
+        return " ".join(normalized.split())
+
+    def _similarity(self, left: str, right: str) -> float:
+        if not left and not right:
+            return 1.0
+        if not left or not right:
+            return 0.0
+        return SequenceMatcher(None, left, right).ratio()
+
+    def _score_match(
+        self,
+        expected_text: Optional[str],
+        actual_text: Optional[str],
+        match_type: Optional[str],
+        ocr_confidence: float,
+        verification_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
         expected = self._normalize_text(expected_text)
         actual = self._normalize_text(actual_text)
+        expected_for_similarity = self._normalize_for_similarity(expected_text)
+        actual_for_similarity = self._normalize_for_similarity(actual_text)
+        base_similarity = self._similarity(expected_for_similarity, actual_for_similarity)
         normalized_match_type = (match_type or "contains").strip().lower()
-        failure_reason = None
+        threshold = verification_threshold or self.DEFAULT_VERIFICATION_THRESHOLD
 
         if not expected:
-            score = 0.0
-            failure_reason = "missing_expected_text"
+            text_similarity_score = 0.0
+        elif not actual:
+            text_similarity_score = 0.0
         elif normalized_match_type == "exact":
-            score = 1.0 if actual == expected else 0.0
-            if score < 1.0:
-                failure_reason = "exact_mismatch"
+            threshold = max(threshold, 0.95)
+            text_similarity_score = 1.0 if actual == expected else base_similarity
         elif normalized_match_type == "regex":
             try:
-                score = 1.0 if re.search(expected, actual, flags=re.IGNORECASE) else 0.0
-                if score < 1.0:
-                    failure_reason = "regex_no_match"
+                text_similarity_score = 1.0 if re.search(expected, actual, flags=re.IGNORECASE) else 0.0
             except re.error:
-                score = 0.0
-                failure_reason = "invalid_regex"
+                text_similarity_score = 0.0
         elif normalized_match_type == "fuzzy":
-            score = SequenceMatcher(None, expected, actual).ratio() if expected or actual else 1.0
-            if score < self.FUZZY_THRESHOLD:
-                failure_reason = "fuzzy_below_threshold"
+            text_similarity_score = base_similarity
         else:
             normalized_match_type = "contains"
-            score = 1.0 if expected in actual else 0.0
-            if score < 1.0:
-                failure_reason = "expected_text_not_found"
+            if expected in actual:
+                text_similarity_score = 1.0
+            elif actual in expected:
+                text_similarity_score = max(base_similarity, 0.90)
+            else:
+                text_similarity_score = base_similarity
 
-        threshold = self.FUZZY_THRESHOLD if normalized_match_type == "fuzzy" else 1.0
+        text_similarity_score = round(float(text_similarity_score), 4)
+        if text_similarity_score < self.LOW_TEXT_SIMILARITY_GUARD:
+            field_score = 0.0
+            failure_reason = "low_text_similarity"
+        else:
+            field_score = round((text_similarity_score * 0.7) + (float(ocr_confidence or 0.0) * 0.3), 4)
+
+        passed = field_score >= threshold
+        if passed:
+            failure_reason = "passed"
+        elif text_similarity_score >= self.LOW_TEXT_SIMILARITY_GUARD:
+            failure_reason = "below_threshold"
+
         return {
             "match_type": normalized_match_type,
             "normalized_expected": expected,
             "normalized_actual": actual,
-            "score": round(float(score), 4),
-            "passed": float(score) >= threshold,
+            "text_similarity_score": text_similarity_score,
+            "ocr_confidence": round(float(ocr_confidence or 0.0), 4),
+            "field_score": field_score,
+            "verification_threshold": round(float(threshold), 4),
+            "score": field_score,
+            "passed": passed,
             "failure_reason": failure_reason,
         }
 
@@ -659,13 +697,24 @@ class VerificationService:
             else:
                 field_error = f"No query page image available for page {page_number}"
 
-            match = self._score_match(expected_text, actual_text, field.get("match_type")) if not field_error else {
+            verification_threshold = self.DEFAULT_VERIFICATION_THRESHOLD
+            match = self._score_match(
+                expected_text,
+                actual_text,
+                field.get("match_type"),
+                ocr_confidence,
+                verification_threshold,
+            ) if not field_error else {
                 "match_type": (field.get("match_type") or "contains").strip().lower(),
                 "normalized_expected": self._normalize_text(expected_text),
                 "normalized_actual": self._normalize_text(actual_text),
+                "text_similarity_score": 0.0,
+                "ocr_confidence": round(float(ocr_confidence or 0.0), 4),
+                "field_score": 0.0,
+                "verification_threshold": verification_threshold,
                 "score": 0.0,
                 "passed": False,
-                "failure_reason": field_error,
+                "failure_reason": "ocr_error",
             }
             checked_fields.append(
                 {
@@ -677,11 +726,14 @@ class VerificationService:
                     "actual_text": actual_text,
                     "normalized_expected": match["normalized_expected"],
                     "normalized_actual": match["normalized_actual"],
-                    "ocr_confidence": ocr_confidence,
+                    "text_similarity_score": match["text_similarity_score"],
+                    "ocr_confidence": match["ocr_confidence"],
+                    "field_score": match["field_score"],
+                    "verification_threshold": match["verification_threshold"],
                     "match_type": match["match_type"],
                     "required": bool(field["required_for_verification"]),
                     "passed": match["passed"],
-                    "score": match["score"],
+                    "score": match["field_score"],
                     "failure_reason": match["failure_reason"],
                     "roi": field["roi"],
                     "error": field_error,
@@ -816,8 +868,9 @@ class DocumentService:
 
 
 class DecisionService:
-    MIN_RETRIEVAL_SCORE = 0.75
+    MIN_RETRIEVAL_SCORE = 0.50
     HIGH_RETRIEVAL_SCORE = 0.95
+    STRONG_VERIFICATION_SCORE = 0.75
     DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.8
 
     def final_confidence_threshold(self, template: Optional[Dict[str, Any]], metadata: Dict[str, Any]) -> float:
@@ -840,27 +893,26 @@ class DecisionService:
         verification_score = round(float(verification.get("score", 0.0) or 0.0), 4)
         verification_passed = bool(verification.get("passed"))
         required_passed = bool(verification.get("required_passed", verification_passed))
-        final_score = retrieval_score
+        verification_status = verification.get("status")
+        final_score = round((retrieval_score * 0.6) + (verification_score * 0.4), 4)
         final_passed = False
 
-        if verification.get("status") == "ocr_unavailable":
+        if verification_status == "ocr_unavailable":
             decision_path = "ocr_unavailable"
-        elif retrieval_score < self.MIN_RETRIEVAL_SCORE:
-            decision_path = "retrieval_below_minimum"
         elif not required_passed:
-            decision_path = "verification_required_failed"
-        elif verification.get("status") == "no_verification_fields":
-            final_passed = retrieval_score >= self.HIGH_RETRIEVAL_SCORE
-            decision_path = "no_verification_fields" if final_passed else "weighted_confidence_failed"
-            if not final_passed and retrieval_score >= self.MIN_RETRIEVAL_SCORE:
-                final_score = round((0.7 * retrieval_score) + (0.3 * verification_score), 4)
-                final_passed = final_score >= final_confidence_threshold
-                decision_path = "weighted_confidence_passed" if final_passed else "weighted_confidence_failed"
-        elif retrieval_score >= self.HIGH_RETRIEVAL_SCORE:
+            decision_path = "required_verification_failed"
+        elif retrieval_score >= self.HIGH_RETRIEVAL_SCORE and verification_passed:
             final_passed = True
-            decision_path = "retrieval_high_auto_accept"
+            decision_path = "retrieval_high_pass"
+        elif verification_score >= self.STRONG_VERIFICATION_SCORE and retrieval_score >= self.MIN_RETRIEVAL_SCORE:
+            final_passed = True
+            decision_path = "verification_strong_pass"
+        elif retrieval_score < self.MIN_RETRIEVAL_SCORE:
+            decision_path = "retrieval_too_low"
+        elif verification_status == "no_verification_fields":
+            final_passed = retrieval_score >= self.HIGH_RETRIEVAL_SCORE
+            decision_path = "retrieval_high_pass" if final_passed else "weighted_confidence_failed"
         else:
-            final_score = round((0.7 * retrieval_score) + (0.3 * verification_score), 4)
             final_passed = final_score >= final_confidence_threshold
             decision_path = "weighted_confidence_passed" if final_passed else "weighted_confidence_failed"
 
