@@ -117,13 +117,20 @@ def _cosine_similarity(left: List[float], right: List[float]) -> float:
 
 def _upsert_template_vector_stub(vector_id: str, vector: List[float], metadata: Dict[str, Any]) -> VectorStoreResult:
     _validate_vector(vector)
+    stored_metadata = {
+        **metadata,
+        "vector_store_engine": "local-vector-store-stub",
+        "vector_store_collection": "templates",
+        "vector_store_status": "upserted",
+        "vector_dimension": len(vector),
+    }
     store = _load_store()
     vectors = store.setdefault("vectors", {})
     vectors[vector_id] = {
         "vector_id": vector_id,
         "vector": vector,
         "dimension": len(vector),
-        "metadata": metadata,
+        "metadata": stored_metadata,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     store["collection"] = "templates"
@@ -134,7 +141,7 @@ def _upsert_template_vector_stub(vector_id: str, vector: List[float], metadata: 
         engine="local-vector-store-stub",
         collection="templates",
         dimension=len(vector),
-        metadata=metadata,
+        metadata=stored_metadata,
     )
 
 
@@ -148,6 +155,10 @@ def _upsert_template_vector_qdrant(vector_id: str, vector: List[float], metadata
     payload = {
         **metadata,
         "vector_id": vector_id,
+        "vector_store_engine": "qdrant",
+        "vector_store_collection": collection,
+        "vector_store_status": "upserted",
+        "vector_dimension": dimension,
         "updated_at": updated_at,
     }
     try:

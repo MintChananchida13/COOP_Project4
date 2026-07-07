@@ -5,6 +5,7 @@ opencv-python-headless==4.9.0.80
 pillow
 numpy
 easyocr
+pymupdf
 
 # Optional Phase 6.9 Qdrant vector store:
 # pip install qdrant-client

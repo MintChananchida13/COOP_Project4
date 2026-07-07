@@ -14,6 +14,7 @@ from .vision_embedding_adapter import encode_images
 
 DETECTION_THRESHOLD = 0.75
 DETECTION_VERSION = "phase7.0"
+PDF_RENDER_SCALE = 2.0
 
 
 def _db_path() -> Path:
@@ -92,10 +93,16 @@ def _save_query_image(query_id: str, image_bytes: bytes, page_index: int = 1) ->
 
 
 def _convert_pdf_to_page_images(query_id: str, pdf_bytes: bytes) -> List[Path]:
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+
     try:
         import fitz
     except ImportError as error:
-        raise HTTPException(status_code=501, detail="PDF detection requires a PDF rendering dependency.") from error
+        raise HTTPException(
+            status_code=501,
+            detail="PDF detection requires PyMuPDF. Install the 'pymupdf' package on the backend.",
+        ) from error
 
     output_dir = _storage_path() / query_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,21 +112,24 @@ def _convert_pdf_to_page_images(query_id: str, pdf_bytes: bytes) -> List[Path]:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF") from error
 
     if document.page_count == 0:
+        document.close()
         raise HTTPException(status_code=400, detail="Uploaded PDF has no pages")
 
     page_paths = []
-    for index in range(document.page_count):
-        page = document.load_page(index)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-        output_path = output_dir / f"page_{index + 1}.png"
-        pixmap.save(str(output_path))
-        page_paths.append(output_path)
-    document.close()
+    try:
+        for index in range(document.page_count):
+            page = document.load_page(index)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False)
+            output_path = output_dir / f"page_{index + 1}.png"
+            pixmap.save(str(output_path))
+            page_paths.append(output_path)
+    finally:
+        document.close()
     return page_paths
 
 
 def _prepare_query_pages(query_id: str, file_bytes: bytes) -> List[Path]:
-    if file_bytes.startswith(b"%PDF"):
+    if file_bytes.lstrip().startswith(b"%PDF"):
         return _convert_pdf_to_page_images(query_id, file_bytes)
     return [_save_query_image(query_id, file_bytes, 1)]
 
@@ -129,20 +139,35 @@ def _candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     vector_id = str(result.get("vector_id") or "")
     template_id = _template_id_from_metadata(metadata, vector_id)
     template = _fetch_template(template_id)
-    template_status = template["status"] if template else metadata.get("template_status")
+    
+    if template:
+        template_status = template.get("status")
+        template_name = template.get("name")
+        page_count = template.get("page_count")
+        with _connect() as conn:
+            field_count = conn.execute(
+                "SELECT COUNT(*) as count FROM template_fields WHERE template_id = ?",
+                (template_id,)
+            ).fetchone()["count"]
+    else:
+        template_status = metadata.get("template_status")
+        template_name = metadata.get("template_name")
+        page_count = metadata.get("page_count")
+        field_count = metadata.get("field_count")
+
     if template_status != "active":
         return None
 
     return {
         "template_id": template_id,
         "vector_id": vector_id,
-        "score": float(result.get("score", 0) or 0),
-        "average_score": float(result.get("score", 0) or 0),
-        "matched_pages": 1 if float(result.get("score", 0) or 0) >= DETECTION_THRESHOLD else 0,
-        "template_name": template["name"] if template else metadata.get("template_name"),
+        "score": float(result.get("score", 0.0) or 0.0),
+        "average_score": float(result.get("score", 0.0) or 0.0),
+        "matched_pages": 1 if float(result.get("score", 0.0) or 0.0) >= DETECTION_THRESHOLD else 0,
+        "template_name": template_name,
         "template_status": template_status,
-        "page_count": template["page_count"] if template else metadata.get("page_count"),
-        "field_count": metadata.get("field_count"),
+        "page_count": page_count,
+        "field_count": field_count,
         "model_name": metadata.get("model_name"),
         "vector_store_engine": metadata.get("vector_store_engine"),
         "metadata": metadata,
@@ -179,34 +204,37 @@ def _detect_page(page_index: int, saved_image_path: Path) -> Dict[str, Any]:
 
 
 def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    by_template: Dict[str, Dict[str, Any]] = {}
+    by_template: Dict[str, List[Dict[str, Any]]] = {}
     for page in pages:
         for candidate in page["candidates"]:
-            template_id = candidate.get("template_id") or candidate.get("vector_id") or ""
-            score = float(candidate.get("score", 0) or 0)
-            current = by_template.setdefault(
-                template_id,
-                {
-                    **candidate,
-                    "score": score,
-                    "average_score": score,
-                    "matched_pages": 0,
-                    "page_index": page["page_index"],
-                    "_scores": [],
-                },
-            )
-            current["_scores"].append(score)
-            if score > float(current.get("score", 0) or 0):
-                current.update({**candidate, "score": score, "page_index": page["page_index"]})
-            if score >= DETECTION_THRESHOLD:
-                current["matched_pages"] = int(current.get("matched_pages", 0) or 0) + 1
+            template_id = candidate.get("template_id")
+            if template_id:
+                by_template.setdefault(template_id, []).append(candidate)
 
     aggregated = []
-    for candidate in by_template.values():
-        scores = candidate.pop("_scores", [])
-        candidate["average_score"] = sum(scores) / len(scores) if scores else 0
-        aggregated.append(candidate)
-    return sorted(aggregated, key=lambda item: item.get("score", 0), reverse=True)
+    for template_id, page_candidates in by_template.items():
+        best_page_cand = max(page_candidates, key=lambda c: c["score"])
+        scores = [c["score"] for c in page_candidates]
+        max_score = max(scores)
+        avg_score = sum(scores) / len(scores)
+        matched_pages_count = sum(1 for s in scores if s >= DETECTION_THRESHOLD)
+
+        aggregated.append({
+            "template_id": template_id,
+            "vector_id": best_page_cand["vector_id"],
+            "score": max_score,
+            "average_score": avg_score,
+            "matched_pages": matched_pages_count,
+            "template_name": best_page_cand["template_name"],
+            "template_status": best_page_cand["template_status"],
+            "page_count": best_page_cand["page_count"],
+            "field_count": best_page_cand["field_count"],
+            "model_name": best_page_cand["model_name"],
+            "vector_store_engine": best_page_cand["vector_store_engine"],
+            "metadata": best_page_cand.get("metadata", {}),
+        })
+
+    return sorted(aggregated, key=lambda item: item["score"], reverse=True)
 
 
 def _detection_engine(pages: List[Dict[str, Any]]) -> str:
@@ -219,6 +247,7 @@ def _detection_engine(pages: List[Dict[str, Any]]) -> str:
 
 def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
+    source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
     page_paths = _prepare_query_pages(query_id, file_bytes)
     pages = [_detect_page(index + 1, page_path) for index, page_path in enumerate(page_paths)]
     candidates = _aggregate_candidates(pages)
@@ -238,7 +267,9 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "debug": {
             "vector_store_mode": os.getenv("VECTOR_STORE_MODE", "stub").strip().lower() or "stub",
             "vision_embedding_mode": os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower() or "stub",
+            "source_type": source_type,
             "input_page_count": len(page_paths),
+            "converted_page_count": len(page_paths) if source_type == "pdf" else 0,
             "query_page_paths": [str(path) for path in page_paths],
         },
     }

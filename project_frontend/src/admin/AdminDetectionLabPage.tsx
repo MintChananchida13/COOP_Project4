@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { DetectionDevResult, detectTemplateDev } from "./adminApi";
 
-const formatScore = (score?: number) => (typeof score === "number" ? score.toFixed(4) : "N/A");
+const formatScore = (score?: number | null) => (typeof score === "number" && score !== null ? score.toFixed(4) : "N/A");
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -27,6 +27,10 @@ export default function AdminDetectionLabPage() {
   const currentPage = pages[pageIndex] || pages[0] || null;
   const bestCandidate = result?.bestCandidate || null;
   const visibleCandidates = currentPage?.candidates.length ? currentPage.candidates : result?.candidates || [];
+  const isPdf = file?.type === "application/pdf";
+  const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
+  const convertedPageCount = typeof result?.debug?.converted_page_count === "number" ? result.debug.converted_page_count : 0;
+  const inputPageCount = typeof result?.debug?.input_page_count === "number" ? result.debug.input_page_count : pages.length;
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] || null;
@@ -76,11 +80,11 @@ export default function AdminDetectionLabPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-black text-slate-900">Detection Lab</h2>
-              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">DEV STUB</span>
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">Local vector store</span>
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">DEV</span>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">Real Detection Pipeline</span>
             </div>
             <p className="mt-2 text-sm font-semibold text-slate-500">
-              Upload image/PDF to test template matching against active embedded templates.
+              Upload an image or multi-page PDF. PDFs are converted into page images before template matching.
             </p>
           </div>
         </div>
@@ -91,8 +95,13 @@ export default function AdminDetectionLabPage() {
           <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Test Document</h3>
           <label className="mt-3 flex cursor-pointer flex-col rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-xs font-bold text-slate-600 hover:bg-white">
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={handleFileChange} className="sr-only" />
-            <span className="text-sm font-black text-slate-800">Choose PNG, JPEG, WebP, or PDF</span>
+            <span className="text-sm font-black text-slate-800">Choose PNG, JPEG, WebP, or multi-page PDF</span>
             <span className="mt-1">{file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "No file selected"}</span>
+            {file && (
+              <span className="mt-2 rounded-lg bg-white px-2 py-1 text-[10px] font-black uppercase text-slate-500">
+                {isPdf ? "PDF will be converted to images" : "Single image input"}
+              </span>
+            )}
           </label>
 
           <button
@@ -112,7 +121,7 @@ export default function AdminDetectionLabPage() {
               </div>
             ) : file?.type === "application/pdf" ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">
-                PDF selected. Page previews will appear after detection runs.
+                PDF selected. Each page will be rendered as an image after detection runs.
               </div>
             ) : (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">No preview yet.</div>
@@ -132,9 +141,15 @@ export default function AdminDetectionLabPage() {
                     Matched {result.matched ? "YES" : "NO"}
                   </span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Threshold {result.threshold}</span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Pages {result.pages.length || 1}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Pages {inputPageCount || result.pages.length || 1}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{sourceType === "pdf" ? "PDF converted to images" : "Image input"}</span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{result.version}</span>
                 </div>
+                {sourceType === "pdf" && (
+                  <p className="rounded-xl bg-sky-50 p-3 font-bold text-sky-700">
+                    Converted {convertedPageCount || pages.length} PDF page{(convertedPageCount || pages.length) === 1 ? "" : "s"} into PNG previews for detection.
+                  </p>
+                )}
 
                 {bestCandidate ? (
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-indigo-900">
@@ -142,7 +157,9 @@ export default function AdminDetectionLabPage() {
                     <div className="mt-2 grid gap-1 sm:grid-cols-2">
                       <p>Template: {bestCandidate.templateName || "N/A"}</p>
                       <p>Template ID: {bestCandidate.templateId || "N/A"}</p>
-                      <p>Score: {formatScore(bestCandidate.score)}</p>
+                      <p>Score (Max): {formatScore(bestCandidate.score)}</p>
+                      <p>Average Score: {formatScore(bestCandidate.averageScore)}</p>
+                      <p>Matched Pages: {bestCandidate.matchedPages ?? "N/A"}</p>
                       <p>Status: {bestCandidate.templateStatus || "N/A"}</p>
                       <p>Vector ID: {bestCandidate.vectorId || "N/A"}</p>
                       <p>Pages: {bestCandidate.pageCount ?? "N/A"}</p>
@@ -171,31 +188,69 @@ export default function AdminDetectionLabPage() {
 
           {pages.length > 0 && (
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap gap-2">
-                {pages.map((page, index) => (
-                  <button
-                    key={`detection-lab-page-${page.pageIndex}`}
-                    type="button"
-                    onClick={() => setPageIndex(index)}
-                    className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${
-                      pageIndex === index ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600"
-                    }`}
-                  >
-                    Page {page.pageIndex}
-                  </button>
-                ))}
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page Results</h3>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {sourceType === "pdf" ? "PDF pages converted to images" : "Uploaded image"} · Page {currentPage?.pageIndex || 1} of {pages.length}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {pages.map((page, index) => (
+                    <button
+                      key={`detection-lab-page-${page.pageIndex}`}
+                      type="button"
+                      onClick={() => setPageIndex(index)}
+                      className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${
+                        pageIndex === index ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600"
+                      }`}
+                    >
+                      Page {page.pageIndex}
+                    </button>
+                  ))}
+                </div>
               </div>
-              {currentPage?.imagePreviewDataUrl && (
-                <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                  <img src={currentPage.imagePreviewDataUrl} alt={`Detection page ${currentPage.pageIndex}`} className="max-h-[360px] w-full object-contain" />
+
+              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px]">
+                <div>
+                  {currentPage?.imagePreviewDataUrl && (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                      <img src={currentPage.imagePreviewDataUrl} alt={`Detection page ${currentPage.pageIndex}`} className="max-h-[460px] w-full object-contain" />
+                    </div>
+                  )}
+                  {currentPage && (
+                    <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-700">
+                      Page {currentPage.pageIndex}: {currentPage.matched ? "Matched" : "No match"}
+                      {currentPage.bestCandidate ? `, score ${formatScore(currentPage.bestCandidate.score)}` : ""}
+                    </div>
+                  )}
                 </div>
-              )}
-              {currentPage && (
-                <div className="mt-3 rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-700">
-                  Page {currentPage.pageIndex}: {currentPage.matched ? "Matched" : "No match"}
-                  {currentPage.bestCandidate ? `, score ${formatScore(currentPage.bestCandidate.score)}` : ""}
+
+                <div className="max-h-[540px] space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+                  {pages.map((page, index) => (
+                    <button
+                      key={`detection-page-thumb-${page.pageIndex}`}
+                      type="button"
+                      onClick={() => setPageIndex(index)}
+                      className={`w-full rounded-lg border p-2 text-left ${
+                        pageIndex === index ? "border-indigo-400 bg-white shadow-sm" : "border-slate-200 bg-white/70"
+                      }`}
+                    >
+                      {page.imagePreviewDataUrl && (
+                        <img src={page.imagePreviewDataUrl} alt={`Page ${page.pageIndex} thumbnail`} className="h-28 w-full rounded-md object-contain" />
+                      )}
+                      <div className="mt-2 flex items-center justify-between text-[10px] font-black uppercase">
+                        <span className="text-slate-700">Page {page.pageIndex}</span>
+                        <span className={page.matched ? "text-emerald-600" : "text-slate-400"}>{page.matched ? "Matched" : "No match"}</span>
+                      </div>
+                      <p className="mt-1 truncate text-[10px] font-semibold text-slate-500">
+                        {page.bestCandidate?.templateName || "No candidate"}
+                        {page.bestCandidate ? ` · ${formatScore(page.bestCandidate.score)}` : ""}
+                      </p>
+                    </button>
+                  ))}
                 </div>
-              )}
+              </div>
             </section>
           )}
 

@@ -2,79 +2,81 @@
 
 # Intelligent Document Template Management System
 
-## Project Goal
-
-Build a production-ready OCR platform that detects document templates by document layout, verifies them using OCR, and extracts only user-selected information.
-
-The system must support any structured document (ID cards, passports, invoices, receipts, forms, certificates, etc.) without hardcoding any document type.
+> Production-ready Document Intelligence Platform
 
 ---
 
-# Core Workflow
+# 1. Project Vision
 
-Upload Document
+Build a production-ready Document Intelligence Platform capable of:
 
-↓
+- Detecting document templates by layout
+- Verifying document identity using OCR
+- Extracting only user-selected information
+- Supporting any structured document without hardcoding document types
+- Allowing continuous template expansion through an admin workflow
 
-Split into Pages
-
-↓
-
-Image Preprocessing
-
-↓
-
-Generate Layout Embedding
-
-↓
-
-Qdrant Top-K Search
-
-↓
-
-OCR Verification
-
-↓
-
-Confidence Engine
-
-↓
-
-Template Found?
-
-├── YES → Show Selectable Fields → OCR Selected ROI → Result
-
-└── NO → Custom OCR → Optional Template Request
+The system should evolve by improving independent modules rather than redesigning the whole architecture.
 
 ---
 
-# Core Principles
+# 2. Design Philosophy
 
-## 1. Layout First
+## Layout First
 
-Document templates are identified by layout, not by OCR.
+Document templates are identified primarily by layout rather than OCR text.
 
 ---
 
-## 2. OCR Second
+## OCR Second
 
-OCR is used only for:
+OCR is used only after candidate retrieval for:
 
-- Verification Fields
-- User-selected Extraction Fields
+- Template verification
+- User-selected field extraction
 - Custom OCR
 
-Never OCR the entire document by default.
+The system should never OCR the entire document unless required.
 
 ---
 
-## 3. Relative ROI
+## Candidate Retrieval, not Classification
+
+Visual embedding models (such as DINOv2) retrieve candidate templates.
+
+They are not responsible for final document classification.
+
+Final confirmation must combine multiple evidence sources.
+
+---
+
+## Modular AI
+
+Every AI component must be replaceable.
+
+Business logic must never depend on one specific AI model.
+
+---
+
+## Service-Oriented Architecture
+
+AI logic belongs inside services.
+
+Frontend and business logic should never directly depend on AI implementations.
+
+---
+
+# 3. Core Principles
+
+The following principles must never change.
+
+## Relative ROI
 
 Store ROI as ratios.
 
-Never store pixel coordinates.
+Never persist pixel coordinates.
 
-Every ROI must include:
+Every ROI contains:
 
 - page_number
 - x_ratio
@@ -84,116 +86,194 @@ Every ROI must include:
 
 ---
 
-## 4. Multi-page Support
+## Multi-page Native
 
-Everything must support:
+Every pipeline must preserve page context.
 
-- Single image
+Supported inputs:
+
+- Image
+- Multiple Images
 - PDF
-- Multiple images
-
-Detection, Extraction, Template Request, Admin Editor and Test Mode must all be page-aware.
 
 ---
 
-## 5. Template Fields
+## Ignore Regions
 
-Use only one table:
+Ignore dynamic regions before generating layout embeddings.
 
-template_fields
+Examples:
 
-Verification Fields are Template Fields where:
+- Names
+- Numbers
+- QR Codes
+- Signatures
+
+Ignore Regions preserve layout consistency.
+
+---
+
+## Template Fields
+
+Use only one Template Field model.
+
+Verification Fields are Template Fields where
 
 use_for_verification = true
 
-Do not create separate verification_fields or extraction_fields tables.
+Do not create separate verification field tables.
 
 ---
 
-## 6. Ignore Regions
+## Confidence-driven Workflow
 
-Ignore Regions mask dynamic content before generating layout embeddings.
+Every important stage returns confidence.
 
-Their purpose is to preserve document structure while ignoring personal information.
-
----
-
-## 7. Image Encoder
-
-Use ImageEncoderService.
-
-Default implementation:
-
-DINOv2
-
-Do not hardcode the model throughout the project.
+The final decision must never rely on one score only.
 
 ---
 
-## 8. Qdrant
+# 4. High-Level Architecture
 
-Each Template Page generates one embedding.
-
-One Qdrant point represents one Template Page.
-
----
-
-## 9. Template Detection
-
-Detection pipeline:
-
-Layout Embedding
-
-↓
-
-Qdrant Top-K
-
-↓
-
-OCR Verification
-
-↓
-
+```
+Upload Document
+        │
+        ▼
+Split into Pages
+        │
+        ▼
+Image Preprocessing
+        │
+        ▼
+Generate Layout Embedding
+        │
+        ▼
+Candidate Retrieval (Top-K)
+        │
+        ▼
+Multi-stage Verification
+        │
+        ▼
+Page Matching
+        │
+        ▼
+Document Alignment
+        │
+        ▼
+ROI Projection
+        │
+        ▼
+OCR Extraction
+        │
+        ▼
+Field Validation
+        │
+        ▼
 Confidence Engine
+        │
+        ▼
+Result
+```
+
+---
+
+# 5. Detection Pipeline
+
+The detection pipeline consists of:
+
+1. Generate layout embedding.
+2. Retrieve Top-K candidate templates.
+3. Verify each candidate.
+4. Match document pages.
+5. Calculate confidence.
+6. Confirm template.
+
+Candidate retrieval is never the final decision.
+
+---
+
+# 6. Extraction Pipeline
+
+Extraction begins only after template confirmation.
+
+Workflow:
+
+Template
 
 ↓
 
-Template Confirmation
+Page Matching
+
+↓
+
+Alignment
+
+↓
+
+ROI Projection
+
+↓
+
+OCR
+
+↓
+
+Validation
+
+↓
+
+Result
 
 ---
 
-## 10. Extraction
+# 7. User Workflow
 
-After template confirmation:
+User uploads document.
 
-- Show selectable fields.
-- User selects fields.
-- OCR only selected ROI.
+↓
 
----
+System detects template.
 
-## 11. Custom OCR
+↓
+
+If confirmed:
+
+- Display selectable fields.
+- User selects desired fields.
+- OCR selected fields only.
+- Return structured result.
 
 If no template is confirmed:
 
-- Open Custom OCR Studio.
-- User manually draws ROI.
-- OCR selected ROI.
-- User may submit a Template Request.
+↓
+
+Open Custom OCR Studio.
+
+↓
+
+User draws ROI.
+
+↓
+
+OCR selected ROI.
+
+↓
+
+Optional Template Request.
 
 ---
 
-## 12. Admin Workflow
+# 8. Admin Workflow
+
+Template Request
+
+↓
 
 Review Request
 
 ↓
 
-Create Template
-
-↓
-
-Create Template Pages
+Convert to Template
 
 ↓
 
@@ -213,74 +293,313 @@ Create Ignore Regions
 
 ↓
 
-Generate Embeddings
+Validate Template
 
 ↓
 
-Run Test Mode
+Generate Embedding
 
 ↓
 
-Approve / Reject
+Activate Template
 
 ---
 
-# Existing Components
+# 9. Template Lifecycle
 
-Reuse and refactor whenever possible:
+Draft
 
-- UploadZone.tsx
-- AdjustZone.tsx
-- WorkspaceZone.tsx
-- GroundTruthEditorZone.tsx → OCRReviewZone.tsx
+↓
 
-WorkspaceZone must support:
+Validated
 
-- custom_roi
-- template_field
-- ignore_region
+↓
+
+Embedding Pending
+
+↓
+
+Active
+
+↓
+
+Deprecated
+
+↓
+
+Archived
+
+Only Active templates participate in candidate retrieval.
 
 ---
 
-# Required Services
+# 10. Template Knowledge Model
+
+A template represents document knowledge.
+
+Each template may contain:
+
+- Pages
+- Fields
+- Verification Fields
+- Ignore Regions
+- Detection Rules
+- Validation Rules
+- Embeddings
+- Version Information
+
+Future metadata may be added without redesigning the architecture.
+
+---
+
+# 11. Service Overview
+
+Core services include:
 
 - PageSplitService
 - ImageProcessingService
 - ImageEncoderService
 - EmbeddingService
-- QdrantService
+- VectorStoreService
 - OCRService
 - VerificationService
-- ConfidenceService
 - TemplateDetectionService
+- AlignmentService
+- ProjectionService
 - ExtractionService
+- ValidationService
+- ConfidenceService
 - AdminTemplateService
 
+Each service has a single responsibility.
+
 ---
 
-# Coding Rules
+# 12. Confidence Strategy
 
-- Keep the architecture unchanged.
+Confidence should combine multiple stages.
+
+Possible evidence:
+
+- Retrieval Confidence
+- Verification Confidence
+- Page Matching Confidence
+- Alignment Confidence
+- OCR Confidence
+- Validation Confidence
+
+The confidence formula may evolve.
+
+The architecture should not depend on one fixed formula.
+
+---
+
+# 13. Failure Strategy
+
+Candidate Retrieval Failed
+
+↓
+
+Open Custom OCR
+
+---
+
+Verification Failed
+
+↓
+
+Try Next Candidate
+
+---
+
+Alignment Failed
+
+↓
+
+Retry
+
+↓
+
+Fallback
+
+---
+
+OCR Confidence Low
+
+↓
+
+Require Review
+
+---
+
+Validation Failed
+
+↓
+
+Return Warning
+
+---
+
+System Failure
+
+↓
+
+Return Clear Error
+
+---
+
+# 14. AI Extensibility
+
+The architecture must support replacing AI modules.
+
+Image Encoder
+
+- DINOv2
+- DINOv3
+- CLIP
+- Future models
+
+Vector Store
+
+- Qdrant
+- Milvus
+- FAISS
+
+OCR
+
+- PaddleOCR
+- Tesseract
+- EasyOCR
+- Cloud OCR
+
+Alignment
+
+- ORB
+- SIFT
+- LoFTR
+- Future methods
+
+Replacing an AI module must not require changing business logic.
+
+---
+
+# 15. Coding Rules
+
+Always:
+
+- Preserve page context.
+- Store ROI as ratios.
+- Keep AI inside services.
 - Prefer refactoring over rewriting.
-- Keep AI logic inside services.
-- Do not hardcode document types.
-- Preserve page context in every ROI and OCR result.
+- Avoid hardcoded document types.
+- Design modules to be replaceable.
+- Keep template metadata extensible.
+
+Never:
+
+- Store ROI as persistent pixels.
+- Couple business logic with AI models.
+- Assume page order equals template page order.
+- Depend on a single confidence score.
 
 ---
 
-# Never Remove
+# 16. Future Roadmap
+
+Phase 1
+
+Template Management
+
+✓ Completed
+
+Phase 2
+
+Embedding Pipeline
+
+✓ Completed
+
+Phase 3
+
+Candidate Retrieval
+
+✓ Completed
+
+Phase 4
+
+Multi-stage Verification
+
+In Progress
+
+Phase 5
+
+Page Matching
+
+Planned
+
+Phase 6
+
+Document Alignment
+
+Planned
+
+Phase 7
+
+ROI Projection
+
+Planned
+
+Phase 8
+
+Template-based Extraction
+
+Planned
+
+Phase 9
+
+Validation Engine
+
+Planned
+
+Phase 10
+
+Production User Flow
+
+Planned
+
+---
+
+# 17. Never Remove
+
+The following concepts are fundamental.
 
 - Relative ROI
 - Multi-page Support
 - Ignore Regions
 - OCR Verification
+- Candidate Retrieval
 - Confidence Engine
+- Template Lifecycle
 - Template Test Mode
-- Layout Preview
-- Layout Overlay Preview
+- Page Matching
+- Document Alignment
+- ROI Projection
 - Custom OCR
 - Template Request
 - Admin Approval
-- Qdrant Search
-- Image Encoder
 - Selectable Extraction Fields
+- AI Abstraction
+- Service-oriented Architecture
+
+---
+
+# 18. Long-term Vision
+
+This project is not an OCR application.
+
+It is a Document Intelligence Platform.
+
+OCR is only one component.
+
+The platform should continue evolving by improving independent modules while preserving the overall architecture.
+
+Every module should be replaceable, testable, and maintainable without redesigning the entire system.
