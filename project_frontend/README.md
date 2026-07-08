@@ -41,10 +41,10 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 uvicorn main:app --reload
 
+$env:QDRANT_URL="http://localhost:6333"
+$env:VISION_EMBEDDING_MODE="dinov2" 
+$env:VECTOR_STORE_MODE="qdrant"     
+$env:QDRANT_COLLECTION="templates"  
+uvicorn main:app    
 
-PS D:\coop\COOP_Project4> cd .\project_backend\                
-PS D:\coop\COOP_Project4\project_backend> .\venv\Scripts\activate              
-(venv) PS D:\coop\COOP_Project4\project_backend> $env:VISION_EMBEDDING_MODE="dinov2" 
-(venv) PS D:\coop\COOP_Project4\project_backend> $env:VECTOR_STORE_MODE="qdrant"     
-(venv) PS D:\coop\COOP_Project4\project_backend> $env:QDRANT_COLLECTION="templates"  
-(venv) PS D:\coop\COOP_Project4\project_backend> uvicorn main:app    
+docker run -p 6333:6333 qdrant/qdrant

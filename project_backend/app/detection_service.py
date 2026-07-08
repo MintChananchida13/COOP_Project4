@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .alignment_service import AlignmentService
+from .image_normalization import ImageNormalizationService
 from .services import DecisionService, VerificationService
 from .vector_store_adapter import search_similar_templates
 from .vision_embedding_adapter import encode_images
@@ -18,6 +20,8 @@ DETECTION_VERSION = "phase7.0"
 PDF_RENDER_SCALE = 2.0
 verification_service = VerificationService()
 decision_service = DecisionService()
+normalization_service = ImageNormalizationService()
+alignment_service = AlignmentService()
 
 
 def _db_path() -> Path:
@@ -69,9 +73,37 @@ def _fetch_template(template_id: Optional[str]) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def _fetch_template_page_image_source(template_id: str, page_number: int) -> Optional[str]:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT normalized_image_url, sample_image_url
+            FROM template_pages
+            WHERE template_id = ? AND page_number = ?
+            LIMIT 1
+            """,
+            (template_id, page_number),
+        ).fetchone()
+    if row is None:
+        return None
+    return row["normalized_image_url"] or row["sample_image_url"]
+
+
 def _image_to_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _detection_debug_url(path_value: Optional[str]) -> Optional[str]:
+    if not path_value:
+        return None
+    try:
+        path = Path(path_value).resolve()
+        root = _storage_path().resolve()
+        relative = path.relative_to(root)
+    except (ValueError, OSError):
+        return None
+    return f"/debug/detection-queries/{relative.as_posix()}"
 
 
 def _save_query_image(query_id: str, image_bytes: bytes, page_index: int = 1) -> Path:
@@ -137,7 +169,131 @@ def _prepare_query_pages(query_id: str, file_bytes: bytes) -> List[Path]:
     return [_save_query_image(query_id, file_bytes, 1)]
 
 
-def _candidate_from_result(result: Dict[str, Any], page_image_paths: Dict[int, str]) -> Optional[Dict[str, Any]]:
+def _normalize_query_pages(query_id: str, page_paths: List[Path]) -> List[Dict[str, Any]]:
+    normalized_dir = _storage_path() / query_id / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    normalized_pages = []
+    for index, page_path in enumerate(page_paths, start=1):
+        normalized_path = normalized_dir / f"page_{index}_normalized.png"
+        info = normalization_service.normalize_document(str(page_path), str(normalized_path))
+        normalized_pages.append(
+            {
+                "page_index": index,
+                "original_path": str(page_path),
+                "normalized_path": info["normalized_image_path"],
+                "normalization": info,
+            }
+        )
+    return normalized_pages
+
+
+def _safe_file_token(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)
+
+
+def _alignment_result(
+    status: str,
+    reason: str,
+    error: Optional[str] = None,
+    orb_executed: bool = False,
+    precheck: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    debug = {
+        "method": "ORB",
+        "orb_executed": orb_executed,
+        "precheck": precheck or {},
+        "query_keypoints": 0,
+        "template_keypoints": 0,
+        "raw_matches": 0,
+        "good_matches": 0,
+        "inliers": 0,
+        "inlier_ratio": 0.0,
+        "homography_found": False,
+        "warp_applied": False,
+        "alignment_score": 0.0,
+        "reason": reason,
+    }
+    return {
+        "alignment_status": status,
+        "alignment_success": False,
+        "aligned_image_path": None,
+        "alignment_match_image_path": None,
+        "aligned_image_preview_url": None,
+        "alignment_match_image_preview_url": None,
+        "alignment_debug": debug,
+        "method": "ORB",
+        "keypoints_query": 0,
+        "keypoints_template": 0,
+        "matches": 0,
+        "good_matches": 0,
+        "inliers": 0,
+        "inlier_ratio": 0.0,
+        "homography_found": False,
+        "warp_applied": False,
+        "alignment_score": 0.0,
+        "homography": None,
+        "error": error,
+    }
+
+
+def _alignment_reason(
+    alignment_status: str,
+    alignment: Dict[str, Any],
+    alignment_debug: Dict[str, Any],
+) -> str:
+    if alignment_status == "skipped":
+        return str(alignment_debug.get("reason") or "ORB skipped because normalized geometry matches template")
+    if alignment_status == "aligned":
+        return str(alignment_debug.get("reason") or "ORB alignment succeeded")
+    if alignment_status == "fallback":
+        return str(alignment_debug.get("reason") or alignment.get("error") or "normalized image used")
+    return str(alignment.get("error") or alignment_debug.get("reason") or "alignment process failed")
+
+
+def _align_candidate_page(template_id: str, page_number: int, query_image_path: str) -> Dict[str, Any]:
+    template_image_source = _fetch_template_page_image_source(template_id, page_number)
+    if not template_image_source:
+        return _alignment_result(
+            "fallback",
+            f"template_page_image_unavailable_page_{page_number}",
+            error=f"Template page image is unavailable for page {page_number}",
+        )
+
+    query_path = Path(query_image_path)
+    output_root = query_path.parent.parent if query_path.parent.name == "normalized" else query_path.parent
+    output_dir = output_root / "aligned"
+    output_path = output_dir / f"{_safe_file_token(template_id)}_page_{page_number}_aligned.png"
+
+    try:
+        precheck = alignment_service.alignment_precheck(query_image_path, template_image_source)
+        if not precheck.get("should_run_orb"):
+            if precheck.get("reason") == "normalized_geometry_matches_template":
+                return _alignment_result("skipped", str(precheck["reason"]), precheck=precheck)
+            return _alignment_result("fallback", str(precheck.get("reason") or "alignment_precheck_unavailable"), precheck=precheck)
+
+        alignment = alignment_service.align_to_template(query_image_path, template_image_source, str(output_path))
+        service_status = str(alignment.get("alignment_status") or "")
+        alignment_status = "aligned" if alignment.get("aligned_image_path") and service_status == "aligned" else "fallback"
+        alignment["alignment_status"] = alignment_status
+        alignment["aligned_image_preview_url"] = _detection_debug_url(alignment.get("aligned_image_path"))
+        alignment["alignment_match_image_preview_url"] = _detection_debug_url(alignment.get("alignment_match_image_path"))
+        alignment_debug = alignment.get("alignment_debug") or {}
+        alignment_debug["orb_executed"] = True
+        alignment_debug["precheck"] = precheck
+        if alignment_status == "fallback" and alignment_debug.get("reason") == "aligned":
+            alignment_debug["reason"] = "alignment_output_unavailable"
+        alignment["alignment_debug"] = alignment_debug
+        return alignment
+    except Exception as error:
+        return _alignment_result("failed", "alignment_runtime_error", error=f"Alignment failed: {error}")
+
+
+def _candidate_from_result(
+    result: Dict[str, Any],
+    page_image_paths: Dict[int, str],
+    page_index: int,
+    query_image_path: str,
+) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
     template_id = _template_id_from_metadata(metadata, vector_id)
@@ -164,13 +320,44 @@ def _candidate_from_result(result: Dict[str, Any], page_image_paths: Dict[int, s
 
     if template_status != "active":
         return None
-    verification = verification_service.verify_template(template_id, page_image_paths) if template_id else {
+    alignment = _align_candidate_page(template_id, page_index, query_image_path) if template_id else _alignment_result(
+        "fallback",
+        "template_id_unavailable",
+        error="Template id is unavailable",
+    )
+    alignment_debug = alignment.get("alignment_debug") or {}
+    alignment_score = float(alignment.get("alignment_score") or alignment_debug.get("alignment_score") or 0.0)
+    alignment_status = str(alignment.get("alignment_status") or "fallback")
+    verification_page_image_paths = dict(page_image_paths)
+    verification_source_used = "normalized"
+    if alignment_status == "aligned" and alignment.get("aligned_image_path"):
+        verification_page_image_paths[page_index] = str(alignment["aligned_image_path"])
+        verification_source_used = "aligned"
+
+    verification = verification_service.verify_template(template_id, verification_page_image_paths) if template_id else {
         "status": "failed",
         "passed": False,
         "score": 0.0,
         "required_passed": False,
         "checked_fields": [],
     }
+    verification_score_for_source = float(verification.get("score") or 0.0)
+    normalized_verification_score = verification_score_for_source if verification_source_used == "normalized" else None
+    aligned_verification_score = verification_score_for_source if verification_source_used == "aligned" else None
+    verification_improvement = None
+    alignment_debug["before_alignment_verification"] = round(normalized_verification_score, 4) if normalized_verification_score is not None else None
+    alignment_debug["normalized_verification_score"] = round(normalized_verification_score, 4) if normalized_verification_score is not None else None
+    alignment_debug["after_alignment_verification"] = round(aligned_verification_score, 4) if aligned_verification_score is not None else None
+    alignment_debug["aligned_verification_score"] = round(aligned_verification_score, 4) if aligned_verification_score is not None else None
+    alignment_debug["verification_improvement"] = None
+    alignment_debug["verification_image_used"] = verification_source_used
+    alignment_debug["verification_source_used"] = verification_source_used
+    alignment_reason = _alignment_reason(alignment_status, alignment, alignment_debug)
+    alignment_debug["alignment_status"] = alignment_status
+    alignment_debug["alignment_reason"] = alignment_reason
+    alignment["alignment_debug"] = alignment_debug
+    alignment["alignment_status"] = alignment_status
+    alignment["alignment_reason"] = alignment_reason
     retrieval_score = float(result.get("score", 0.0) or 0.0)
     decision = decision_service.decide_candidate(retrieval_score, verification, final_confidence_threshold)
 
@@ -187,6 +374,25 @@ def _candidate_from_result(result: Dict[str, Any], page_image_paths: Dict[int, s
         "field_count": field_count,
         "model_name": metadata.get("model_name"),
         "vector_store_engine": metadata.get("vector_store_engine"),
+        "alignment_status": alignment_status,
+        "alignment": alignment,
+        "alignment_debug": alignment_debug,
+        "alignment_score": alignment_score,
+        "alignment_passed": alignment_status == "aligned",
+        "alignment_fallback_used": verification_source_used == "normalized",
+        "alignment_reason": alignment_reason,
+        "normalized_verification_score": round(normalized_verification_score, 4) if normalized_verification_score is not None else None,
+        "aligned_verification_score": round(aligned_verification_score, 4) if aligned_verification_score is not None else None,
+        "verification_source_used": verification_source_used,
+        "before_alignment_verification": round(normalized_verification_score, 4) if normalized_verification_score is not None else None,
+        "after_alignment_verification": round(aligned_verification_score, 4) if aligned_verification_score is not None else None,
+        "verification_improvement": verification_improvement,
+        "alignment_match_image_path": alignment.get("alignment_match_image_path"),
+        "alignment_match_image_preview_url": alignment.get("alignment_match_image_preview_url"),
+        "aligned_image_path": alignment.get("aligned_image_path"),
+        "aligned_image_preview_url": alignment.get("aligned_image_preview_url"),
+        "normalized_image_path": query_image_path,
+        "normalized_image_preview_url": _detection_debug_url(query_image_path),
         "verification": verification,
         "verification_score": decision["verification_score"],
         "verification_passed": decision["verification_passed"],
@@ -199,12 +405,17 @@ def _candidate_from_result(result: Dict[str, Any], page_image_paths: Dict[int, s
     }
 
 
-def _detect_page(page_index: int, saved_image_path: Path, page_image_paths: Dict[int, str]) -> Dict[str, Any]:
-    embedding = encode_images([str(saved_image_path)])
+def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) -> Dict[str, Any]:
+    page_index = int(page_info["page_index"])
+    normalized_image_path = str(page_info["normalized_path"])
+    embedding = encode_images([normalized_image_path])
     raw_results = search_similar_templates(embedding.vector, limit=5)
     candidates = [
         candidate
-        for candidate in (_candidate_from_result(result, page_image_paths) for result in raw_results)
+        for candidate in (
+            _candidate_from_result(result, page_image_paths, page_index, normalized_image_path)
+            for result in raw_results
+        )
         if candidate is not None
     ]
     candidates = sorted(candidates, key=lambda item: (item["final_score"], item["retrieval_score"]), reverse=True)
@@ -216,9 +427,17 @@ def _detect_page(page_index: int, saved_image_path: Path, page_image_paths: Dict
         "matched": matched,
         "best_candidate": best_candidate,
         "candidates": candidates,
-        "image_preview_data_url": _image_to_data_url(saved_image_path),
+        "image_preview_data_url": _image_to_data_url(Path(normalized_image_path)),
+        "original_image_preview_url": _detection_debug_url(str(page_info["original_path"])),
+        "normalized_image_preview_url": _detection_debug_url(normalized_image_path),
+        "original_image_path": str(page_info["original_path"]),
+        "normalized_image_path": normalized_image_path,
+        "normalization": page_info["normalization"],
         "debug": {
-            "query_image_path": str(saved_image_path),
+            "query_image_path": str(page_info["original_path"]),
+            "normalized_query_image_path": normalized_image_path,
+            "original_image_preview_url": _detection_debug_url(str(page_info["original_path"])),
+            "normalized_image_preview_url": _detection_debug_url(normalized_image_path),
             "query_engine": embedding.engine,
             "query_version": embedding.version,
             "query_model_name": embedding.model_name,
@@ -226,6 +445,16 @@ def _detect_page(page_index: int, saved_image_path: Path, page_image_paths: Dict
             "query_input_count": embedding.input_count,
             "raw_candidate_count": len(raw_results),
             "active_candidate_count": len(candidates),
+            "aligned_candidate_paths": [
+                candidate["alignment"]["aligned_image_path"]
+                for candidate in candidates
+                if candidate.get("alignment", {}).get("aligned_image_path")
+            ],
+            "alignment_match_image_paths": [
+                candidate["alignment"]["alignment_match_image_path"]
+                for candidate in candidates
+                if candidate.get("alignment", {}).get("alignment_match_image_path")
+            ],
         },
     }
 
@@ -271,6 +500,25 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "field_count": best_page_cand["field_count"],
             "model_name": best_page_cand["model_name"],
             "vector_store_engine": best_page_cand["vector_store_engine"],
+            "alignment_status": best_page_cand.get("alignment_status"),
+            "alignment": best_page_cand.get("alignment"),
+            "alignment_debug": best_page_cand.get("alignment_debug"),
+            "alignment_score": best_page_cand.get("alignment_score"),
+            "alignment_passed": best_page_cand.get("alignment_passed"),
+            "alignment_fallback_used": best_page_cand.get("alignment_fallback_used"),
+            "alignment_reason": best_page_cand.get("alignment_reason"),
+            "normalized_verification_score": best_page_cand.get("normalized_verification_score"),
+            "aligned_verification_score": best_page_cand.get("aligned_verification_score"),
+            "verification_source_used": best_page_cand.get("verification_source_used"),
+            "before_alignment_verification": best_page_cand.get("before_alignment_verification"),
+            "after_alignment_verification": best_page_cand.get("after_alignment_verification"),
+            "verification_improvement": best_page_cand.get("verification_improvement"),
+            "alignment_match_image_path": best_page_cand.get("alignment_match_image_path"),
+            "alignment_match_image_preview_url": best_page_cand.get("alignment_match_image_preview_url"),
+            "aligned_image_path": best_page_cand.get("aligned_image_path"),
+            "aligned_image_preview_url": best_page_cand.get("aligned_image_preview_url"),
+            "normalized_image_path": best_page_cand.get("normalized_image_path"),
+            "normalized_image_preview_url": best_page_cand.get("normalized_image_preview_url"),
             "verification": best_page_cand.get("verification"),
             "verification_score": decision["verification_score"],
             "verification_passed": decision["verification_passed"],
@@ -297,8 +545,9 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
     source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
     page_paths = _prepare_query_pages(query_id, file_bytes)
-    page_image_paths = {index + 1: str(page_path) for index, page_path in enumerate(page_paths)}
-    pages = [_detect_page(index + 1, page_path, page_image_paths) for index, page_path in enumerate(page_paths)]
+    normalized_pages = _normalize_query_pages(query_id, page_paths)
+    page_image_paths = {page["page_index"]: page["normalized_path"] for page in normalized_pages}
+    pages = [_detect_page(page, page_image_paths) for page in normalized_pages]
     candidates = _aggregate_candidates(pages)
     passing_candidates = sorted(
         [candidate for candidate in candidates if candidate["final_passed"]],
@@ -325,5 +574,6 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
             "input_page_count": len(page_paths),
             "converted_page_count": len(page_paths) if source_type == "pdf" else 0,
             "query_page_paths": [str(path) for path in page_paths],
+            "normalized_query_page_paths": [page["normalized_path"] for page in normalized_pages],
         },
     }

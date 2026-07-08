@@ -154,6 +154,22 @@ export interface DetectionCandidate {
   modelName?: string | null;
   vectorStoreEngine?: string | null;
   pageIndex?: number | null;
+  alignmentStatus?: "skipped" | "aligned" | "fallback" | "failed" | null;
+  alignment?: Record<string, unknown>;
+  alignmentDebug?: Record<string, unknown>;
+  alignmentScore?: number | null;
+  alignmentPassed?: boolean | null;
+  alignmentFallbackUsed?: boolean | null;
+  alignmentReason?: string | null;
+  normalizedVerificationScore?: number | null;
+  alignedVerificationScore?: number | null;
+  verificationSourceUsed?: "normalized" | "aligned" | null;
+  beforeAlignmentVerification?: number | null;
+  afterAlignmentVerification?: number | null;
+  verificationImprovement?: number | null;
+  alignmentMatchImagePreviewUrl?: string | null;
+  alignedImagePreviewUrl?: string | null;
+  normalizedImagePreviewUrl?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -163,6 +179,11 @@ export interface DetectionPageResult {
   bestCandidate?: DetectionCandidate | null;
   candidates: DetectionCandidate[];
   imagePreviewDataUrl?: string | null;
+  originalImagePreviewUrl?: string | null;
+  normalizedImagePreviewUrl?: string | null;
+  originalImagePath?: string | null;
+  normalizedImagePath?: string | null;
+  normalization?: Record<string, unknown>;
   debug?: Record<string, unknown>;
 }
 
@@ -316,6 +337,31 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   modelName: (candidate.model_name as string | null | undefined) ?? null,
   vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
   pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
+  alignmentStatus:
+    candidate.alignment_status === "skipped" ||
+    candidate.alignment_status === "fallback" ||
+    candidate.alignment_status === "failed" ||
+    candidate.alignment_status === "aligned"
+      ? candidate.alignment_status
+      : null,
+  alignment: (candidate.alignment as Record<string, unknown> | undefined) || undefined,
+  alignmentDebug: (candidate.alignment_debug as Record<string, unknown> | undefined) || undefined,
+  alignmentScore: typeof candidate.alignment_score === "number" ? candidate.alignment_score : null,
+  alignmentPassed: typeof candidate.alignment_passed === "boolean" ? candidate.alignment_passed : null,
+  alignmentFallbackUsed: typeof candidate.alignment_fallback_used === "boolean" ? candidate.alignment_fallback_used : null,
+  alignmentReason: (candidate.alignment_reason as string | null | undefined) ?? null,
+  normalizedVerificationScore: typeof candidate.normalized_verification_score === "number" ? candidate.normalized_verification_score : null,
+  alignedVerificationScore: typeof candidate.aligned_verification_score === "number" ? candidate.aligned_verification_score : null,
+  verificationSourceUsed:
+    candidate.verification_source_used === "normalized" || candidate.verification_source_used === "aligned"
+      ? candidate.verification_source_used
+      : null,
+  beforeAlignmentVerification: typeof candidate.before_alignment_verification === "number" ? candidate.before_alignment_verification : null,
+  afterAlignmentVerification: typeof candidate.after_alignment_verification === "number" ? candidate.after_alignment_verification : null,
+  verificationImprovement: typeof candidate.verification_improvement === "number" ? candidate.verification_improvement : null,
+  alignmentMatchImagePreviewUrl: (candidate.alignment_match_image_preview_url as string | null | undefined) ?? null,
+  alignedImagePreviewUrl: (candidate.aligned_image_preview_url as string | null | undefined) ?? null,
+  normalizedImagePreviewUrl: (candidate.normalized_image_preview_url as string | null | undefined) ?? null,
   metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
 });
 
@@ -325,6 +371,11 @@ const mapDetectionPage = (page: Record<string, unknown>): DetectionPageResult =>
   bestCandidate: page.best_candidate ? mapDetectionCandidate(page.best_candidate as Record<string, unknown>) : null,
   candidates: Array.isArray(page.candidates) ? (page.candidates as Record<string, unknown>[]).map(mapDetectionCandidate) : [],
   imagePreviewDataUrl: (page.image_preview_data_url as string | null | undefined) ?? null,
+  originalImagePreviewUrl: (page.original_image_preview_url as string | null | undefined) ?? null,
+  normalizedImagePreviewUrl: (page.normalized_image_preview_url as string | null | undefined) ?? null,
+  originalImagePath: (page.original_image_path as string | null | undefined) ?? null,
+  normalizedImagePath: (page.normalized_image_path as string | null | undefined) ?? null,
+  normalization: (page.normalization as Record<string, unknown> | undefined) || {},
   debug: (page.debug as Record<string, unknown> | undefined) || {},
 });
 

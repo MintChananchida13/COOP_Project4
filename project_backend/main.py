@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import uuid
+from pathlib import Path
 from typing import List, Tuple
 
 import cv2
@@ -10,6 +11,7 @@ import easyocr
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
@@ -37,6 +39,8 @@ class DocumentPayload(BaseModel):
 
 
 app = FastAPI(title="OCR AI Engine")
+DETECTION_DEBUG_DIR = Path(__file__).resolve().parent / "storage" / "detection_queries"
+DETECTION_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +48,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.mount(
+    "/debug/detection-queries",
+    StaticFiles(directory=str(DETECTION_DEBUG_DIR)),
+    name="detection_debug",
 )
 
 app.include_router(blueprint_router)

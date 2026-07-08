@@ -1,16 +1,60 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
-import { DetectionCandidate, DetectionDevResult, detectTemplateDev } from "./adminApi";
+import { ADMIN_API_BASE_URL, DetectionCandidate, DetectionDevResult, detectTemplateDev } from "./adminApi";
 
 const formatScore = (score?: number | null) => (typeof score === "number" && score !== null ? score.toFixed(4) : "N/A");
+const formatSignedScore = (score?: number | null) =>
+  typeof score === "number" && score !== null ? `${score >= 0 ? "+" : ""}${score.toFixed(4)}` : "N/A";
 const readText = (value: unknown) => (typeof value === "string" && value.trim() ? value : "N/A");
+const readValue = (value: unknown) => (typeof value === "number" || typeof value === "boolean" ? String(value) : readText(value));
 const readScore = (value: unknown) => (typeof value === "number" ? formatScore(value) : "N/A");
 const verificationFields = (candidate?: DetectionCandidate | null) => {
   const verification = candidate?.verification || {};
   const fields = verification.verification_details || verification.checked_fields;
   return Array.isArray(fields) ? (fields as Record<string, unknown>[]) : [];
 };
+const previewSrc = (value?: string | null) => {
+  if (!value) return "";
+  if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("http")) return value;
+  if (value.startsWith("/")) return `${ADMIN_API_BASE_URL}${value}`;
+  return value;
+};
+const alignmentOf = (candidate?: DetectionCandidate | null) => (candidate?.alignment || {}) as Record<string, unknown>;
+const alignmentDebugOf = (candidate?: DetectionCandidate | null) =>
+  (candidate?.alignmentDebug || alignmentOf(candidate).alignment_debug || {}) as Record<string, unknown>;
+const alignmentStatus = (candidate?: DetectionCandidate | null) => {
+  const nestedStatus = alignmentOf(candidate).alignment_status;
+  if (candidate?.alignmentStatus) return candidate.alignmentStatus;
+  if (
+    nestedStatus === "skipped" ||
+    nestedStatus === "aligned" ||
+    nestedStatus === "fallback" ||
+    nestedStatus === "failed"
+  ) {
+    return nestedStatus;
+  }
+  return "failed";
+};
+const alignmentLabel = (candidate?: DetectionCandidate | null) => {
+  if (!candidate) return "N/A";
+  const status = alignmentStatus(candidate);
+  if (status === "skipped") return "Skipped";
+  if (status === "aligned") return "Aligned";
+  if (status === "fallback") return "Fallback";
+  if (status === "failed") return "Failed";
+  if (candidate.alignmentFallbackUsed) return "Fallback";
+  if (candidate.alignmentPassed) return "Aligned";
+  return "Failed";
+};
+const alignmentBadgeClass = (candidate?: DetectionCandidate | null) => {
+  const status = alignmentStatus(candidate);
+  if (status === "aligned") return "bg-emerald-100 text-emerald-700";
+  if (status === "skipped") return "bg-slate-100 text-slate-700";
+  if (status === "fallback") return "bg-amber-100 text-amber-700";
+  return "bg-red-100 text-red-700";
+};
+const readBool = (value: unknown) => (value === true ? "true" : value === false ? "false" : "N/A");
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -35,6 +79,39 @@ export default function AdminDetectionLabPage() {
   const bestCandidate = result?.bestCandidate || null;
   const visibleCandidates = currentPage?.candidates.length ? currentPage.candidates : result?.candidates || [];
   const verificationCandidate = bestCandidate || currentPage?.bestCandidate || visibleCandidates[0] || null;
+  const alignmentCandidate = currentPage?.bestCandidate || bestCandidate || visibleCandidates[0] || null;
+  const currentAlignment = alignmentOf(alignmentCandidate);
+  const currentAlignmentDebug = alignmentDebugOf(alignmentCandidate);
+  const currentAlignmentStatus = alignmentStatus(alignmentCandidate);
+  const verificationSourceUsed =
+    alignmentCandidate?.verificationSourceUsed ||
+    (currentAlignmentDebug.verification_source_used === "aligned" || currentAlignmentDebug.verification_source_used === "normalized"
+      ? currentAlignmentDebug.verification_source_used
+      : null);
+  const alignmentReason =
+    alignmentCandidate?.alignmentReason ||
+    (currentAlignmentDebug.alignment_reason as string | undefined) ||
+    (currentAlignmentDebug.reason as string | undefined);
+  const alignmentPrecheck =
+    currentAlignmentDebug.precheck && typeof currentAlignmentDebug.precheck === "object"
+      ? (currentAlignmentDebug.precheck as Record<string, unknown>)
+      : null;
+  const alignedImagePreviewUrl = previewSrc(alignmentCandidate?.alignedImagePreviewUrl || (currentAlignment.aligned_image_preview_url as string | null | undefined));
+  const alignmentMatchPreviewUrl = previewSrc(
+    alignmentCandidate?.alignmentMatchImagePreviewUrl || (currentAlignment.alignment_match_image_preview_url as string | null | undefined)
+  );
+  const originalImagePreviewUrl = previewSrc(currentPage?.originalImagePreviewUrl || (currentPage?.debug?.original_image_preview_url as string | undefined));
+  const normalizedImagePreviewUrl = previewSrc(
+    currentPage?.normalizedImagePreviewUrl || (currentPage?.debug?.normalized_image_preview_url as string | undefined) || currentPage?.imagePreviewDataUrl
+  );
+  const currentNormalizationDebug =
+    currentPage?.normalization?.normalization_debug && typeof currentPage.normalization.normalization_debug === "object"
+      ? (currentPage.normalization.normalization_debug as Record<string, unknown>)
+      : currentPage?.normalization || {};
+  const transformValidation =
+    currentNormalizationDebug.transform_validation && typeof currentNormalizationDebug.transform_validation === "object"
+      ? (currentNormalizationDebug.transform_validation as Record<string, unknown>)
+      : null;
   const currentVerificationFields = verificationFields(verificationCandidate);
   const isPdf = file?.type === "application/pdf";
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
@@ -178,6 +255,8 @@ export default function AdminDetectionLabPage() {
                       <p>Model: {bestCandidate.modelName || "N/A"}</p>
                       <p>Vector Store: {bestCandidate.vectorStoreEngine || "N/A"}</p>
                       <p>Threshold: {formatScore(bestCandidate.finalConfidenceThreshold)}</p>
+                      <p>Alignment Status: {alignmentLabel(bestCandidate)}</p>
+                      <p>Alignment Score: {formatScore(bestCandidate.alignmentScore)}</p>
                     </div>
                   </div>
                 ) : result.message ? (
@@ -223,6 +302,76 @@ export default function AdminDetectionLabPage() {
                 </div>
               </div>
 
+              <details className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" open>
+                <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                  Detection Images
+                </summary>
+                <div className="mt-3 grid gap-3 xl:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Original Image</div>
+                    {originalImagePreviewUrl ? (
+                      <img src={originalImagePreviewUrl} alt={`Original detection page ${currentPage?.pageIndex || 1}`} className="h-64 w-full rounded-lg object-contain" />
+                    ) : (
+                      <div className="flex h-64 items-center justify-center rounded-lg bg-slate-100 text-xs font-semibold text-slate-400">Original preview unavailable</div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Normalized Image</div>
+                    {normalizedImagePreviewUrl ? (
+                      <img src={normalizedImagePreviewUrl} alt={`Normalized detection page ${currentPage?.pageIndex || 1}`} className="h-64 w-full rounded-lg object-contain" />
+                    ) : (
+                      <div className="flex h-64 items-center justify-center rounded-lg bg-slate-100 text-xs font-semibold text-slate-400">Normalized preview unavailable</div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Aligned Image</div>
+                    {currentAlignmentStatus === "aligned" && alignedImagePreviewUrl ? (
+                      <div className="relative h-64 rounded-lg bg-slate-100">
+                        <img src={alignedImagePreviewUrl} alt={`Aligned detection page ${currentPage?.pageIndex || 1}`} className="h-full w-full rounded-lg object-contain" />
+                        <span className="absolute left-2 top-2 rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-black uppercase text-emerald-700">
+                          Aligned image used
+                        </span>
+                      </div>
+                    ) : currentAlignmentStatus === "skipped" || currentAlignmentStatus === "fallback" ? (
+                      <div className="relative h-64 rounded-lg bg-slate-100">
+                        {normalizedImagePreviewUrl ? (
+                          <img src={normalizedImagePreviewUrl} alt={`Fallback normalized page ${currentPage?.pageIndex || 1}`} className="h-full w-full rounded-lg object-contain" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center p-4 text-center text-xs font-semibold text-slate-400">
+                            Alignment fallback used normalized image
+                          </div>
+                        )}
+                        <span
+                          className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[10px] font-black uppercase ${
+                            currentAlignmentStatus === "skipped" ? "bg-slate-100 text-slate-700" : "bg-amber-100 text-amber-700"
+                          }`}
+                        >
+                          {currentAlignmentStatus === "skipped" ? "Alignment skipped: normalized image used" : "Alignment fallback: normalized image used"}
+                        </span>
+                      </div>
+                    ) : currentAlignmentStatus === "failed" ? (
+                      <div className="flex h-64 items-center justify-center rounded-lg bg-red-50 p-4 text-center text-xs font-semibold text-red-600">
+                        Alignment Error: {readText(currentAlignment.error)}
+                      </div>
+                    ) : (
+                      <div className="flex h-64 items-center justify-center rounded-lg bg-slate-100 p-4 text-center text-xs font-semibold text-slate-400">
+                        Alignment image unavailable
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">ORB Match Visualization</div>
+                    {alignmentMatchPreviewUrl ? (
+                      <img src={alignmentMatchPreviewUrl} alt={`ORB matches page ${currentPage?.pageIndex || 1}`} className="h-64 w-full rounded-lg object-contain" />
+                    ) : (
+                      <div className="flex h-64 items-center justify-center rounded-lg bg-slate-100 p-4 text-center text-xs font-semibold text-slate-400">
+                        No ORB visualization available.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </details>
+
               <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px]">
                 <div>
                   {currentPage?.imagePreviewDataUrl && (
@@ -236,6 +385,132 @@ export default function AdminDetectionLabPage() {
                       {currentPage.bestCandidate ? `, final score ${formatScore(currentPage.bestCandidate.finalScore ?? currentPage.bestCandidate.score)}` : ""}
                     </div>
                   )}
+                  <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                      Normalization Debug
+                    </summary>
+                    <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
+                      <p>Normalization Status: {readText(currentNormalizationDebug.normalization_status)}</p>
+                      <p>Validation Passed: {readBool(currentNormalizationDebug.validation_passed)}</p>
+                      <p>Fallback Used: {readBool(currentNormalizationDebug.fallback_used)}</p>
+                      <p>Document Detected: {readBool(currentNormalizationDebug.document_detected)}</p>
+                      <p>Crop Applied: {readBool(currentNormalizationDebug.crop_applied)}</p>
+                      <p>Perspective Applied: {readBool(currentNormalizationDebug.perspective_applied)}</p>
+                      <p>Fallback Reason: {readText(currentNormalizationDebug.fallback_reason)}</p>
+                      <p>Original Size: {Array.isArray(currentNormalizationDebug.original_size) ? currentNormalizationDebug.original_size.join(" x ") : "N/A"}</p>
+                      <p>Normalized Size: {Array.isArray(currentNormalizationDebug.normalized_size) ? currentNormalizationDebug.normalized_size.join(" x ") : "N/A"}</p>
+                      <p>Output Size: {Array.isArray(currentNormalizationDebug.output_size) ? currentNormalizationDebug.output_size.join(" x ") : "N/A"}</p>
+                      <p>Contour Area: {readValue(currentNormalizationDebug.detected_contour_area)}</p>
+                      <p>Contour Area Ratio: {readScore(currentNormalizationDebug.contour_area_ratio)}</p>
+                      <p>Contour Source: {readText(currentNormalizationDebug.contour_source)}</p>
+                      <p>Contour Score: {readScore(currentNormalizationDebug.contour_score)}</p>
+                      <p>Contour Aspect Ratio: {readScore(currentNormalizationDebug.contour_aspect_ratio)}</p>
+                      <p>Contour Center Score: {readScore(currentNormalizationDebug.contour_center_score)}</p>
+                      {Array.isArray(currentNormalizationDebug.detected_points) && (
+                        <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
+                          <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                            Detected Points
+                          </summary>
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-900 p-3 text-[10px] font-semibold text-slate-100">
+                            {JSON.stringify(currentNormalizationDebug.detected_points, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                      {transformValidation && (
+                        <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
+                          <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                            Transform Validation
+                          </summary>
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-900 p-3 text-[10px] font-semibold text-slate-100">
+                            {JSON.stringify(transformValidation, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  </details>
+                  <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                      Alignment Debug
+                    </summary>
+                    {!alignmentCandidate ? (
+                      <p className="mt-3 text-xs font-semibold text-slate-500">No candidate selected for alignment debug.</p>
+                    ) : (
+                      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
+                        <p>Candidate: {alignmentCandidate.templateName || "N/A"}</p>
+                        <p>
+                          Alignment Status:{" "}
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${alignmentBadgeClass(alignmentCandidate)}`}>
+                            {alignmentLabel(alignmentCandidate)}
+                          </span>
+                        </p>
+                        <p>Method: {readText(currentAlignmentDebug.method)}</p>
+                        <p>Alignment Score: {readScore(currentAlignmentDebug.alignment_score ?? alignmentCandidate.alignmentScore)}</p>
+                        <p>Reprojection Error (px): {readScore(currentAlignmentDebug.reprojection_error_px ?? currentAlignmentDebug.reprojection_error)}</p>
+                        <p>Inlier Ratio: {readScore(currentAlignmentDebug.inlier_ratio)}</p>
+                        <p>Inliers: {readValue(currentAlignmentDebug.inliers)}</p>
+                        <p>Outliers: {readValue(currentAlignmentDebug.outliers)}</p>
+                        <p>Raw Matches: {readValue(currentAlignmentDebug.raw_matches)}</p>
+                        <p>Query Keypoints: {readValue(currentAlignmentDebug.query_keypoints)}</p>
+                        <p>Template Keypoints: {readValue(currentAlignmentDebug.template_keypoints)}</p>
+                        <p>Good Matches: {readValue(currentAlignmentDebug.good_matches)}</p>
+                        <p>Homography Found: {readBool(currentAlignmentDebug.homography_found)}</p>
+                        <p>Warp Applied: {readBool(currentAlignmentDebug.warp_applied)}</p>
+                        <p>ORB Executed: {readBool(currentAlignmentDebug.orb_executed)}</p>
+                        <p>Verification Source Used: {readText(verificationSourceUsed)}</p>
+                        <p>
+                          Normalized Verification:{" "}
+                          {readScore(
+                            currentAlignmentDebug.normalized_verification_score ??
+                              currentAlignmentDebug.before_alignment_verification ??
+                              alignmentCandidate.normalizedVerificationScore ??
+                              alignmentCandidate.beforeAlignmentVerification
+                          )}
+                        </p>
+                        <p>
+                          Aligned Verification:{" "}
+                          {readScore(
+                            currentAlignmentDebug.aligned_verification_score ??
+                              currentAlignmentDebug.after_alignment_verification ??
+                              alignmentCandidate.alignedVerificationScore ??
+                              alignmentCandidate.afterAlignmentVerification
+                          )}
+                        </p>
+                        <p>OCR Improvement: {formatSignedScore(alignmentCandidate.verificationImprovement ?? (currentAlignmentDebug.verification_improvement as number | null | undefined))}</p>
+                        <p>Reason: {readText(alignmentReason)}</p>
+                        {currentAlignmentStatus === "skipped" && (
+                          <p className="rounded-lg bg-slate-50 p-2 font-bold text-slate-700 sm:col-span-2">
+                            Alignment skipped: normalized image already matches the template geometry.
+                          </p>
+                        )}
+                        {currentAlignmentStatus === "fallback" && (
+                          <p className="rounded-lg bg-amber-50 p-2 font-bold text-amber-700 sm:col-span-2">
+                            Alignment fallback: normalized image used
+                          </p>
+                        )}
+                        <p className="sm:col-span-2">error: {readText(currentAlignment.error)}</p>
+                        {alignmentPrecheck && (
+                          <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
+                            <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                              Alignment Pre-check
+                            </summary>
+                            <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-900 p-3 text-[10px] font-semibold text-slate-100">
+                              {JSON.stringify(alignmentPrecheck, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                        {Array.isArray(currentAlignment.homography) && (
+                          <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
+                            <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
+                              Homography Matrix
+                            </summary>
+                            <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-900 p-3 text-[10px] font-semibold text-slate-100">
+                              {JSON.stringify(currentAlignment.homography, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    )}
+                  </details>
                 </div>
 
                 <div className="max-h-[540px] space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
@@ -351,6 +626,8 @@ export default function AdminDetectionLabPage() {
                     <th className="px-3 py-2">Final</th>
                     <th className="px-3 py-2">Retrieval</th>
                     <th className="px-3 py-2">Verification</th>
+                    <th className="px-3 py-2">Alignment Status</th>
+                    <th className="px-3 py-2">Align Score</th>
                     <th className="px-3 py-2">Decision</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Vector ID</th>
@@ -361,7 +638,7 @@ export default function AdminDetectionLabPage() {
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
                   {visibleCandidates.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
+                      <td colSpan={12} className="px-3 py-4 text-center text-slate-500">
                         No candidates to display.
                       </td>
                     </tr>
@@ -376,6 +653,12 @@ export default function AdminDetectionLabPage() {
                           {formatScore(candidate.verificationScore)}
                           {candidate.verificationPassed === false ? " failed" : candidate.verificationPassed === true ? " passed" : ""}
                         </td>
+                        <td className="px-3 py-2">
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${alignmentBadgeClass(candidate)}`}>
+                            {alignmentLabel(candidate)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">{formatScore(candidate.alignmentScore)}</td>
                         <td className="px-3 py-2">{candidate.decisionReason || "N/A"}</td>
                         <td className="px-3 py-2">{candidate.templateStatus || "N/A"}</td>
                         <td className="px-3 py-2">{candidate.vectorId || "N/A"}</td>
