@@ -250,7 +250,12 @@ def _alignment_reason(
     return str(alignment.get("error") or alignment_debug.get("reason") or "alignment process failed")
 
 
-def _align_candidate_page(template_id: str, page_number: int, query_image_path: str) -> Dict[str, Any]:
+def _align_candidate_page(
+    template_id: str,
+    page_number: int,
+    query_image_path: str,
+    normalization_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     template_image_source = _fetch_template_page_image_source(template_id, page_number)
     if not template_image_source:
         return _alignment_result(
@@ -265,7 +270,7 @@ def _align_candidate_page(template_id: str, page_number: int, query_image_path: 
     output_path = output_dir / f"{_safe_file_token(template_id)}_page_{page_number}_aligned.png"
 
     try:
-        precheck = alignment_service.alignment_precheck(query_image_path, template_image_source)
+        precheck = alignment_service.alignment_precheck(query_image_path, template_image_source, normalization_info)
         if not precheck.get("should_run_orb"):
             if precheck.get("reason") == "normalized_geometry_matches_template":
                 return _alignment_result("skipped", str(precheck["reason"]), precheck=precheck)
@@ -293,6 +298,7 @@ def _candidate_from_result(
     page_image_paths: Dict[int, str],
     page_index: int,
     query_image_path: str,
+    normalization_info: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
@@ -320,7 +326,7 @@ def _candidate_from_result(
 
     if template_status != "active":
         return None
-    alignment = _align_candidate_page(template_id, page_index, query_image_path) if template_id else _alignment_result(
+    alignment = _align_candidate_page(template_id, page_index, query_image_path, normalization_info) if template_id else _alignment_result(
         "fallback",
         "template_id_unavailable",
         error="Template id is unavailable",
@@ -413,7 +419,7 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
     candidates = [
         candidate
         for candidate in (
-            _candidate_from_result(result, page_image_paths, page_index, normalized_image_path)
+            _candidate_from_result(result, page_image_paths, page_index, normalized_image_path, page_info.get("normalization"))
             for result in raw_results
         )
         if candidate is not None

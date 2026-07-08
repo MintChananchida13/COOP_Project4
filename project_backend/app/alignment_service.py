@@ -14,9 +14,15 @@ class AlignmentService:
     MAX_REPROJECTION_ERROR = 5.0
     ASPECT_RATIO_TOLERANCE = 0.04
 
-    def alignment_precheck(self, query_image_path: str, template_image_source: str) -> Dict[str, Any]:
+    def alignment_precheck(
+        self,
+        query_image_path: str,
+        template_image_source: str,
+        normalization_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         query = cv2.imread(str(query_image_path))
         template = self._load_template_image(template_image_source)
+        normalization_info = normalization_info or {}
         if query is None:
             return {
                 "should_run_orb": False,
@@ -40,11 +46,18 @@ class AlignmentService:
         query_orientation = self._orientation(query_width, query_height)
         template_orientation = self._orientation(template_width, template_height)
         orientation_matches = query_orientation == template_orientation
-        should_skip = orientation_matches and aspect_delta <= self.ASPECT_RATIO_TOLERANCE
+        normalization_fallback_used = bool(normalization_info.get("fallback_used"))
+        crop_applied = bool(normalization_info.get("crop_applied"))
+        perspective_applied = bool(normalization_info.get("perspective_applied"))
+        geometry_matches = orientation_matches and aspect_delta <= self.ASPECT_RATIO_TOLERANCE
+        should_skip = geometry_matches and not normalization_fallback_used
+        reason = "normalized_geometry_matches_template" if should_skip else "geometry_mismatch_alignment_may_help"
+        if normalization_fallback_used:
+            reason = "normalization_fallback_alignment_may_help"
 
         return {
             "should_run_orb": not should_skip,
-            "reason": "normalized_geometry_matches_template" if should_skip else "geometry_mismatch_alignment_may_help",
+            "reason": reason,
             "query_size": [query_width, query_height],
             "template_size": [template_width, template_height],
             "query_aspect_ratio": round(float(query_aspect), 4),
@@ -54,6 +67,11 @@ class AlignmentService:
             "template_orientation": template_orientation,
             "orientation_matches": orientation_matches,
             "aspect_ratio_tolerance": self.ASPECT_RATIO_TOLERANCE,
+            "geometry_matches": geometry_matches,
+            "normalization_status": normalization_info.get("normalization_status"),
+            "normalization_fallback_used": normalization_fallback_used,
+            "crop_applied": crop_applied,
+            "perspective_applied": perspective_applied,
         }
 
     def align_to_template(

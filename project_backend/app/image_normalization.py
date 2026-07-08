@@ -29,28 +29,46 @@ class ImageNormalizationService:
             raise ValueError(f"Unable to read image for normalization: {image_path}")
 
         original_height, original_width = image.shape[:2]
-        corrected, debug = self._perspective_correct(image)
-        normalized = self._resize_longest_side(corrected, self.LONGEST_SIDE)
+        # Temporary bypass: keep the normalization contract, but avoid crop/warp
+        # until the document boundary algorithm is stable.
+        normalized = image.copy()
         normalized_height, normalized_width = normalized.shape[:2]
-        debug["normalized_size"] = [normalized_width, normalized_height]
-        debug["output_size"] = [normalized_width, normalized_height]
+        debug = {
+            "document_detected": False,
+            "crop_applied": False,
+            "perspective_applied": False,
+            "normalization_status": "bypassed",
+            "validation_passed": True,
+            "fallback_used": True,
+            "fallback_reason": "normalization_temporarily_bypassed",
+            "original_size": [original_width, original_height],
+            "normalized_size": [normalized_width, normalized_height],
+            "output_size": [normalized_width, normalized_height],
+            "detected_contour_area": None,
+            "contour_area_ratio": None,
+            "contour_source": None,
+            "contour_score": None,
+            "contour_aspect_ratio": None,
+            "contour_center_score": None,
+            "detected_points": None,
+            "transform_validation": {
+                "passed": True,
+                "reason": "normalization_temporarily_bypassed",
+                "width": normalized_width,
+                "height": normalized_height,
+            },
+        }
 
         write_success = bool(cv2.imwrite(str(target_path), normalized))
         decoded_output = cv2.imread(str(target_path)) if write_success else None
         if not write_success or decoded_output is None:
-            normalized = self._resize_longest_side(image, self.LONGEST_SIDE)
-            normalized_height, normalized_width = normalized.shape[:2]
-            cv2.imwrite(str(target_path), normalized)
+            cv2.imwrite(str(target_path), image)
             debug.update(
                 {
                     "normalization_status": "fallback",
                     "validation_passed": False,
                     "fallback_used": True,
                     "fallback_reason": "output_decode_failed",
-                    "crop_applied": False,
-                    "perspective_applied": False,
-                    "normalized_size": [normalized_width, normalized_height],
-                    "output_size": [normalized_width, normalized_height],
                 }
             )
 

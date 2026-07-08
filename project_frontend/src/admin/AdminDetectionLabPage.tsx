@@ -40,7 +40,7 @@ const alignmentLabel = (candidate?: DetectionCandidate | null) => {
   if (!candidate) return "N/A";
   const status = alignmentStatus(candidate);
   if (status === "skipped") return "Skipped";
-  if (status === "aligned") return "Aligned";
+  if (status === "aligned") return "Success";
   if (status === "fallback") return "Fallback";
   if (status === "failed") return "Failed";
   if (candidate.alignmentFallbackUsed) return "Fallback";
@@ -96,6 +96,8 @@ export default function AdminDetectionLabPage() {
     currentAlignmentDebug.precheck && typeof currentAlignmentDebug.precheck === "object"
       ? (currentAlignmentDebug.precheck as Record<string, unknown>)
       : null;
+  const orbExecuted = currentAlignmentDebug.orb_executed === true;
+  const homographyFound = currentAlignmentDebug.homography_found === true || currentAlignment.homography_found === true;
   const alignedImagePreviewUrl = previewSrc(alignmentCandidate?.alignedImagePreviewUrl || (currentAlignment.aligned_image_preview_url as string | null | undefined));
   const alignmentMatchPreviewUrl = previewSrc(
     alignmentCandidate?.alignmentMatchImagePreviewUrl || (currentAlignment.alignment_match_image_preview_url as string | null | undefined)
@@ -443,19 +445,6 @@ export default function AdminDetectionLabPage() {
                             {alignmentLabel(alignmentCandidate)}
                           </span>
                         </p>
-                        <p>Method: {readText(currentAlignmentDebug.method)}</p>
-                        <p>Alignment Score: {readScore(currentAlignmentDebug.alignment_score ?? alignmentCandidate.alignmentScore)}</p>
-                        <p>Reprojection Error (px): {readScore(currentAlignmentDebug.reprojection_error_px ?? currentAlignmentDebug.reprojection_error)}</p>
-                        <p>Inlier Ratio: {readScore(currentAlignmentDebug.inlier_ratio)}</p>
-                        <p>Inliers: {readValue(currentAlignmentDebug.inliers)}</p>
-                        <p>Outliers: {readValue(currentAlignmentDebug.outliers)}</p>
-                        <p>Raw Matches: {readValue(currentAlignmentDebug.raw_matches)}</p>
-                        <p>Query Keypoints: {readValue(currentAlignmentDebug.query_keypoints)}</p>
-                        <p>Template Keypoints: {readValue(currentAlignmentDebug.template_keypoints)}</p>
-                        <p>Good Matches: {readValue(currentAlignmentDebug.good_matches)}</p>
-                        <p>Homography Found: {readBool(currentAlignmentDebug.homography_found)}</p>
-                        <p>Warp Applied: {readBool(currentAlignmentDebug.warp_applied)}</p>
-                        <p>ORB Executed: {readBool(currentAlignmentDebug.orb_executed)}</p>
                         <p>Verification Source Used: {readText(verificationSourceUsed)}</p>
                         <p>
                           Normalized Verification:{" "}
@@ -463,31 +452,64 @@ export default function AdminDetectionLabPage() {
                             currentAlignmentDebug.normalized_verification_score ??
                               currentAlignmentDebug.before_alignment_verification ??
                               alignmentCandidate.normalizedVerificationScore ??
-                              alignmentCandidate.beforeAlignmentVerification
+                            alignmentCandidate.beforeAlignmentVerification
                           )}
                         </p>
-                        <p>
-                          Aligned Verification:{" "}
-                          {readScore(
-                            currentAlignmentDebug.aligned_verification_score ??
-                              currentAlignmentDebug.after_alignment_verification ??
-                              alignmentCandidate.alignedVerificationScore ??
-                              alignmentCandidate.afterAlignmentVerification
-                          )}
-                        </p>
-                        <p>OCR Improvement: {formatSignedScore(alignmentCandidate.verificationImprovement ?? (currentAlignmentDebug.verification_improvement as number | null | undefined))}</p>
                         <p>Reason: {readText(alignmentReason)}</p>
                         {currentAlignmentStatus === "skipped" && (
-                          <p className="rounded-lg bg-slate-50 p-2 font-bold text-slate-700 sm:col-span-2">
-                            Alignment skipped: normalized image already matches the template geometry.
-                          </p>
+                          <div className="rounded-lg bg-slate-50 p-3 font-bold text-slate-700 sm:col-span-2">
+                            <p>Alignment Status: Skipped</p>
+                            <p className="mt-2 font-semibold">
+                              The uploaded document already matches the template geometry within the acceptable tolerance.
+                              OCR verification was performed using the normalized image. No geometric correction was required.
+                            </p>
+                          </div>
+                        )}
+                        {orbExecuted && (
+                          <>
+                            <p>Method: {readText(currentAlignmentDebug.method)}</p>
+                            <p>ORB Executed: true</p>
+                            <p>Raw Matches: {readValue(currentAlignmentDebug.raw_matches)}</p>
+                            <p>Good Matches: {readValue(currentAlignmentDebug.good_matches)}</p>
+                            <p>Query Keypoints: {readValue(currentAlignmentDebug.query_keypoints)}</p>
+                            <p>Template Keypoints: {readValue(currentAlignmentDebug.template_keypoints)}</p>
+                            <p>Inliers: {readValue(currentAlignmentDebug.inliers)}</p>
+                            <p>Outliers: {readValue(currentAlignmentDebug.outliers)}</p>
+                            <p>Inlier Ratio: {readScore(currentAlignmentDebug.inlier_ratio)}</p>
+                            {homographyFound && (
+                              <>
+                                <p>Homography Found: true</p>
+                                <p>Warp Applied: {readBool(currentAlignmentDebug.warp_applied)}</p>
+                                <p>Reprojection Error (px): {readScore(currentAlignmentDebug.reprojection_error_px ?? currentAlignmentDebug.reprojection_error)}</p>
+                              </>
+                            )}
+                            {currentAlignmentStatus === "aligned" && (
+                              <>
+                                <p>Alignment Score: {readScore(currentAlignmentDebug.alignment_score ?? alignmentCandidate.alignmentScore)}</p>
+                                <p>
+                                  Aligned Verification:{" "}
+                                  {readScore(
+                                    currentAlignmentDebug.aligned_verification_score ??
+                                      currentAlignmentDebug.after_alignment_verification ??
+                                      alignmentCandidate.alignedVerificationScore ??
+                                      alignmentCandidate.afterAlignmentVerification
+                                  )}
+                                </p>
+                              </>
+                            )}
+                          </>
                         )}
                         {currentAlignmentStatus === "fallback" && (
                           <p className="rounded-lg bg-amber-50 p-2 font-bold text-amber-700 sm:col-span-2">
-                            Alignment fallback: normalized image used
+                            Fallback: alignment was attempted, but it could not produce a usable transformed image. OCR verification used the normalized image.
                           </p>
                         )}
-                        <p className="sm:col-span-2">error: {readText(currentAlignment.error)}</p>
+                        {currentAlignmentStatus === "failed" && (
+                          <p className="rounded-lg bg-red-50 p-2 font-bold text-red-700 sm:col-span-2">
+                            Failed: alignment encountered an unexpected error. OCR verification used the normalized image.
+                          </p>
+                        )}
+                        {currentAlignmentStatus === "failed" && <p className="sm:col-span-2">error: {readText(currentAlignment.error)}</p>}
                         {alignmentPrecheck && (
                           <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
                             <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
@@ -498,7 +520,7 @@ export default function AdminDetectionLabPage() {
                             </pre>
                           </details>
                         )}
-                        {Array.isArray(currentAlignment.homography) && (
+                        {homographyFound && Array.isArray(currentAlignment.homography) && (
                           <details className="rounded-lg border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
                             <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
                               Homography Matrix
