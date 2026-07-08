@@ -554,7 +554,7 @@ class OCRService:
 
 class VerificationService:
     FUZZY_THRESHOLD = 0.85
-    DEFAULT_VERIFICATION_THRESHOLD = 0.75
+    DEFAULT_VERIFICATION_THRESHOLD = 0.70
     LOW_TEXT_SIMILARITY_GUARD = 0.25
     ZERO_WIDTH_CHARS = {
         "\u200b",
@@ -636,6 +636,8 @@ class VerificationService:
                 text_similarity_score = 1.0
             elif actual in expected:
                 text_similarity_score = max(base_similarity, 0.90)
+            elif base_similarity >= 0.70:
+                text_similarity_score = max(base_similarity, 0.75)
             else:
                 text_similarity_score = base_similarity
 
@@ -644,7 +646,7 @@ class VerificationService:
             field_score = 0.0
             failure_reason = "low_text_similarity"
         else:
-            field_score = round((text_similarity_score * 0.7) + (float(ocr_confidence or 0.0) * 0.3), 4)
+            field_score = round((text_similarity_score * 0.9) + (float(ocr_confidence or 0.0) * 0.1), 4)
 
         passed = field_score >= threshold
         if passed:
@@ -894,7 +896,7 @@ class DecisionService:
         verification_passed = bool(verification.get("passed"))
         required_passed = bool(verification.get("required_passed", verification_passed))
         verification_status = verification.get("status")
-        final_score = round((retrieval_score * 0.6) + (verification_score * 0.4), 4)
+        final_score = round((retrieval_score * 0.5) + (verification_score * 0.5), 4)
         final_passed = False
 
         if verification_status == "ocr_unavailable":

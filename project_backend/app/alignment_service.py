@@ -7,7 +7,7 @@ import numpy as np
 
 
 class AlignmentService:
-    MIN_GOOD_MATCHES = 10
+    MIN_GOOD_MATCHES = 5
     MAX_GOOD_MATCHES = 80
     ORB_FEATURES = 3000
     MIN_INLIERS = 20

@@ -831,13 +831,13 @@ export default function WorkspaceCustomEditor({
               )}
                           
               <div className="absolute inset-0 top-0 left-0 w-full h-full pointer-events-auto">
-                {currentPageRois.map((roi) => {
+                {currentPageRois.map((roi, index) => {
                   const hasPoints = roi.points && roi.points.length > 0;
                   const selected = selectedId === roi.id;
                   const customRoiClassName = getRoiClassName?.(roi, selected, activeTool);
                   return (
                     <Rnd
-                      key={roi.id}
+                      key={`${roi.type || "roi"}-${roi.pageIndex ?? currentIndex}-${roi.id}-${index}`}
                       size={{ width: roi.width, height: roi.height }}
                       position={{ x: roi.x, y: roi.y }}
                       onMouseDown={(e) => { e.stopPropagation(); setSelectedId(roi.id); }}
@@ -854,7 +854,7 @@ export default function WorkspaceCustomEditor({
                       } ${hasPoints ? 'border-transparent bg-transparent shadow-none' : (selectedId === roi.id ? "border-indigo-600 bg-indigo-600/10 shadow-md z-30 ring-2 ring-indigo-500/20" : "border-indigo-400/80 bg-indigo-50/5 hover:border-indigo-500 hover:bg-indigo-50/10 z-20")}`}
                       resizeHandleStyles={!readOnly && selectedId === roi.id ? { topLeft: handleStyle, topRight: handleStyle, bottomLeft: handleStyle, bottomRight: handleStyle, top: handleStyle, right: handleStyle, bottom: handleStyle, left: handleStyle } : {}}
                       enableResizing={!readOnly && selectedId === roi.id}
-                      disableDragging={readOnly || activeTool === 'pan'}
+                      disableDragging={readOnly}
                     >
                       <div className={`w-full h-full relative ${activeTool !== 'pan' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
                         {/* SVG Polygon overlay for Quad/Polygon ROIs */}

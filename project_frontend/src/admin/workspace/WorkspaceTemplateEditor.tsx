@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Move } from "lucide-react";
+import { ArrowLeft, Loader2, Move, ScanSearch } from "lucide-react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
 import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
 import TemplateFieldOCRSettings from "./TemplateFieldOCRSettings";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../../shared/workspace/roiGeometry";
 import { IgnoreRegion, ROI, RoiRatio, TemplateField } from "../../types/ocr";
+import { ADMIN_API_BASE_URL } from "../adminApi";
 
 interface WorkspaceTemplateEditorProps {
   pages: WorkspacePage[];
@@ -16,7 +17,7 @@ interface WorkspaceTemplateEditorProps {
   fields: TemplateField[];
   ignoreRegions: IgnoreRegion[];
   onBackToAdjust: () => void;
-  onAddField: (roi?: RoiRatio) => void;
+  onAddField: (roi?: RoiRatio, defaults?: Partial<TemplateField>) => void;
   onUpdateField: (fieldId: string, patch: Partial<TemplateField>) => void;
   onDeleteField: (fieldId: string) => void;
   onAddIgnoreRegion: (roi?: RoiRatio) => void;
@@ -38,6 +39,19 @@ const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
 
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
+
+const MIN_AUTO_ROI_RATIO = 0.004;
+
+interface OcrDetectedLine {
+  fieldName?: string;
+  text?: string;
+  confidence?: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  bbox?: [number, number][];
+}
 
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
@@ -61,6 +75,43 @@ const boxToRatio = (roi: ROI, pageNumber: number, metrics: WorkspaceImageMetrics
   widthRatio: clampRatio(roi.width / Math.max(metrics.imageWidth, 1)),
   heightRatio: clampRatio(roi.height / Math.max(metrics.imageHeight, 1)),
 });
+
+const loadImageElement = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+
+const ocrLineToRoi = (line: OcrDetectedLine, pageNumber: number, naturalWidth: number, naturalHeight: number): RoiRatio | null => {
+  let x = Number(line.x);
+  let y = Number(line.y);
+  let width = Number(line.width);
+  let height = Number(line.height);
+
+  if ((!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) && line.bbox?.length) {
+    const xs = line.bbox.map((point) => Number(point[0])).filter(Number.isFinite);
+    const ys = line.bbox.map((point) => Number(point[1])).filter(Number.isFinite);
+    if (xs.length && ys.length) {
+      x = Math.min(...xs);
+      y = Math.min(...ys);
+      width = Math.max(...xs) - x;
+      height = Math.max(...ys) - y;
+    }
+  }
+
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+
+  const xRatio = clampRatio(x / Math.max(naturalWidth, 1));
+  const yRatio = clampRatio(y / Math.max(naturalHeight, 1));
+  const widthRatio = clampRatio(width / Math.max(naturalWidth, 1));
+  const heightRatio = clampRatio(height / Math.max(naturalHeight, 1));
+
+  if (widthRatio < MIN_AUTO_ROI_RATIO || heightRatio < MIN_AUTO_ROI_RATIO) return null;
+
+  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
+};
 
 const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): AdminRoi => {
   const box = ratioToImageBox(field.roi, metrics);
@@ -115,6 +166,8 @@ export default function WorkspaceTemplateEditor({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedTemplateFieldId, setSelectedTemplateFieldId] = useState<string | null>(null);
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
+  const [autoDetectStatus, setAutoDetectStatus] = useState("");
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const pendingCreatedRoiRef = useRef<{ mode: EditorMode; roi: RoiRatio } | null>(null);
   const currentPageNumber = currentPage + 1;
   const selectedPage = pages[currentPage];
@@ -244,6 +297,61 @@ export default function WorkspaceTemplateEditor({
     }
     setMode("template_fields");
     setFieldEditorStep("ocr_configuration");
+  };
+
+  const handleAutoDetectOcrFields = async () => {
+    if (!selectedPage?.src || isAutoDetecting) return;
+
+    setMode("template_fields");
+    setAutoDetectStatus("");
+    setIsAutoDetecting(true);
+
+    try {
+      const image = await loadImageElement(selectedPage.src);
+      const response = await fetch(`${ADMIN_API_BASE_URL}/api/ai/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: selectedPage.src,
+          rois: [],
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.detail || result?.error || "OCR auto ROI failed.");
+      }
+
+      const detectedLines = (result.extracted_data || []) as OcrDetectedLine[];
+      const existingFieldCount = fields.length;
+      const created = detectedLines.reduce((count, line) => {
+        const roi = ocrLineToRoi(line, currentPageNumber, image.naturalWidth, image.naturalHeight);
+        if (!roi) return count;
+
+        const fieldNumber = existingFieldCount + count + 1;
+        const fieldName = `field_${fieldNumber}`;
+
+        pendingCreatedRoiRef.current = { mode: "template_fields", roi };
+        onAddField(roi, {
+          fieldName,
+          displayLabel: `Field ${fieldNumber}`,
+          dataType: "text",
+          extractionMethod: "ocr_text",
+        });
+        return count + 1;
+      }, 0);
+
+      setAutoDetectStatus(
+        created > 0
+          ? `Created ${created} OCR ROI field${created === 1 ? "" : "s"} on page ${currentPageNumber}.`
+          : "OCR did not find usable text regions on this page."
+      );
+    } catch (error) {
+      console.error("Auto ROI detection failed.", error);
+      setAutoDetectStatus(error instanceof Error ? error.message : "Auto ROI detection failed.");
+    } finally {
+      setIsAutoDetecting(false);
+    }
   };
 
   const persistRoiChanges = (nextRois: AdminRoi[] | ((prev: AdminRoi[]) => AdminRoi[])) => {
@@ -555,6 +663,25 @@ export default function WorkspaceTemplateEditor({
               <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Current Page ROI</h3>
               <span className="text-[10px] font-bold text-slate-400">{panelRois.length}</span>
             </div>
+            <button
+              type="button"
+              onClick={handleAutoDetectOcrFields}
+              disabled={isAutoDetecting || !selectedPage?.src}
+              className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-indigo-700 shadow-sm hover:bg-indigo-50"
+            >
+              <span className="inline-flex items-center justify-center gap-1.5">
+                {isAutoDetecting ? <Loader2 size={13} className="animate-spin" /> : <ScanSearch size={13} />}
+                ตีกรอบ ROI อัตโนมัติจาก OCR
+              </span>
+            </button>
+            <p className="text-[10px] font-semibold leading-relaxed text-slate-500">
+              สแกนข้อความบนหน้าปัจจุบัน แล้วสร้าง Template Field ตามกรอบที่ OCR อ่านได้ จากนั้นกดเลือก field เพื่อเปลี่ยนชื่อหรือ Type ต่อได้
+            </p>
+            {autoDetectStatus && (
+              <p className={`rounded-lg px-2.5 py-2 text-[10px] font-bold ${autoDetectStatus.startsWith("Created") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                {autoDetectStatus}
+              </p>
+            )}
             <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
               {panelRois.length === 0 ? (
                 <p className="text-xs font-semibold text-slate-400">No ROI on this page.</p>

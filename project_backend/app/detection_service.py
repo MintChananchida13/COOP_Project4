@@ -304,9 +304,10 @@ def _candidate_from_result(
     vector_id = str(result.get("vector_id") or "")
     template_id = _template_id_from_metadata(metadata, vector_id)
     template = _fetch_template(template_id)
+
     if template_id and template is None:
         return None
-    
+
     if template:
         template_status = template.get("status")
         template_name = template.get("name")
@@ -315,7 +316,7 @@ def _candidate_from_result(
         with _connect() as conn:
             field_count = conn.execute(
                 "SELECT COUNT(*) as count FROM template_fields WHERE template_id = ?",
-                (template_id,)
+                (template_id,),
             ).fetchone()["count"]
     else:
         template_status = metadata.get("template_status")
@@ -326,46 +327,99 @@ def _candidate_from_result(
 
     if template_status != "active":
         return None
-    alignment = _align_candidate_page(template_id, page_index, query_image_path, normalization_info) if template_id else _alignment_result(
-        "fallback",
-        "template_id_unavailable",
-        error="Template id is unavailable",
-    )
-    alignment_debug = alignment.get("alignment_debug") or {}
-    alignment_score = float(alignment.get("alignment_score") or alignment_debug.get("alignment_score") or 0.0)
-    alignment_status = str(alignment.get("alignment_status") or "fallback")
-    verification_page_image_paths = dict(page_image_paths)
-    verification_source_used = "normalized"
-    if alignment_status == "aligned" and alignment.get("aligned_image_path"):
-        verification_page_image_paths[page_index] = str(alignment["aligned_image_path"])
-        verification_source_used = "aligned"
 
-    verification = verification_service.verify_template(template_id, verification_page_image_paths) if template_id else {
+    # 1) Verify จาก normalized ก่อน
+    normalized_verification = verification_service.verify_template(
+        template_id,
+        page_image_paths,
+    ) if template_id else {
         "status": "failed",
         "passed": False,
         "score": 0.0,
         "required_passed": False,
         "checked_fields": [],
     }
-    verification_score_for_source = float(verification.get("score") or 0.0)
-    normalized_verification_score = verification_score_for_source if verification_source_used == "normalized" else None
-    aligned_verification_score = verification_score_for_source if verification_source_used == "aligned" else None
-    verification_improvement = None
-    alignment_debug["before_alignment_verification"] = round(normalized_verification_score, 4) if normalized_verification_score is not None else None
-    alignment_debug["normalized_verification_score"] = round(normalized_verification_score, 4) if normalized_verification_score is not None else None
-    alignment_debug["after_alignment_verification"] = round(aligned_verification_score, 4) if aligned_verification_score is not None else None
-    alignment_debug["aligned_verification_score"] = round(aligned_verification_score, 4) if aligned_verification_score is not None else None
-    alignment_debug["verification_improvement"] = None
+
+    normalized_score = float(normalized_verification.get("score") or 0.0)
+    verification = normalized_verification
+    verification_source_used = "normalized"
+
+    # ค่าเริ่มต้น: ยังไม่ align
+    alignment = _alignment_result(
+        "skipped",
+        "normalized_verification_checked_first",
+        precheck={"reason": "alignment_deferred_until_needed"},
+    )
+
+    aligned_verification = None
+    aligned_score = None
+
+    # 2) ถ้า normalized ยังไม่ผ่าน หรือคะแนนต่ำ ค่อยลอง alignment
+    should_try_alignment = (
+        template_id is not None
+        and (
+            not bool(normalized_verification.get("passed"))
+            or normalized_score < 0.75
+        )
+    )
+
+    if should_try_alignment:
+        alignment = _align_candidate_page(
+            template_id,
+            page_index,
+            query_image_path,
+            normalization_info,
+        )
+
+        if alignment.get("alignment_status") == "aligned" and alignment.get("aligned_image_path"):
+            aligned_page_image_paths = dict(page_image_paths)
+            aligned_page_image_paths[page_index] = str(alignment["aligned_image_path"])
+
+            aligned_verification = verification_service.verify_template(
+                template_id,
+                aligned_page_image_paths,
+            )
+            aligned_score = float(aligned_verification.get("score") or 0.0)
+
+            # 3) ใช้ aligned เฉพาะถ้าดีกว่า normalized
+            if aligned_score > normalized_score:
+                verification = aligned_verification
+                verification_source_used = "aligned"
+
+    alignment_debug = alignment.get("alignment_debug") or {}
+    alignment_score = float(alignment.get("alignment_score") or alignment_debug.get("alignment_score") or 0.0)
+    alignment_status = str(alignment.get("alignment_status") or "fallback")
+
+    normalized_verification_score = normalized_score
+    aligned_verification_score = aligned_score
+    verification_improvement = (
+        round(aligned_score - normalized_score, 4)
+        if aligned_score is not None
+        else None
+    )
+
+    alignment_debug["before_alignment_verification"] = round(normalized_score, 4)
+    alignment_debug["normalized_verification_score"] = round(normalized_score, 4)
+    alignment_debug["after_alignment_verification"] = round(aligned_score, 4) if aligned_score is not None else None
+    alignment_debug["aligned_verification_score"] = round(aligned_score, 4) if aligned_score is not None else None
+    alignment_debug["verification_improvement"] = verification_improvement
     alignment_debug["verification_image_used"] = verification_source_used
     alignment_debug["verification_source_used"] = verification_source_used
+
     alignment_reason = _alignment_reason(alignment_status, alignment, alignment_debug)
     alignment_debug["alignment_status"] = alignment_status
     alignment_debug["alignment_reason"] = alignment_reason
+
     alignment["alignment_debug"] = alignment_debug
     alignment["alignment_status"] = alignment_status
     alignment["alignment_reason"] = alignment_reason
+
     retrieval_score = float(result.get("score", 0.0) or 0.0)
-    decision = decision_service.decide_candidate(retrieval_score, verification, final_confidence_threshold)
+    decision = decision_service.decide_candidate(
+        retrieval_score,
+        verification,
+        final_confidence_threshold,
+    )
 
     return {
         "template_id": template_id,
@@ -380,6 +434,7 @@ def _candidate_from_result(
         "field_count": field_count,
         "model_name": metadata.get("model_name"),
         "vector_store_engine": metadata.get("vector_store_engine"),
+
         "alignment_status": alignment_status,
         "alignment": alignment,
         "alignment_debug": alignment_debug,
@@ -387,18 +442,21 @@ def _candidate_from_result(
         "alignment_passed": alignment_status == "aligned",
         "alignment_fallback_used": verification_source_used == "normalized",
         "alignment_reason": alignment_reason,
-        "normalized_verification_score": round(normalized_verification_score, 4) if normalized_verification_score is not None else None,
+
+        "normalized_verification_score": round(normalized_verification_score, 4),
         "aligned_verification_score": round(aligned_verification_score, 4) if aligned_verification_score is not None else None,
         "verification_source_used": verification_source_used,
-        "before_alignment_verification": round(normalized_verification_score, 4) if normalized_verification_score is not None else None,
+        "before_alignment_verification": round(normalized_verification_score, 4),
         "after_alignment_verification": round(aligned_verification_score, 4) if aligned_verification_score is not None else None,
         "verification_improvement": verification_improvement,
+
         "alignment_match_image_path": alignment.get("alignment_match_image_path"),
         "alignment_match_image_preview_url": alignment.get("alignment_match_image_preview_url"),
         "aligned_image_path": alignment.get("aligned_image_path"),
         "aligned_image_preview_url": alignment.get("aligned_image_preview_url"),
         "normalized_image_path": query_image_path,
         "normalized_image_preview_url": _detection_debug_url(query_image_path),
+
         "verification": verification,
         "verification_score": decision["verification_score"],
         "verification_passed": decision["verification_passed"],

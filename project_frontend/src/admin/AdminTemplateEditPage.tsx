@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AdjustZone from "../user/components/AdjustZone";
 import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditor";
 import { samplePage, templateStatuses } from "./adminMockData";
@@ -82,6 +82,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [currentPage, setCurrentPage] = useState(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
   const [adjustedImages, setAdjustedImages] = useState<string[]>([]);
+  const localFieldSequenceRef = useRef(0);
 
   const applyBundle = (bundle: { template: Template; pages: TemplatePage[]; fields: TemplateField[]; ignoreRegions: IgnoreRegion[] }) => {
     setSelectedTemplate(bundle.template);
@@ -244,27 +245,28 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     });
   };
 
-  const handleAddField = (roi?: RoiRatio) => {
+  const handleAddField = (roi?: RoiRatio, defaults?: Partial<TemplateField>) => {
     if (!currentTemplatePage) return;
     const nextIndex = selectedTemplateFields.length + 1;
     const nextRoi = roi || defaultRoi(currentTemplatePage.pageNumber);
+    localFieldSequenceRef.current += 1;
     const optimisticField: TemplateField = {
-      id: `local_field_${Date.now()}`,
+      id: `local_field_${Date.now()}_${localFieldSequenceRef.current}`,
       templateId,
       templatePageId: currentTemplatePage.id,
       pageNumber: currentTemplatePage.pageNumber,
-      fieldName: `field_${nextIndex}`,
-      displayLabel: `Field ${nextIndex}`,
+      fieldName: defaults?.fieldName || `field_${nextIndex}`,
+      displayLabel: defaults?.displayLabel || defaults?.fieldName || `Field ${nextIndex}`,
       roi: nextRoi,
-      dataType: "text",
-      userSelectable: true,
-      defaultSelected: true,
-      useForVerification: false,
-      expectedText: "",
-      matchType: "",
-      requiredForVerification: false,
-      extractionMethod: "ocr_text",
-      roiPadding: 0,
+      dataType: defaults?.dataType || "text",
+      userSelectable: defaults?.userSelectable ?? true,
+      defaultSelected: defaults?.defaultSelected ?? true,
+      useForVerification: defaults?.useForVerification ?? false,
+      expectedText: defaults?.expectedText || "",
+      matchType: defaults?.matchType || "",
+      requiredForVerification: defaults?.requiredForVerification ?? false,
+      extractionMethod: defaults?.extractionMethod || "ocr_text",
+      roiPadding: defaults?.roiPadding ?? 0,
       sortOrder: nextIndex,
     };
     setSelectedTemplateFields((prev) => [...prev, optimisticField]);
