@@ -646,7 +646,7 @@ class VerificationService:
             field_score = 0.0
             failure_reason = "low_text_similarity"
         else:
-            field_score = round((text_similarity_score * 0.9) + (float(ocr_confidence or 0.0) * 0.1), 4)
+            field_score = round(text_similarity_score, 4)
 
         passed = field_score >= threshold
         if passed:
