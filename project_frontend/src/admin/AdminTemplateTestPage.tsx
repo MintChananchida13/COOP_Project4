@@ -700,10 +700,46 @@ function DraftCandidateCard({
                       {String(readPrepublishValue(detail, ["field_name", "anchor_name", "name", "display_label"]) || `Detail ${index + 1}`)}
                     </div>
                     <div className="mt-1 flex flex-wrap gap-2 text-[10px]">
+                      <span>{String(readPrepublishValue(detail, ["anchor_type", "verification_method", "match_type"]) || "verification")}</span>
                       <span>Score {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score"]) || 0))}</span>
                       <span>Weight {String(readPrepublishValue(detail, ["weight", "verification_weight"]) || "N/A")}</span>
                       <span>{String(readPrepublishValue(detail, ["status", "decision", "failure_reason"]) || "N/A")}</span>
                     </div>
+                    {(readPrepublishValue(detail, ["expected_text"]) || readPrepublishValue(detail, ["actual_text", "ocr_text"])) && (
+                      <div className="mt-2 grid gap-2 text-[10px] md:grid-cols-2">
+                        <p className="rounded bg-slate-50 p-2">Expected: {String(readPrepublishValue(detail, ["expected_text"]) || "N/A")}</p>
+                        <p className="rounded bg-slate-50 p-2">Actual: {String(readPrepublishValue(detail, ["actual_text", "ocr_text"]) || "N/A")}</p>
+                      </div>
+                    )}
+                    {(readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]) ||
+                      readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"])) && (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <div className="rounded border border-slate-100 bg-slate-50 p-2">
+                          <div className="text-[9px] font-black uppercase text-slate-400">Reference ROI</div>
+                          {readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]) ? (
+                            <img
+                              src={String(readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]))}
+                              alt=""
+                              className="mt-2 h-24 w-full rounded object-contain"
+                            />
+                          ) : (
+                            <p className="mt-2 text-[10px] text-slate-400">No preview</p>
+                          )}
+                        </div>
+                        <div className="rounded border border-slate-100 bg-slate-50 p-2">
+                          <div className="text-[9px] font-black uppercase text-slate-400">Test ROI</div>
+                          {readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]) ? (
+                            <img
+                              src={String(readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]))}
+                              alt=""
+                              className="mt-2 h-24 w-full rounded object-contain"
+                            />
+                          ) : (
+                            <p className="mt-2 text-[10px] text-slate-400">No preview</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -735,6 +771,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [expandedCandidates, setExpandedCandidates] = useState<Record<string, boolean>>({});
+  const [validationStep, setValidationStep] = useState(1);
   const [testDocumentFile, setTestDocumentFile] = useState<File | null>(null);
   const [testDocumentPreviewUrl, setTestDocumentPreviewUrl] = useState<string | null>(null);
   const [detectionTest, setDetectionTest] = useState<PrepublishDetectionTestResult | null>(null);
@@ -965,8 +1002,33 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             Back to Edit Template
           </Link>
         </div>
+        <div className="mt-4 grid gap-2 lg:grid-cols-5">
+          {[
+            [1, "Review ROI & OCR"],
+            [2, "Embedding Simulation"],
+            [3, "New Document Test"],
+            [4, "Candidate Details"],
+            [5, "Publish Review"],
+          ].map(([step, label]) => (
+            <button
+              key={String(step)}
+              type="button"
+              onClick={() => setValidationStep(Number(step))}
+              className={`rounded-xl border px-3 py-2 text-left text-[11px] font-black transition-colors ${
+                validationStep === step
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-white"
+              }`}
+            >
+              <span className="block text-[9px] uppercase opacity-75">Step {step}</span>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {validationStep === 1 && (
+      <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <DraftSectionHeader title="1. Draft Template Summary" subtitle="This page validates the draft before any production embedding is saved." />
@@ -1101,7 +1163,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           )}
         </div>
       </section>
+      </>
+      )}
 
+      {validationStep === 2 && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <DraftSectionHeader
@@ -1148,7 +1213,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </div>
         )}
       </section>
+      )}
 
+      {validationStep === 3 && (
+      <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <DraftSectionHeader
@@ -1224,7 +1292,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="5. Unified Candidate Ranking" subtitle="Draft temporary embedding and published Qdrant embeddings are ranked together." />
+        <DraftSectionHeader title="Candidate Ranking" subtitle="Draft temporary embedding and published Qdrant embeddings are ranked together." />
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200 text-xs">
             <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -1285,33 +1353,38 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           })}
         </div>
       </section>
+      </>
+      )}
 
+      {validationStep === 4 && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="6. Top 5 Candidate Analysis" subtitle="Temporary reference-image simulation results are still shown for template separation review." />
+        <DraftSectionHeader title="Candidate Details" subtitle="Open a candidate to inspect retrieval, anchor, verification, preview, and decision details." />
         <div className="mt-4 space-y-3">
-          {topCandidates.length === 0 ? (
-            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">Run Simulation to see candidate analysis.</p>
+          {(detectionTest?.candidates || []).length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">Run New Document Detection Test to inspect candidate details.</p>
           ) : (
-            topCandidates.map((candidate) => {
-              const key = `${candidate.templateId}-${candidate.rank}`;
+            detectionTest?.candidates.map((candidate) => {
+              const key = `${candidate.templateId}-${candidate.rank}-detail-step`;
               return (
                 <DraftCandidateCard
                   key={key}
                   candidate={candidate}
-                  open={Boolean(expandedCandidates[key])}
-                  onToggle={() => setExpandedCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
+                  open={Boolean(expandedDetectionCandidates[key])}
+                  onToggle={() => setExpandedDetectionCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
                 />
               );
             })
           )}
         </div>
       </section>
+      )}
 
+      {false && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <DraftSectionHeader title="7. Verification Anchor Results" subtitle="Text anchors use OCR comparison. Image anchors use temporary image-feature similarity when available." />
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {simulation?.verificationAnchorResults && simulation.verificationAnchorResults.length > 0 ? (
-            simulation.verificationAnchorResults.map((anchor, index) => {
+          {(simulation?.verificationAnchorResults || []).length > 0 ? (
+            (simulation?.verificationAnchorResults || []).map((anchor, index) => {
               const anchorType = String(readPrepublishValue(anchor, ["anchor_type", "type", "verification_method"]) || "text");
               const passed = Boolean(readPrepublishValue(anchor, ["passed", "final_passed"]));
               return (
@@ -1371,9 +1444,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           )}
         </div>
       </section>
+      )}
 
+      {validationStep === 5 && (
+      <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="8. Template Separation Analysis" subtitle="Checks whether the draft can separate itself from existing Active templates and the new test document." />
+        <DraftSectionHeader title="Template Separation" subtitle="Final separation summary before publishing." />
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <DraftSummaryCard label="Closest Existing Template" value={simulation?.separationAnalysis.conflictTemplates[0]?.templateName || "N/A"} />
           <DraftSummaryCard label="Similarity" value={formatPrepublishScore(simulation?.separationAnalysis.conflictTemplates[0]?.finalScore)} />
@@ -1393,7 +1469,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="9. Publish Readiness" subtitle="Final checklist before generating permanent embeddings and publishing." />
+        <DraftSectionHeader title="Publish Review" subtitle="Final checklist before generating permanent embeddings and publishing." />
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {[
             ["Extraction Fields", extractionFields.length > 0 && (ocrResults.length === 0 || ocrResults.every((result) => Boolean(result.passed)))],
@@ -1453,6 +1529,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </div>
         </div>
       </section>
+      </>
+      )}
     </section>
   );
 }
