@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import AdjustZone from "../user/components/AdjustZone";
-import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditor";
-import { samplePage, templateStatuses } from "./adminMockData";
+import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditorV2";
+import { samplePage } from "./adminMockData";
 import { useAdminState } from "./AdminState";
 import {
   createIgnoreRegionApi,
@@ -22,31 +21,9 @@ import {
 } from "./adminApi";
 import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage, TemplateStatus } from "../types/ocr";
 
-type EditorStep = "adjust" | "workspace";
 type LoadStatus = "loading" | "loaded" | "fallback" | "error";
 
-type PageConfig = {
-  rotation: number;
-  brightness: number;
-  contrast: number;
-  sharpness: number;
-  perspectiveV: number;
-  perspectiveH: number;
-  flipH: boolean;
-  flipV: boolean;
-  cropBox: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    renderedWidth?: number;
-    renderedHeight?: number;
-  } | null;
-  cropCorners: { x: number; y: number }[] | null;
-  isCropActive: boolean;
-  isCropped: boolean;
-  croppedLocalUrl: string | null;
-};
+const editableTemplateStatuses: TemplateStatus[] = ["draft","validated","active", "nonactive"];
 
 const defaultRoi = (pageNumber: number): RoiRatio => ({
   pageNumber,
@@ -78,10 +55,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [selectedIgnoreRegions, setSelectedIgnoreRegions] = useState<IgnoreRegion[]>(fallbackIgnoreRegions);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [saveStatus, setSaveStatus] = useState("");
-  const [editorStep, setEditorStep] = useState<EditorStep>("adjust");
   const [currentPage, setCurrentPage] = useState(0);
-  const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
-  const [adjustedImages, setAdjustedImages] = useState<string[]>([]);
   const localFieldSequenceRef = useRef(0);
 
   const applyBundle = (bundle: { template: Template; pages: TemplatePage[]; fields: TemplateField[]; ignoreRegions: IgnoreRegion[] }) => {
@@ -125,7 +99,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
   const workspacePages = selectedTemplatePages.map((page, index) => ({
     id: page.id,
-    src: adjustedImages[index] || imageList[index] || samplePage,
+    src: imageList[index] || samplePage,
     label: page.pageName || `Page ${page.pageNumber}`,
   }));
 
@@ -166,7 +140,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       finalConfidenceThreshold: selectedTemplate?.finalConfidenceThreshold ?? 0.8,
     };
     setSelectedTemplatePages((prev) => [...prev, optimisticPage]);
-    setEditorStep("adjust");
 
     if (!canPersistToBackend) {
       setLocalOnly("Page added locally.");
@@ -210,7 +183,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     setSelectedTemplateFields((prev) => prev.filter((field) => field.templatePageId !== pageId));
     setSelectedIgnoreRegions((prev) => prev.filter((region) => region.templatePageId !== pageId));
     setCurrentPage(0);
-    setEditorStep("adjust");
 
     if (!canPersistToBackend || pageId.startsWith("local_page_")) {
       setLocalOnly("Page removed locally.");
@@ -231,18 +203,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
         }
         setLocalOnly("Page removal could not be persisted.");
       });
-  };
-
-  const handleConfirmAdjustedImages = (finalImages: string[]) => {
-    setAdjustedImages(finalImages);
-    setCurrentPage(0);
-    setEditorStep("workspace");
-
-    finalImages.forEach((imageUrl, index) => {
-      const page = selectedTemplatePages[index];
-      if (!page) return;
-      handleUpdatePage(page.id, { sampleImageUrl: imageUrl, normalizedImageUrl: imageUrl });
-    });
   };
 
   const handleAddField = (roi?: RoiRatio, defaults?: Partial<TemplateField>) => {
@@ -267,6 +227,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       requiredForVerification: defaults?.requiredForVerification ?? false,
       extractionMethod: defaults?.extractionMethod || "ocr_text",
       roiPadding: defaults?.roiPadding ?? 0,
+      verificationWeight: defaults?.verificationWeight ?? 1,
       sortOrder: nextIndex,
     };
     setSelectedTemplateFields((prev) => [...prev, optimisticField]);
@@ -425,7 +386,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
           <div>
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Template Info</h2>
             <p className="mt-1 text-xs font-semibold text-slate-400">
-              Step 1: Adjust document image {"->"} Step 2: Define ROI fields in workspace.
+              Define page-aware ROI fields from the submitted template images.
             </p>
           </div>
 
@@ -459,7 +420,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onChange={(event) => persistTemplatePatch({ status: event.target.value as TemplateStatus })}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
             >
-              {templateStatuses.map((status) => (
+              {editableTemplateStatuses.map((status) => (
                 <option key={status} value={status}>{status}</option>
               ))}
             </select>
@@ -520,7 +481,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
           <div>
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Template Pages</h2>
             <p className="mt-1 text-xs font-semibold text-slate-400">
-              Adjust image first, then define page-aware ROI in Workspace.
+              Review submitted pages and define ROI in Workspace.
             </p>
           </div>
 
@@ -550,56 +511,25 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
       {selectedTemplatePages.length > 0 && currentTemplatePage && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setEditorStep("adjust")}
-                className={`rounded-xl px-4 py-3 text-xs font-black ${editorStep === "adjust" ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600"}`}
-              >
-                1. Adjust Image
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setEditorStep("workspace")}
-                className={`rounded-xl px-4 py-3 text-xs font-black ${editorStep === "workspace" ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600"}`}
-              >
-                2. Workspace ROI
-              </button>
-            </div>
-          </div>
-
-          {editorStep === "adjust" ? (
-            <AdjustZone
-              imagesList={imageList}
-              currentIndex={safeCurrentPage}
-              onIndexChange={setCurrentPage}
-              pagesConfig={pagesConfig}
-              setPagesConfig={setPagesConfig}
-              onBatchConfirm={handleConfirmAdjustedImages}
-            />
-          ) : (
-            <WorkspaceTemplateEditor
-              pages={workspacePages}
-              currentPage={safeCurrentPage}
-              onPageChange={setCurrentPage}
-              fields={selectedTemplateFields}
-              ignoreRegions={selectedIgnoreRegions}
-              onBackToAdjust={() => setEditorStep("adjust")}
-              onAddField={handleAddField}
-              onUpdateField={handleUpdateField}
-              onDeleteField={handleDeleteField}
-              onAddIgnoreRegion={handleAddIgnoreRegion}
-              onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
-              onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
-              onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
-              onRunTestMode={() => {
-                markTesting(templateId);
-                router.push(`/admin/templates/${templateId}/test`);
-              }}
-            />
-          )}
+          <WorkspaceTemplateEditor
+            templateId={templateId}
+            pages={workspacePages}
+            currentPage={safeCurrentPage}
+            onPageChange={setCurrentPage}
+            fields={selectedTemplateFields}
+            ignoreRegions={selectedIgnoreRegions}
+            onAddField={handleAddField}
+            onUpdateField={handleUpdateField}
+            onDeleteField={handleDeleteField}
+            onAddIgnoreRegion={handleAddIgnoreRegion}
+            onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
+            onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
+            onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
+            onRunTestMode={() => {
+              markTesting(templateId);
+              router.push(`/admin/templates/${templateId}/test`);
+            }}
+          />
         </div>
       )}
     </section>

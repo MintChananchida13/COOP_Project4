@@ -148,8 +148,8 @@ export default function GroundTruthEditorZone({
     return ocrResults.filter(res => (res.pageIndex !== undefined ? Number(res.pageIndex) : 0) === currentImageIndex);
   }, [ocrResults, currentImageIndex]);
 
-  const getRoiByFieldName = (fieldName: string) => {
-    return currentPageRois.find(roi => roi.fieldName === fieldName);
+  const getRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
+    return currentPageRois.find(roi => roi.id === result.roiId) || currentPageRois.find(roi => roi.fieldName === result.fieldName);
   };
 
   const handlePrevImage = () => {
@@ -238,7 +238,7 @@ export default function GroundTruthEditorZone({
         {/* OCR results table */}
                 <div className="absolute inset-0 top-0 left-0 w-full h-full pointer-events-none">
                   {currentPageOcrResults.map((res) => {
-                    const matchedRoi = getRoiByFieldName(res.fieldName);
+                    const matchedRoi = getRoiForResult(res);
                     if (!matchedRoi) return null;
                     const isCurrentActive = activeFieldId === res.id;
                     const hasPoints = matchedRoi.points && matchedRoi.points.length > 0;
@@ -251,7 +251,7 @@ export default function GroundTruthEditorZone({
                           hasPoints 
                             ? 'border-transparent bg-transparent shadow-none' 
                             : (isCurrentActive 
-                                ? "border-orange-500 bg-orange-500/15 ring-4 ring-orange-500/20 z-30 shadow-lg scale-[1.01]" 
+                                ? "border-orange-500 bg-orange-500/15 ring-4 ring-orange-500/20 z-30 shadow-lg" 
                                 : "border-slate-300 bg-slate-100/5 hover:border-slate-400 hover:bg-slate-100/10 z-10")
                         }`}
                         style={{
@@ -330,7 +330,7 @@ export default function GroundTruthEditorZone({
                         setActiveFieldId(null);
                       }}
                       className={`relative flex-shrink-0 w-12 h-14 rounded border-2 transition-all overflow-hidden bg-white ${
-                        isCurrent ? 'border-indigo-500 ring-2 ring-indigo-500/30 scale-105' : 'border-slate-250 opacity-60 hover:opacity-100'
+                        isCurrent ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-slate-250 opacity-60 hover:opacity-100'
                       }`}
                     >
                       <img src={imgUrl} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
@@ -426,12 +426,16 @@ export default function GroundTruthEditorZone({
               <tbody className="divide-y divide-slate-100 bg-white">
                 {currentPageOcrResults.map((res) => {
                   const isSelected = activeFieldId === res.id;
-                  const matchedRoi = getRoiByFieldName(res.fieldName);
+                  const matchedRoi = getRoiForResult(res);
                   return (
                     <tr 
                       key={res.id} 
                       onClick={() => setActiveFieldId(res.id)} 
-                      className={`group cursor-pointer transition-all ${isSelected ? 'bg-indigo-50/40 border-l-4 border-l-indigo-500 font-medium' : 'hover:bg-slate-50/50'}`}
+                      className={`group cursor-pointer border-l-4 transition-colors ${
+                        isSelected
+                          ? 'border-l-indigo-500 bg-indigo-50/40 font-medium'
+                          : 'border-l-transparent hover:bg-slate-50/50'
+                      }`}
                     >
 
                       <td className="px-4 py-4 align-top" onClick={(e) => e.stopPropagation()}>
@@ -527,7 +531,7 @@ export default function GroundTruthEditorZone({
               onClick={onApproveAndSave} 
               className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2"
             >
-              <Save size={15} /> Done
+              <Save size={15} /> Save
             </button>
           </div>
         </div>

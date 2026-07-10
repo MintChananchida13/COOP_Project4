@@ -315,7 +315,12 @@ def _candidate_from_result(
         final_confidence_threshold = decision_service.final_confidence_threshold(template, metadata)
         with _connect() as conn:
             field_count = conn.execute(
-                "SELECT COUNT(*) as count FROM template_fields WHERE template_id = ?",
+                """
+                SELECT COUNT(*) as count
+                FROM template_fields
+                WHERE template_id = ?
+                  AND use_for_verification = 0
+                """,
                 (template_id,),
             ).fetchone()["count"]
     else:
@@ -459,6 +464,8 @@ def _candidate_from_result(
 
         "verification": verification,
         "verification_score": decision["verification_score"],
+        "text_anchor_score": decision.get("text_anchor_score"),
+        "image_anchor_score": decision.get("image_anchor_score"),
         "verification_passed": decision["verification_passed"],
         "final_score": decision["final_score"],
         "final_passed": decision["final_passed"],
@@ -585,6 +592,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "normalized_image_preview_url": best_page_cand.get("normalized_image_preview_url"),
             "verification": best_page_cand.get("verification"),
             "verification_score": decision["verification_score"],
+            "text_anchor_score": decision.get("text_anchor_score"),
+            "image_anchor_score": decision.get("image_anchor_score"),
             "verification_passed": decision["verification_passed"],
             "final_score": decision["final_score"],
             "final_passed": decision["final_passed"],

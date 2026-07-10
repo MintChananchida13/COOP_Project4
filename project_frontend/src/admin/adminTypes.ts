@@ -4,10 +4,9 @@ import {
   Template,
   TemplateField,
   TemplatePage,
-  TemplateStatus,
 } from "../types/ocr";
 
-export type AdminStatusFilter = TemplateStatus | "all";
+export type AdminStatusFilter = "all" | "draft" | "active" | "nonactive";
 
 export interface AdminDashboardSummary {
   pendingRequests: number;

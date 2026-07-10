@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, XCircle } from "lucide-react";
 import RoiLayer from "../shared/workspace/RoiLayer";
 import { WorkspaceRoi } from "../shared/workspace/RoiBox";
 import WorkspaceCanvas from "../shared/workspace/WorkspaceCanvas";
@@ -11,10 +11,16 @@ import { IgnoreRegion, Template, TemplateField, TemplatePage, TemplateStatus } f
 import {
   ADMIN_API_BASE_URL,
   EmbeddingJob,
+  PrepublishCandidate,
+  PrepublishDetectionTestResult,
+  PrepublishSimulationResult,
+  confirmTemplatePublish,
   createEmbeddingJob,
   failEmbeddingJobDev,
   fetchLatestEmbeddingJob,
   fetchTemplateBundle,
+  runPrepublishDetectionTest,
+  runPrepublishSimulation,
   runEmbeddingJobDev,
   updateTemplateStatus,
 } from "./adminApi";
@@ -32,6 +38,7 @@ interface OcrPreviewResult {
   roiPreviewUrl?: string;
   expectedText?: string;
   verificationStatus?: "pass" | "fail" | "not_configured";
+  passed?: boolean;
 }
 
 type ValidationSeverity = "error" | "warning" | "pass";
@@ -598,6 +605,839 @@ function ProgressBar({ value, tone = "indigo" }: { value: number; tone?: "indigo
   );
 }
 
+const prepublishSimulationSteps = [
+  "Generate Global Embedding",
+  "Searching Templates",
+  "Top 5 Retrieved",
+  "Running Image Anchors",
+  "Running Text Anchors",
+  "Re-ranking",
+  "Completed",
+];
+
+const formatPrepublishScore = (value?: number | null) => (typeof value === "number" ? value.toFixed(2) : "N/A");
+
+const readPrepublishValue = (record: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+};
+
+function DraftSummaryCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</div>
+      <div className="mt-1 text-lg font-black text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function DraftSectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div>
+      <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">{title}</h3>
+      {subtitle && <p className="mt-1 text-[11px] font-semibold text-slate-500">{subtitle}</p>}
+    </div>
+  );
+}
+
+function DraftStatusPill({ passed, label }: { passed: boolean; label?: string }) {
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+      {label || (passed ? "PASS" : "FAIL")}
+    </span>
+  );
+}
+
+function DraftCandidateCard({
+  candidate,
+  open,
+  onToggle,
+}: {
+  candidate: PrepublishCandidate;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <button type="button" onClick={onToggle} className="flex w-full items-start gap-3 px-4 py-3 text-left">
+        {open ? <ChevronDown size={16} className="mt-0.5 text-slate-400" /> : <ChevronRight size={16} className="mt-0.5 text-slate-400" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-black text-slate-900">#{candidate.rank}</span>
+            <span className="text-xs font-black text-slate-900">{candidate.templateName || candidate.templateId}</span>
+            {candidate.isCurrentDraft && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">Current Draft</span>}
+            <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "REVIEW")} />
+          </div>
+          <div className="mt-2 grid gap-2 text-[10px] font-bold text-slate-500 sm:grid-cols-3 xl:grid-cols-7">
+            <span>Global {formatPrepublishScore(candidate.globalScore)}</span>
+            <span>Image {formatPrepublishScore(candidate.imageAnchorScore)}</span>
+            <span>Text {formatPrepublishScore(candidate.textAnchorScore)}</span>
+            <span>Verify {formatPrepublishScore(candidate.verificationScore)}</span>
+            <span>Final {formatPrepublishScore(candidate.finalScore)}</span>
+            <span>Align {candidate.alignmentStatus || "N/A"}</span>
+            <span>Diff {formatPrepublishScore(candidate.scoreDifferenceFromTop)}</span>
+          </div>
+        </div>
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 p-4">
+          <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
+            <DraftSummaryCard label="Template ID" value={candidate.templateId} />
+            <DraftSummaryCard label="Template Status" value={candidate.templateStatus || "N/A"} />
+            <DraftSummaryCard label="Page Count" value={candidate.pageCount ?? "N/A"} />
+            <DraftSummaryCard label="Field Count" value={candidate.fieldCount ?? "N/A"} />
+          </div>
+          {candidate.verificationDetails && candidate.verificationDetails.length > 0 && (
+            <div className="mt-4 rounded-xl bg-slate-50 p-3">
+              <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Detailed Scores</h4>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                {candidate.verificationDetails.map((detail, index) => (
+                  <div key={`${candidate.templateId}-detail-${index}`} className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-600">
+                    <div className="font-black text-slate-900">
+                      {String(readPrepublishValue(detail, ["field_name", "anchor_name", "name", "display_label"]) || `Detail ${index + 1}`)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-[10px]">
+                      <span>Score {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score"]) || 0))}</span>
+                      <span>Weight {String(readPrepublishValue(detail, ["weight", "verification_weight"]) || "N/A")}</span>
+                      <span>{String(readPrepublishValue(detail, ["status", "decision", "failure_reason"]) || "N/A")}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AdminTemplateTestPage({ templateId }: { templateId: string }) {
+  const { templates, pages: statePages, fields: stateFields } = useAdminState();
+  const fallbackTemplate = templates.find((item) => item.id === templateId) || null;
+  const [template, setTemplate] = useState<Template | null>(fallbackTemplate);
+  const [pages, setPages] = useState<TemplatePage[]>(statePages.filter((page) => page.templateId === templateId));
+  const [fields, setFields] = useState<TemplateField[]>(stateFields.filter((field) => field.templateId === templateId));
+  const [currentPage, setCurrentPage] = useState(0);
+  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+  const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback" | "error">("loading");
+  const [ocrResults, setOcrResults] = useState<OcrPreviewResult[]>([]);
+  const [ocrStatus, setOcrStatus] = useState("");
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [simulation, setSimulation] = useState<PrepublishSimulationResult | null>(null);
+  const [simulationAction, setSimulationAction] = useState<"run" | "confirm" | null>(null);
+  const [simulationStep, setSimulationStep] = useState(0);
+  const [simulationError, setSimulationError] = useState("");
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [expandedCandidates, setExpandedCandidates] = useState<Record<string, boolean>>({});
+  const [testDocumentFile, setTestDocumentFile] = useState<File | null>(null);
+  const [testDocumentPreviewUrl, setTestDocumentPreviewUrl] = useState<string | null>(null);
+  const [detectionTest, setDetectionTest] = useState<PrepublishDetectionTestResult | null>(null);
+  const [detectionTestAction, setDetectionTestAction] = useState(false);
+  const [detectionTestError, setDetectionTestError] = useState("");
+  const [expandedDetectionCandidates, setExpandedDetectionCandidates] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoadStatus("loading");
+      try {
+        const bundle = await fetchTemplateBundle(templateId);
+        if (cancelled) return;
+        setTemplate(bundle.template);
+        setPages(bundle.pages);
+        setFields(bundle.fields);
+        setLoadStatus("loaded");
+      } catch (error) {
+        console.warn("Using template pre-publish fallback because backend template data is unavailable.", error);
+        if (cancelled) return;
+        setLoadStatus(fallbackTemplate ? "fallback" : "error");
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackTemplate, templateId]);
+
+  useEffect(() => {
+    if (simulationAction !== "run") return;
+    setSimulationStep(0);
+    const intervalId = window.setInterval(() => {
+      setSimulationStep((step) => Math.min(step + 1, prepublishSimulationSteps.length - 1));
+    }, 700);
+    return () => window.clearInterval(intervalId);
+  }, [simulationAction]);
+
+  useEffect(() => {
+    return () => {
+      if (testDocumentPreviewUrl) URL.revokeObjectURL(testDocumentPreviewUrl);
+    };
+  }, [testDocumentPreviewUrl]);
+
+  const safePages = pages.length > 0 ? pages : [{ id: "empty", templateId, pageNumber: 1, sampleImageUrl: samplePage, similarityThreshold: 0.75, finalConfidenceThreshold: 0.8 }];
+  const safeCurrentPage = Math.min(currentPage, Math.max(safePages.length - 1, 0));
+  const currentPageNumber = safePages[safeCurrentPage]?.pageNumber || safeCurrentPage + 1;
+  const currentPageImage = safePages[safeCurrentPage]?.normalizedImageUrl || safePages[safeCurrentPage]?.sampleImageUrl || samplePage;
+  const extractionFields = fields.filter((field) => !field.useForVerification);
+  const verificationAnchors = fields.filter((field) => field.useForVerification);
+  const textAnchors = verificationAnchors.filter((field) => field.dataType !== "image");
+  const imageAnchors = verificationAnchors.filter((field) => field.dataType === "image");
+  const currentPageFields = extractionFields.filter((field) => field.pageNumber === currentPageNumber);
+  const currentPageAnchors = verificationAnchors.filter((field) => field.pageNumber === currentPageNumber);
+  const selectedField = selectedFieldId ? fields.find((field) => field.id === selectedFieldId) : null;
+  const selectedRoiId = selectedFieldId
+    ? stableNumericId(`${selectedField?.useForVerification ? "anchor" : "field"}:${selectedFieldId}`)
+    : null;
+  const rois = useMemo(() => fields.map((field) => fieldToRoi(field, imageMetrics)), [fields, imageMetrics]);
+  const resultsByPage = ocrResults.reduce<Record<number, OcrPreviewResult[]>>((acc, result) => {
+    acc[result.pageNumber] = [...(acc[result.pageNumber] || []), result];
+    return acc;
+  }, {});
+  const topCandidates = simulation?.candidates.slice(0, 5) || [];
+  const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
+  const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
+  const detectionMarginWarning = Boolean(detectionTest?.warning);
+  const publishPrerequisitesMet = Boolean(simulationPassed && detectionTest);
+  const overallReady = publishPrerequisitesMet && (!detectionTest || detectionTestPassed);
+  const canRunDetectionTest = Boolean(simulation?.temporaryEmbedding && simulationAction === null && testDocumentFile && !detectionTestAction);
+  const canConfirmPublish = publishPrerequisitesMet && simulationAction === null && template?.status !== "active";
+
+  const runPreviewOcr = async () => {
+    setIsPreviewing(true);
+    setOcrStatus("Running OCR on extraction fields...");
+    setOcrResults([]);
+
+    try {
+      const nextResults: OcrPreviewResult[] = [];
+      for (const field of extractionFields) {
+        const page = safePages.find((item) => item.pageNumber === field.pageNumber);
+        const imageSrc = page?.normalizedImageUrl || page?.sampleImageUrl || samplePage;
+        const roiPreviewUrl = await cropFieldPreview(imageSrc, field);
+
+        if (field.extractionMethod === "extract_image") {
+          nextResults.push({
+            id: field.id,
+            pageNumber: field.pageNumber,
+            fieldName: field.fieldName,
+            displayLabel: field.displayLabel,
+            extractionMethod: field.extractionMethod,
+            ocrText: "(image crop ready)",
+            roiPreviewUrl: roiPreviewUrl || undefined,
+            passed: Boolean(roiPreviewUrl),
+          });
+          continue;
+        }
+
+        const response = await fetch(`${ADMIN_API_BASE_URL}/api/ai/process`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: roiPreviewUrl,
+            rois: [{ fieldName: field.fieldName, x: 0, y: 0, width: 9999, height: 9999 }],
+          }),
+        });
+        const json = await response.json();
+        const result = json?.extracted_data?.[0];
+        const ocrText = result?.text || "";
+        nextResults.push({
+          id: field.id,
+          pageNumber: field.pageNumber,
+          fieldName: field.fieldName,
+          displayLabel: field.displayLabel,
+          extractionMethod: field.extractionMethod,
+          ocrText,
+          confidence: typeof result?.confidence === "number" ? result.confidence : undefined,
+          roiPreviewUrl: roiPreviewUrl || undefined,
+          passed: ocrText.trim().length > 0,
+        });
+      }
+
+      setOcrResults(nextResults);
+      setOcrStatus(`OCR preview complete for ${nextResults.length} extraction fields.`);
+    } catch (error) {
+      console.error(error);
+      setOcrStatus("OCR preview failed. Check the OCR backend and image data.");
+    } finally {
+      setIsPreviewing(false);
+    }
+  };
+
+  const handleRunPrepublishSimulation = async () => {
+    setSimulationAction("run");
+    setSimulationError("");
+    setStatusMessage("");
+    setPublishConfirmed(false);
+    try {
+      const result = await runPrepublishSimulation(templateId);
+      setSimulation(result);
+      setTemplate(result.template);
+      setSimulationStep(prepublishSimulationSteps.length - 1);
+      setStatusMessage("Temporary embedding simulation completed. Review candidate ranking and readiness before publishing.");
+    } catch (error) {
+      console.warn("Pre-publish simulation failed.", error);
+      setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
+    } finally {
+      setSimulationAction(null);
+    }
+  };
+
+  const handleTestDocumentChange = (file: File | null) => {
+    if (testDocumentPreviewUrl) URL.revokeObjectURL(testDocumentPreviewUrl);
+    setTestDocumentFile(file);
+    setDetectionTest(null);
+    setDetectionTestError("");
+    if (file && file.type.startsWith("image/")) {
+      setTestDocumentPreviewUrl(URL.createObjectURL(file));
+    } else {
+      setTestDocumentPreviewUrl(null);
+    }
+  };
+
+  const handleRunDetectionTest = async () => {
+    if (!testDocumentFile) return;
+    setDetectionTestAction(true);
+    setDetectionTestError("");
+    setStatusMessage("");
+    try {
+      const result = await runPrepublishDetectionTest(templateId, testDocumentFile);
+      setDetectionTest(result);
+      setStatusMessage("New document detection test completed. Review unified candidate ranking before publishing.");
+    } catch (error) {
+      console.warn("Pre-publish new document detection test failed.", error);
+      setDetectionTestError(error instanceof Error ? error.message : "New document detection test failed.");
+    } finally {
+      setDetectionTestAction(false);
+    }
+  };
+
+  const handleConfirmPublish = async () => {
+    setSimulationAction("confirm");
+    setSimulationError("");
+    setStatusMessage("");
+    try {
+      const result = await confirmTemplatePublish(templateId);
+      setTemplate(result.template);
+      setPublishConfirmed(true);
+      setStatusMessage("Real embedding generated, stored, and template published as Active.");
+    } catch (error) {
+      console.warn("Template publish failed.", error);
+      setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
+    } finally {
+      setSimulationAction(null);
+    }
+  };
+
+  if (loadStatus === "loading") {
+    return <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">Loading draft validation...</section>;
+  }
+
+  if (!template) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-black text-slate-900">Template not found</h2>
+        <Link href="/admin/templates" className="mt-4 inline-flex rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white">
+          Back to Templates
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-lg font-black text-slate-900">Pre-Publish Template Validation</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              Draft-only validation. Detection Lab remains separate and only tests published Active templates.
+            </p>
+            {loadStatus === "fallback" && <p className="mt-2 text-xs font-bold text-amber-600">Showing local fallback because backend template data is unavailable.</p>}
+            {statusMessage && <p className="mt-2 text-xs font-bold text-emerald-600">{statusMessage}</p>}
+            {simulationError && <p className="mt-2 text-xs font-bold text-red-600">{simulationError}</p>}
+          </div>
+          <Link href={`/admin/templates/${templateId}/edit`} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700">
+            Back to Edit Template
+          </Link>
+        </div>
+      </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <DraftSectionHeader title="1. Draft Template Summary" subtitle="This page validates the draft before any production embedding is saved." />
+          <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
+            {template.status}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DraftSummaryCard label="Template Name" value={template.name} />
+          <DraftSummaryCard label="Status" value={simulation?.draftSummary.status || template.status} />
+          <DraftSummaryCard label="Pages" value={simulation?.draftSummary.pageCount ?? safePages.length} />
+          <DraftSummaryCard label="Extraction Fields" value={simulation?.draftSummary.extractionFieldCount ?? extractionFields.length} />
+          <DraftSummaryCard label="Text Anchors" value={simulation?.draftSummary.textAnchorCount ?? textAnchors.length} />
+          <DraftSummaryCard label="Image Anchors" value={simulation?.draftSummary.imageAnchorCount ?? imageAnchors.length} />
+          <DraftSummaryCard label="DINOv2 Model" value={simulation?.temporaryEmbedding.modelName || "Not simulated"} />
+          <DraftSummaryCard label="Embedding Dimension" value={simulation?.temporaryEmbedding.embeddingDimension || "Not simulated"} />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <DraftSectionHeader title="2. ROI & OCR Preview" subtitle="Review extraction ROI and test OCR before creating a temporary embedding." />
+          <button
+            type="button"
+            onClick={runPreviewOcr}
+            disabled={isPreviewing || extractionFields.length === 0}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+          >
+            {isPreviewing ? "Previewing..." : ocrResults.length > 0 ? "Retest OCR" : "Preview OCR Fields"}
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {safePages.map((page, index) => (
+            <button
+              key={page.id}
+              type="button"
+              onClick={() => setCurrentPage(index)}
+              className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${safeCurrentPage === index ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600"}`}
+            >
+              Page {page.pageNumber}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <WorkspaceCanvas imageSrc={currentPageImage} className="h-[560px]" onImageMetricsChange={setImageMetrics}>
+            <RoiLayer
+              rois={rois}
+              currentPage={safeCurrentPage}
+              selectedId={selectedRoiId}
+              readonly
+              showLabels
+              onSelect={(id) => {
+                const field = fields.find((item) => stableNumericId(`${item.useForVerification ? "anchor" : "field"}:${item.id}`) === id);
+                if (field) setSelectedFieldId(field.id);
+              }}
+            />
+          </WorkspaceCanvas>
+          <aside className="space-y-3">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <h4 className="text-xs font-black text-slate-800">Page {currentPageNumber} Extraction Fields</h4>
+              <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
+                {currentPageFields.length === 0 ? (
+                  <p className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-500">No extraction fields on this page.</p>
+                ) : (
+                  currentPageFields.map((field) => (
+                    <button
+                      key={field.id}
+                      type="button"
+                      onClick={() => setSelectedFieldId(field.id)}
+                      className={`w-full rounded-lg border p-3 text-left text-xs ${selectedFieldId === field.id ? "border-indigo-400 bg-indigo-50 text-indigo-900" : "border-slate-200 bg-white text-slate-700"}`}
+                    >
+                      <div className="font-black">{field.displayLabel}</div>
+                      <div className="mt-1 text-[10px] font-bold text-slate-500">{field.fieldName}</div>
+                      <div className="mt-1 text-[9px] font-black uppercase text-slate-400">{field.extractionMethod}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-xl border border-orange-100 bg-orange-50 p-3">
+              <h4 className="text-xs font-black text-orange-900">Page {currentPageNumber} Verification Anchors</h4>
+              <div className="mt-3 space-y-2">
+                {currentPageAnchors.length === 0 ? (
+                  <p className="text-xs font-semibold text-orange-700">No anchors on this page.</p>
+                ) : (
+                  currentPageAnchors.map((anchor) => (
+                    <button
+                      key={anchor.id}
+                      type="button"
+                      onClick={() => setSelectedFieldId(anchor.id)}
+                      className={`w-full rounded-lg border p-3 text-left text-xs ${selectedFieldId === anchor.id ? "border-orange-400 bg-white text-orange-900" : "border-orange-100 bg-white/70 text-orange-800"}`}
+                    >
+                      <div className="font-black">{anchor.displayLabel}</div>
+                      <div className="mt-1 text-[10px] font-bold">Expected: {anchor.expectedText || "N/A"}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
+        {ocrStatus && <p className="mt-3 text-xs font-bold text-slate-600">{ocrStatus}</p>}
+        <div className="mt-4 space-y-4">
+          {ocrResults.length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">No OCR preview results yet.</p>
+          ) : (
+            Object.entries(resultsByPage).map(([pageNumber, pageResults]) => (
+              <div key={pageNumber} className="rounded-xl border border-slate-200 p-3">
+                <h4 className="text-xs font-black text-slate-800">Page {pageNumber}</h4>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {pageResults.map((result) => (
+                    <div key={result.id} className="rounded-xl bg-slate-50 p-3 text-xs">
+                      <div className="flex gap-3">
+                        {result.roiPreviewUrl && <img src={result.roiPreviewUrl} alt="" className="h-16 w-24 rounded-lg border border-slate-200 bg-white object-contain" />}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-black text-slate-900">{result.displayLabel}</div>
+                          <div className="mt-0.5 text-[10px] font-bold text-slate-500">{result.fieldName}</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <DraftStatusPill passed={Boolean(result.passed)} />
+                            <span className="rounded-full bg-slate-200 px-2 py-1 text-[10px] font-black uppercase text-slate-600">
+                              Confidence {result.confidence !== undefined ? result.confidence.toFixed(2) : "N/A"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 rounded-lg bg-white p-2 font-semibold text-slate-700">{result.ocrText || "(empty)"}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <DraftSectionHeader
+            title="3. Temporary Embedding Simulation"
+            subtitle="Run this after reviewing ROI and OCR preview. The temporary embedding is used only for this pre-publish test."
+          />
+          <button
+            type="button"
+            onClick={handleRunPrepublishSimulation}
+            disabled={simulationAction !== null}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+          >
+            {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+          {prepublishSimulationSteps.map((step, index) => {
+            const isDone = Boolean(simulation) || index < simulationStep;
+            const isCurrent = simulationAction === "run" && index === simulationStep;
+            return (
+              <div
+                key={step}
+                className={`rounded-xl border p-3 text-xs font-black ${
+                  isDone
+                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                    : isCurrent
+                      ? "border-indigo-100 bg-indigo-50 text-indigo-700"
+                      : "border-slate-100 bg-slate-50 text-slate-400"
+                }`}
+              >
+                {isDone ? <CheckCircle2 size={15} /> : isCurrent ? <Info size={15} /> : <span className="block h-[15px]" />}
+                <div className="mt-2">{step}</div>
+              </div>
+            );
+          })}
+        </div>
+        {simulation?.temporaryEmbedding && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <DraftSummaryCard label="Status" value={simulation.temporaryEmbedding.status} />
+            <DraftSummaryCard label="Model" value={simulation.temporaryEmbedding.modelName || "N/A"} />
+            <DraftSummaryCard label="Engine" value={simulation.temporaryEmbedding.engine} />
+            <DraftSummaryCard label="Dimension" value={simulation.temporaryEmbedding.embeddingDimension} />
+            <DraftSummaryCard label="Generated" value={simulation.temporaryEmbedding.generatedAt || "N/A"} />
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <DraftSectionHeader
+            title="4. Test with a New Document"
+            subtitle="Upload a different image or multi-page PDF to compare this draft temporary embedding against published templates."
+          />
+          <button
+            type="button"
+            onClick={handleRunDetectionTest}
+            disabled={!canRunDetectionTest}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+          >
+            {detectionTestAction ? "Running..." : "Run Detection Test"}
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <label className="block text-xs font-black uppercase tracking-wider text-slate-700">Test Document</label>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,application/pdf"
+              onChange={(event) => handleTestDocumentChange(event.target.files?.[0] || null)}
+              className="mt-3 block w-full text-xs font-semibold text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-xs file:font-black file:text-white"
+            />
+            {testDocumentFile && (
+              <div className="mt-3 rounded-lg bg-white p-3 text-xs font-semibold text-slate-600">
+                <div className="font-black text-slate-900">{testDocumentFile.name}</div>
+                <div className="mt-1">{Math.round(testDocumentFile.size / 1024)} KB</div>
+              </div>
+            )}
+            {testDocumentPreviewUrl ? (
+              <img src={testDocumentPreviewUrl} alt="" className="mt-3 max-h-56 w-full rounded-xl border border-slate-200 bg-white object-contain" />
+            ) : (
+              <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs font-semibold text-slate-500">
+                {testDocumentFile?.type === "application/pdf" ? "PDF selected. Preview will be generated by backend during test." : "PNG, JPEG, WebP, or PDF"}
+              </div>
+            )}
+            {!simulation?.temporaryEmbedding && (
+              <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+                Run Temporary Embedding Simulation before testing a new document.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {detectionTestError && <p className="rounded-xl bg-red-50 p-3 text-xs font-black text-red-700">{detectionTestError}</p>}
+            {!detectionTest ? (
+              <div className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">
+                No new document detection test has been run yet.
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <DraftSummaryCard label="Matched" value={detectionTest.matched ? "YES" : "NO"} />
+                  <DraftSummaryCard label="Selected Template" value={detectionTest.selectedTemplate?.templateName || detectionTest.selectedTemplate?.templateId || "N/A"} />
+                  <DraftSummaryCard label="Selected Type" value={detectionTest.selectedTemplateType || "N/A"} />
+                  <DraftSummaryCard label="Final Confidence" value={formatPrepublishScore(detectionTest.finalConfidence)} />
+                  <DraftSummaryCard label="Decision Reason" value={detectionTest.decisionReason || "N/A"} />
+                  <DraftSummaryCard label="Draft Template Rank" value={detectionTest.draftTemplateRank ?? "N/A"} />
+                  <DraftSummaryCard label="Result" value={detectionTest.passed ? "PASS" : detectionTest.warning ? "WARNING" : "FAIL"} />
+                  <DraftSummaryCard label="Score Margin" value={formatPrepublishScore(detectionTest.separationResult.scoreMargin)} />
+                </div>
+                {detectionMarginWarning && (
+                  <p className="rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+                    Draft template ranked first, but the score margin is below the separation threshold.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <DraftSectionHeader title="5. Unified Candidate Ranking" subtitle="Draft temporary embedding and published Qdrant embeddings are ranked together." />
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200 text-xs">
+            <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
+              <tr>
+                <th className="px-3 py-2 text-left">Rank</th>
+                <th className="px-3 py-2 text-left">Template Name</th>
+                <th className="px-3 py-2 text-left">Source</th>
+                <th className="px-3 py-2 text-left">Final</th>
+                <th className="px-3 py-2 text-left">Retrieval</th>
+                <th className="px-3 py-2 text-left">Verification</th>
+                <th className="px-3 py-2 text-left">Text Anchor</th>
+                <th className="px-3 py-2 text-left">Image Anchor</th>
+                <th className="px-3 py-2 text-left">Score Margin</th>
+                <th className="px-3 py-2 text-left">Decision</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {(detectionTest?.candidates || []).length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-3 py-6 text-center font-semibold text-slate-500">
+                    Run Detection Test to see unified candidates.
+                  </td>
+                </tr>
+              ) : (
+                detectionTest?.candidates.map((candidate) => (
+                  <tr key={`${candidate.templateId}-${candidate.rank}-test`} className={candidate.isCurrentDraft ? "bg-indigo-50" : undefined}>
+                    <td className="px-3 py-2 font-black text-slate-900">#{candidate.rank}</td>
+                    <td className="px-3 py-2 font-bold text-slate-800">{candidate.templateName || candidate.templateId}</td>
+                    <td className="px-3 py-2 font-semibold text-slate-600">
+                      {candidate.isCurrentDraft ? "Draft / Temporary Embedding" : candidate.sourceLabel || "Published / Qdrant Embedding"}
+                    </td>
+                    <td className="px-3 py-2 font-black text-slate-900">{formatPrepublishScore(candidate.finalScore)}</td>
+                    <td className="px-3 py-2">{formatPrepublishScore(candidate.globalScore)}</td>
+                    <td className="px-3 py-2">{formatPrepublishScore(candidate.verificationScore)}</td>
+                    <td className="px-3 py-2">{formatPrepublishScore(candidate.textAnchorScore)}</td>
+                    <td className="px-3 py-2">{formatPrepublishScore(candidate.imageAnchorScore)}</td>
+                    <td className="px-3 py-2">{formatPrepublishScore(candidate.scoreDifferenceFromTop)}</td>
+                    <td className="px-3 py-2">
+                      <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "FAIL")} />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-4 space-y-3">
+          {(detectionTest?.candidates || []).map((candidate) => {
+            const key = `${candidate.templateId}-${candidate.rank}-detail`;
+            return (
+              <DraftCandidateCard
+                key={key}
+                candidate={candidate}
+                open={Boolean(expandedDetectionCandidates[key])}
+                onToggle={() => setExpandedDetectionCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <DraftSectionHeader title="6. Top 5 Candidate Analysis" subtitle="Temporary reference-image simulation results are still shown for template separation review." />
+        <div className="mt-4 space-y-3">
+          {topCandidates.length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">Run Simulation to see candidate analysis.</p>
+          ) : (
+            topCandidates.map((candidate) => {
+              const key = `${candidate.templateId}-${candidate.rank}`;
+              return (
+                <DraftCandidateCard
+                  key={key}
+                  candidate={candidate}
+                  open={Boolean(expandedCandidates[key])}
+                  onToggle={() => setExpandedCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
+                />
+              );
+            })
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <DraftSectionHeader title="7. Verification Anchor Results" subtitle="Text anchors use OCR comparison. Image anchors use temporary image-feature similarity when available." />
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {simulation?.verificationAnchorResults && simulation.verificationAnchorResults.length > 0 ? (
+            simulation.verificationAnchorResults.map((anchor, index) => {
+              const anchorType = String(readPrepublishValue(anchor, ["anchor_type", "type", "verification_method"]) || "text");
+              const passed = Boolean(readPrepublishValue(anchor, ["passed", "final_passed"]));
+              return (
+                <div key={`anchor-result-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-black text-slate-900">{String(readPrepublishValue(anchor, ["anchor_name", "field_name", "name", "display_label"]) || `Anchor ${index + 1}`)}</div>
+                      <div className="mt-1 text-[10px] font-black uppercase text-slate-400">{anchorType}</div>
+                    </div>
+                    <DraftStatusPill passed={passed} />
+                  </div>
+                  {anchorType === "image" ? (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg bg-white p-3">
+                        <div className="text-[10px] font-black uppercase text-slate-400">Reference Preview</div>
+                        <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                      </div>
+                      <div className="rounded-lg bg-white p-3">
+                        <div className="text-[10px] font-black uppercase text-slate-400">Test Preview</div>
+                        <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <p className="rounded-lg bg-white p-3 font-semibold text-slate-700">Expected: {String(readPrepublishValue(anchor, ["expected_text", "expectedText"]) || "N/A")}</p>
+                      <p className="rounded-lg bg-white p-3 font-semibold text-slate-700">OCR: {String(readPrepublishValue(anchor, ["actual_text", "ocr_text", "actualText"]) || "N/A")}</p>
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase text-slate-500">
+                    <span className="rounded-full bg-white px-2 py-1">Similarity {formatPrepublishScore(Number(readPrepublishValue(anchor, ["similarity_score", "score", "field_score"]) || 0))}</span>
+                    <span className="rounded-full bg-white px-2 py-1">Weight {String(readPrepublishValue(anchor, ["weight", "verification_weight"]) || "N/A")}</span>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500 lg:col-span-2">Run Simulation to see verification anchor results.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <DraftSectionHeader title="8. Template Separation Analysis" subtitle="Checks whether the draft can separate itself from existing Active templates and the new test document." />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <DraftSummaryCard label="Closest Existing Template" value={simulation?.separationAnalysis.conflictTemplates[0]?.templateName || "N/A"} />
+          <DraftSummaryCard label="Similarity" value={formatPrepublishScore(simulation?.separationAnalysis.conflictTemplates[0]?.finalScore)} />
+          <DraftSummaryCard label="Score Margin" value={formatPrepublishScore(simulation?.separationAnalysis.scoreMargin)} />
+          <DraftSummaryCard label="Conflict Detection" value={(simulation?.separationAnalysis.status || "not_ready").replaceAll("_", " ")} />
+          <DraftSummaryCard label="Recommendation" value={simulation?.separationAnalysis.message || (simulationPassed ? "Ready" : "Run Simulation")} />
+        </div>
+        {detectionTest && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <DraftSummaryCard label="New Doc Draft Rank" value={detectionTest.separationResult.draftTemplateRank ?? "N/A"} />
+            <DraftSummaryCard label="Draft Final Score" value={formatPrepublishScore(detectionTest.separationResult.draftFinalScore)} />
+            <DraftSummaryCard label="Closest Published" value={detectionTest.separationResult.closestPublishedTemplate || "N/A"} />
+            <DraftSummaryCard label="Closest Published Score" value={formatPrepublishScore(detectionTest.separationResult.closestPublishedScore)} />
+            <DraftSummaryCard label="New Doc Recommendation" value={detectionTest.separationResult.recommendation || "N/A"} />
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <DraftSectionHeader title="9. Publish Readiness" subtitle="Final checklist before generating permanent embeddings and publishing." />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {[
+            ["Extraction Fields", extractionFields.length > 0 && (ocrResults.length === 0 || ocrResults.every((result) => Boolean(result.passed)))],
+            ["Verification Anchors", verificationAnchors.length > 0],
+            ["Global Retrieval", topCandidates.length > 0],
+            ["Temporary Embedding", Boolean(simulation?.temporaryEmbedding && !simulation.temporaryEmbedding.persisted)],
+            ["New Document Test", detectionTestPassed],
+            ["Template Separation", simulationPassed],
+            ["Overall", overallReady],
+          ].map(([label, passed]) => (
+            <div key={String(label)} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <span className="text-xs font-black text-slate-800">{String(label)}</span>
+              <DraftStatusPill passed={Boolean(passed)} label={Boolean(passed) ? "PASS" : "WAIT"} />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                {overallReady ? "READY TO PUBLISH" : "NOT READY"}
+              </h4>
+              <p className="mt-2 text-xs font-semibold text-slate-500">
+                Confirm generates the real global embedding, permanent image-anchor embeddings, vector-store entry, and publishes only after every operation succeeds.
+              </p>
+              {!simulationPassed && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">Run Simulation must pass before publishing.</p>}
+              {simulationPassed && !detectionTest && (
+                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+                  Run at least one New Document Detection Test before publishing.
+                </p>
+              )}
+              {detectionTest && !detectionTestPassed && (
+                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+                  Warning: the draft template did not clearly rank first in the new document test. Review the candidate ranking before publishing.
+                </p>
+              )}
+              {publishConfirmed && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-xs font-black text-emerald-700">Template published successfully.</p>}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmPublish}
+                disabled={!canConfirmPublish}
+                className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPublish}
+                disabled={!canConfirmPublish}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+              >
+                {template.status === "active" ? "Publish Template Complete" : "Publish Template"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+  );
+}
+
 function MetricList({ items, limit }: { items: ReadinessMetric[]; limit?: number }) {
   const visibleItems = limit ? items.slice(0, limit) : items;
   return (
@@ -618,7 +1458,7 @@ function MetricList({ items, limit }: { items: ReadinessMetric[]; limit?: number
   );
 }
 
-export default function AdminTemplateTestPage({ templateId }: { templateId: string }) {
+function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
   const { templates, pages: statePages, fields: stateFields, ignoreRegions: stateIgnoreRegions } = useAdminState();
   const fallbackTemplate = templates.find((item) => item.id === templateId) || null;
   const [template, setTemplate] = useState<Template | null>(fallbackTemplate);
@@ -644,6 +1484,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [latestEmbeddingJob, setLatestEmbeddingJob] = useState<EmbeddingJob | null>(null);
   const [jobAction, setJobAction] = useState<"create" | "run" | "fail" | null>(null);
   const [isPollingJob, setIsPollingJob] = useState(false);
+  const [simulation, setSimulation] = useState<PrepublishSimulationResult | null>(null);
+  const [simulationAction, setSimulationAction] = useState<"run" | "confirm" | null>(null);
+  const [simulationError, setSimulationError] = useState("");
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -754,6 +1598,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const embeddingInputPreviews = embeddingMetadata?.embedding_input_previews || [];
   const currentEmbeddingPreview =
     embeddingInputPreviews.find((preview) => preview.page_index === currentPageNumber) || embeddingInputPreviews[0] || null;
+  const canConfirmPrepublish = Boolean(
+    simulation?.separationAnalysis.simulationPassed &&
+      template?.status !== "active" &&
+      simulationAction !== "run" &&
+      simulationAction !== "confirm"
+  );
 
   const persistTemplateStatus = async (status: TemplateStatus, successMessage: string) => {
     setStatusAction(status);
@@ -830,6 +1680,44 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       setStatusError(error instanceof Error ? error.message : "Embedding job failure update failed.");
     } finally {
       setJobAction(null);
+    }
+  };
+
+  const handleRunPrepublishSimulation = async () => {
+    setSimulationAction("run");
+    setSimulationError("");
+    setStatusMessage("");
+    setStatusError("");
+    setPublishConfirmed(false);
+    try {
+      const result = await runPrepublishSimulation(templateId);
+      setSimulation(result);
+      setTemplate(result.template);
+      setStatusMessage("Pre-publish simulation completed. Review the ranking before publishing.");
+    } catch (error) {
+      console.warn("Pre-publish simulation failed.", error);
+      setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
+    } finally {
+      setSimulationAction(null);
+    }
+  };
+
+  const handleConfirmPublish = async () => {
+    setSimulationAction("confirm");
+    setSimulationError("");
+    setStatusMessage("");
+    setStatusError("");
+    try {
+      const result = await confirmTemplatePublish(templateId);
+      setLatestEmbeddingJob(result.job);
+      setTemplate(result.template);
+      setPublishConfirmed(true);
+      setStatusMessage("Real embedding generated and template published as Active.");
+    } catch (error) {
+      console.warn("Template publish failed.", error);
+      setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
+    } finally {
+      setSimulationAction(null);
     }
   };
 
@@ -915,7 +1803,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-lg font-black text-slate-900">Template Test Preview</h2>
+            <h2 className="text-lg font-black text-slate-900">Pre-Publish Template Validation</h2>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <p className="text-xs font-semibold text-slate-500">{template.name}</p>
               <span
@@ -946,190 +1834,34 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             <Link href={`/admin/templates/${templateId}/edit`} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700">
               Back to Edit Template
             </Link>
-            <button
-              type="button"
-              onClick={() => persistTemplateStatus("validated", "Template marked as validated.")}
-              disabled={!canMarkValidated || isStatusActionLoading}
-              className="rounded-xl bg-sky-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
-            >
-              {statusAction === "validated" ? "Saving..." : "Mark as Validated"}
-            </button>
-            <button
-              type="button"
-              onClick={handleCreateEmbeddingJob}
-              disabled={!canCreateEmbeddingPlaceholder || isStatusActionLoading || isJobActionLoading || isEmbeddingJobRunning}
-              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              {jobAction === "create" ? "Creating..." : "Generate Embedding"}
-            </button>
-            <button
-              type="button"
-              onClick={() => persistTemplateStatus("active", "Template marked active for the future detection pipeline.")}
-              disabled={isStatusActionLoading || template.status === "active"}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              {statusAction === "active" ? "Saving..." : "Mark Active (Dev)"}
-            </button>
-            <button type="button" disabled className="rounded-xl bg-slate-300 px-4 py-2 text-xs font-black text-slate-500">
-              Approve Disabled
-            </button>
           </div>
         </div>
       </div>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Embedding Job Status</h3>
-            {latestEmbeddingJob ? (
-              <div className="mt-2 space-y-1 text-xs font-semibold text-slate-600">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${
-                      latestEmbeddingJob.status === "completed"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : latestEmbeddingJob.status === "failed"
-                          ? "bg-red-100 text-red-700"
-                          : latestEmbeddingJob.status === "running"
-                            ? "bg-sky-100 text-sky-700"
-                            : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    {latestEmbeddingJob.status}
-                  </span>
-                  <span>Job ID: {latestEmbeddingJob.id}</span>
-                </div>
-                {isEmbeddingJobRunning && (
-                  <div className="mt-2 flex items-center gap-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 font-black text-sky-700">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-700" />
-                    Generating embedding...
-                  </div>
-                )}
-                <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                  {latestEmbeddingJob.requestedAt && <p>Requested: {latestEmbeddingJob.requestedAt}</p>}
-                  {latestEmbeddingJob.startedAt && <p>Started: {latestEmbeddingJob.startedAt}</p>}
-                  {latestEmbeddingJob.completedAt && <p>Completed: {latestEmbeddingJob.completedAt}</p>}
-                  {embeddingDuration && <p>Duration: {embeddingDuration}</p>}
-                </div>
-                {(embeddingMetadata || latestEmbeddingJob.vectorId) && (
-                  <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-[11px] font-bold text-emerald-800">
-                    <div className="font-black uppercase tracking-wider">Embedding Metadata</div>
-                    {embeddingMetadata?.engine && <p className="mt-1">Engine: {embeddingMetadata.engine}</p>}
-                    {embeddingMetadata?.version && <p>Version: {embeddingMetadata.version}</p>}
-                    {embeddingMetadata?.model_name && <p>Model: {embeddingMetadata.model_name}</p>}
-                    {embeddingMetadata?.vector_dimension !== undefined && <p>Vector Dimension: {embeddingMetadata.vector_dimension}</p>}
-                    {embeddingMetadata?.input_count !== undefined && <p>Input Count: {embeddingMetadata.input_count}</p>}
-                    {embeddingMetadata?.device && <p>Device: {embeddingMetadata.device}</p>}
-                    {embeddingMetadata?.vector_store_engine && <p>Vector Store: {embeddingMetadata.vector_store_engine}</p>}
-                    {embeddingMetadata?.vector_store_collection && <p>Collection: {embeddingMetadata.vector_store_collection}</p>}
-                    {embeddingMetadata?.vector_store_status && <p>Store Status: {embeddingMetadata.vector_store_status}</p>}
-                    {(embeddingMetadata?.page_count !== undefined || embeddingMetadata?.pages !== undefined) && (
-                      <p>Pages: {embeddingMetadata.page_count ?? embeddingMetadata.pages}</p>
-                    )}
-                    {latestEmbeddingJob.vectorId && <p>Vector ID: {latestEmbeddingJob.vectorId}</p>}
-                  </div>
-                )}
-                {latestEmbeddingJob.errorMessage && <p className="font-black text-red-700">Error: {latestEmbeddingJob.errorMessage}</p>}
-                {latestEmbeddingJob.status === "completed" && <p className="font-black text-emerald-700">Ready for detection pipeline.</p>}
-                {latestEmbeddingJob.status === "failed" && <p className="font-black text-amber-700">You can generate a new embedding job after fixing or retrying.</p>}
-              </div>
-            ) : (
-              <p className="mt-2 text-xs font-semibold text-slate-500">No embedding job has been created for this template yet.</p>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {latestEmbeddingJob?.status === "queued" && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleRunEmbeddingJobDev}
-                  disabled={!canRunEmbeddingJob}
-                  className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-black text-sky-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  {jobAction === "run" ? "Running..." : "Run Embedding (Dev)"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFailEmbeddingJobDev}
-                  disabled={!canFailEmbeddingJob}
-                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs font-black text-red-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  {jobAction === "fail" ? "Failing..." : "Fail Job (Dev)"}
-                </button>
-              </>
-            )}
-            {latestEmbeddingJob?.status === "failed" && (
-              <button
-                type="button"
-                onClick={handleCreateEmbeddingJob}
-                disabled={!canRetryEmbeddingJob}
-                className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-black text-sky-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                {jobAction === "create" ? "Retrying..." : "Retry"}
-              </button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Embedding Input Preview</h3>
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">
-              This is the image that will be sent to the future embedding model.
-            </p>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Draft Template Summary</h3>
+            <p className="mt-1 text-sm font-black text-slate-900">{simulation?.draftSummary.templateName || template.name}</p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">Template ID: {template.id}</p>
           </div>
-          {embeddingInputPreviews.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {embeddingInputPreviews.map((preview) => (
-                <button
-                  key={`embedding-preview-page-${preview.page_index}`}
-                  type="button"
-                  onClick={() => {
-                    const pageIndex = safePages.findIndex((page) => page.pageNumber === preview.page_index);
-                    if (pageIndex >= 0) setCurrentPage(pageIndex);
-                  }}
-                  className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${
-                    currentEmbeddingPreview?.page_index === preview.page_index
-                      ? "bg-emerald-600 text-white"
-                      : "border border-slate-200 bg-white text-slate-600"
-                  }`}
-                >
-                  Page {preview.page_index}
-                </button>
-              ))}
-            </div>
-          )}
+          <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
+            {simulation?.draftSummary.status || template.status}
+          </span>
         </div>
-
-        {currentEmbeddingPreview?.preview_data_url ? (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-              <img
-                src={currentEmbeddingPreview.preview_data_url}
-                alt={`Embedding input preview page ${currentEmbeddingPreview.page_index}`}
-                className="max-h-[520px] w-full object-contain"
-              />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["Pages", simulation?.draftSummary.pageCount ?? pages.length],
+            ["Extraction Fields", simulation?.draftSummary.extractionFieldCount ?? fields.filter((field) => !field.useForVerification).length],
+            ["Text Anchors", simulation?.draftSummary.textAnchorCount ?? fields.filter((field) => field.useForVerification && field.dataType !== "image").length],
+            ["Image Anchors", simulation?.draftSummary.imageAnchorCount ?? fields.filter((field) => field.useForVerification && field.dataType === "image").length],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</div>
+              <div className="mt-1 text-xl font-black text-slate-900">{value}</div>
             </div>
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">
-              <div className="font-black uppercase tracking-wider">Preview Details</div>
-              <p className="mt-2">Page: {currentEmbeddingPreview.page_index}</p>
-              {currentEmbeddingPreview.width && currentEmbeddingPreview.height && (
-                <p>
-                  Size: {currentEmbeddingPreview.width} x {currentEmbeddingPreview.height}
-                </p>
-              )}
-              <p>Ignore Regions Masked: {currentEmbeddingPreview.ignore_count ?? 0}</p>
-              {embeddingMetadata?.warning && <p className="mt-2 text-amber-700">Warning: {embeddingMetadata.warning}</p>}
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">
-            <p>Embedding preview will be available after running the embedding preparation job.</p>
-            {embeddingMetadata?.warning && <p className="mt-2 font-black text-amber-700">Warning: {embeddingMetadata.warning}</p>}
-          </div>
-        )}
+          ))}
+        </div>
       </section>
 
       {readinessDashboard && (
@@ -1433,6 +2165,80 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
               </div>
             ))
           )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4">
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Test With Unseen Document Before Publish</h3>
+          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+            Draft templates are not visible to the production detection pipeline until they are published.
+          </p>
+        </div>
+        <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-xs font-semibold text-amber-800">
+          This step is disabled for Draft templates. Use the separate Detection Lab after publishing, when the template is Active and stored in the production vector store.
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Temporary Embedding Simulation</h3>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+              Run this after ROI and OCR preview. The temporary embedding is used only for this pre-publish test.
+            </p>
+            {simulation?.temporaryEmbedding ? (
+              <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+                <p>Model: {simulation.temporaryEmbedding.modelName || "N/A"}</p>
+                <p>Engine: {simulation.temporaryEmbedding.engine}</p>
+                <p>Dimension: {simulation.temporaryEmbedding.embeddingDimension}</p>
+                <p>Generated: {simulation.temporaryEmbedding.generatedAt || "N/A"}</p>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs font-semibold text-slate-500">No simulation has been run yet.</p>
+            )}
+            {simulationError && <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-black text-red-700">{simulationError}</p>}
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleRunPrepublishSimulation}
+              disabled={simulationAction !== null}
+              className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            >
+              {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Publish Confirmation</h3>
+            <p className="mt-2 text-xs font-semibold text-slate-500">
+              Publish is enabled only after the simulation passes. Confirmation creates the real embedding, stores it in the production vector store, and marks the template Active.
+            </p>
+            {!simulation?.separationAnalysis.simulationPassed && (
+              <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+                Run Simulation must pass before publishing.
+              </p>
+            )}
+            {publishConfirmed && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-xs font-black text-emerald-700">Template published successfully.</p>}
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleConfirmPublish}
+              disabled={!canConfirmPrepublish}
+              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
+            </button>
+            <button type="button" disabled className="rounded-xl bg-slate-300 px-4 py-2 text-xs font-black text-slate-500">
+              Publish {template.status === "active" ? "Complete" : "Locked"}
+            </button>
+          </div>
         </div>
       </section>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
+import { OCRResult, ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
 
 type PageAwareRoi = ROI & { pageIndex?: number };
@@ -9,6 +9,7 @@ type PageAwareRoi = ROI & { pageIndex?: number };
 interface TemplateRequestPanelProps {
   imagesList: string[];
   rois: PageAwareRoi[];
+  ocrResults?: (OCRResult & { pageIndex?: number })[];
   isOpen: boolean;
   onClose: () => void;
 }
@@ -51,14 +52,20 @@ const loadImageSize = (src: string): Promise<ImageSize> =>
     img.src = src;
   });
 
-const toRequestedField = (roi: PageAwareRoi, renderedHeight: number, index: number): RequestedField => {
+const toRequestedField = (
+  roi: PageAwareRoi,
+  renderedHeight: number,
+  index: number,
+  fieldNameOverride?: string
+): RequestedField => {
   const pageIndex = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
   const dataType = roiTypeToDataType(roi);
   const extractionMethod = roi.extractionMethod || defaultExtractionMethodForDataType(dataType);
+  const fieldName = fieldNameOverride?.trim() || roi.fieldName || `field_${index + 1}`;
   return {
     id: `requested_field_${roi.id}`,
-    fieldName: roi.fieldName || `field_${index + 1}`,
-    displayLabel: roi.fieldName || `Field ${index + 1}`,
+    fieldName,
+    displayLabel: fieldName,
     dataType,
     extractionMethod,
     roi: {
@@ -71,7 +78,7 @@ const toRequestedField = (roi: PageAwareRoi, renderedHeight: number, index: numb
   };
 };
 
-export default function TemplateRequestPanel({ imagesList, rois, isOpen, onClose }: TemplateRequestPanelProps) {
+export default function TemplateRequestPanel({ imagesList, rois, ocrResults = [], isOpen, onClose }: TemplateRequestPanelProps) {
   const [requestTitle, setRequestTitle] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [userNote, setUserNote] = useState("");
@@ -96,7 +103,11 @@ export default function TemplateRequestPanel({ imagesList, rois, isOpen, onClose
       const pageIndex = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
       const imageSize = imageSizes[pageIndex] || imageSizes[0] || { width: WORKSPACE_RENDERED_WIDTH, height: WORKSPACE_RENDERED_WIDTH };
       const renderedHeight = imageSize.width > 0 ? (imageSize.height / imageSize.width) * WORKSPACE_RENDERED_WIDTH : WORKSPACE_RENDERED_WIDTH;
-      return toRequestedField(roi, renderedHeight, index);
+      const resultByRoiId = ocrResults.find((result) => result.roiId === roi.id);
+      const resultByPageOrder = ocrResults.filter((result) => (result.pageIndex !== undefined ? Number(result.pageIndex) : 0) === pageIndex)[
+        enabledRois.filter((item) => (item.pageIndex !== undefined ? Number(item.pageIndex) : 0) === pageIndex).findIndex((item) => item.id === roi.id)
+      ];
+      return toRequestedField(roi, renderedHeight, index, resultByRoiId?.fieldName || resultByPageOrder?.fieldName);
     });
   };
 

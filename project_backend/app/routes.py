@@ -355,6 +355,32 @@ def test_template(template_id: str, payload: TemplateTestRequest) -> ApiResponse
     return ok(admin_templates.test_template(template_id, payload))
 
 
+@router.post("/admin/templates/{template_id}/test-extraction", response_model=ApiResponse)
+def test_template_extraction_fields(template_id: str) -> ApiResponse:
+    return ok(admin_templates.test_extraction_fields(template_id))
+
+
+@router.post("/admin/templates/{template_id}/test-verification", response_model=ApiResponse)
+def test_template_verification_anchors(template_id: str) -> ApiResponse:
+    return ok(admin_templates.test_verification_anchors(template_id))
+
+
+@router.post("/admin/templates/{template_id}/prepublish-simulation", response_model=ApiResponse)
+def run_template_prepublish_simulation(template_id: str) -> ApiResponse:
+    return ok(admin_templates.run_prepublish_simulation(template_id))
+
+
+@router.post("/admin/templates/{template_id}/prepublish-detection-test", response_model=ApiResponse)
+async def run_template_prepublish_detection_test(template_id: str, request: Request) -> ApiResponse:
+    file_bytes = await _read_dev_detection_image(request)
+    return ok(admin_templates.run_prepublish_detection_test(template_id, file_bytes))
+
+
+@router.post("/admin/templates/{template_id}/confirm-publish", response_model=ApiResponse)
+def confirm_template_publish(template_id: str) -> ApiResponse:
+    return ok(admin_templates.confirm_publish_template(template_id))
+
+
 @router.post("/admin/templates/{template_id}/approve", response_model=ApiResponse)
 def approve_template(template_id: str) -> ApiResponse:
     return ok(admin_templates.approve_template(template_id))

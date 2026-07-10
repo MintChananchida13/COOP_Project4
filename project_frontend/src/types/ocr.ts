@@ -21,6 +21,7 @@ export interface ROI {
 
 export interface OCRResult {
   id: number;
+  roiId?: number;
   fieldName: string;
   bbox: number[];
   extractedText: string;
@@ -68,6 +69,7 @@ export type TemplateStatus =
   | 'validated'
   | 'embedding_pending'
   | 'active'
+  | 'nonactive'
   | 'pending_review'
   | 'embedding_generated'
   | 'testing'
@@ -86,6 +88,7 @@ export interface Template {
   similarityThreshold: number;
   finalConfidenceThreshold: number;
   rejectionReason?: string;
+  previewImageUrl?: string;
 }
 
 export interface TemplatePage {
@@ -117,6 +120,7 @@ export interface TemplateField {
   requiredForVerification: boolean;
   extractionMethod: string;
   roiPadding?: number;
+  verificationWeight?: number;
   sortOrder: number;
 }
 

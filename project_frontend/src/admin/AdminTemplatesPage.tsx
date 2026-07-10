@@ -2,11 +2,17 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Template, TemplateStatus } from "../types/ocr";
-import { templateStatuses } from "./adminMockData";
+import { Template } from "../types/ocr";
 import { deleteTemplateApi, fetchTemplates } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
 import { useAdminState } from "./AdminState";
+
+const statusFilterOptions: { value: AdminStatusFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "draft", label: "Draft" },
+  { value: "active", label: "Active" },
+  { value: "nonactive", label: "Nonactive" },
+];
 
 export default function AdminTemplatesPage() {
   const { templates: fallbackTemplates } = useAdminState();
@@ -42,7 +48,19 @@ export default function AdminTemplatesPage() {
     };
   }, [fallbackTemplates]);
 
-  const filteredTemplates = selectedStatus === "all" ? templates : templates.filter((template) => template.status === selectedStatus);
+  const filteredTemplates = templates.filter((template) => {
+    if (selectedStatus === "all") return true;
+    if (selectedStatus === "draft") return template.status === "draft";
+    if (selectedStatus === "active") return template.status === "active";
+    return template.status !== "draft" && template.status !== "active";
+  });
+
+  const statusCounts: Record<AdminStatusFilter, number> = {
+    all: templates.length,
+    draft: templates.filter((template) => template.status === "draft").length,
+    active: templates.filter((template) => template.status === "active").length,
+    nonactive: templates.filter((template) => template.status !== "draft" && template.status !== "active").length,
+  };
 
   const handleDeleteTemplate = async (template: Template) => {
     if (loadStatus !== "loaded") {
@@ -73,13 +91,24 @@ export default function AdminTemplatesPage() {
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Templates</h2>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => setSelectedStatus("all")} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${selectedStatus === "all" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
-            all
-          </button>
-          {templateStatuses.map((status: TemplateStatus) => (
-            <button key={status} type="button" onClick={() => setSelectedStatus(status)} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${selectedStatus === status ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
-              {status}
+        <div className="grid w-full gap-2 sm:grid-cols-4 lg:w-auto lg:min-w-[520px]">
+          {statusFilterOptions.map((status) => (
+            <button
+              key={status.value}
+              type="button"
+              onClick={() => setSelectedStatus(status.value)}
+              className={`inline-flex h-10 items-center justify-between rounded-xl border px-3 text-xs font-black transition-colors ${
+                selectedStatus === status.value
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <span>{status.label}</span>
+              <span className={`ml-2 inline-flex min-w-6 justify-center rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                selectedStatus === status.value ? "bg-white/20 text-white" : "bg-white text-slate-500"
+              }`}>
+                {statusCounts[status.value]}
+              </span>
             </button>
           ))}
         </div>

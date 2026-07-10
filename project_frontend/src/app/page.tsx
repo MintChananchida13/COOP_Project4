@@ -109,7 +109,7 @@ export default function Home() {
   const [ocrResults, setOcrResults] = useState<(OCRResult & { pageIndex?: number })[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
-  const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number } | null>(null);
+  const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
 
   const handleUploadSuccess = (urls: string[]) => {
     setImagesList(urls);
@@ -172,18 +172,19 @@ export default function Home() {
 
     setIsLoading(true);
     setOcrResults([]);
-    setOcrProgress({ currentPage: 0, totalPages: imagesList.length });
+    setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
     try {
       const combinedResults: (OCRResult & { pageIndex?: number })[] = [];
 
       for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
-        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length });
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
         const pageRois = rois.filter(
           (roi) => roi.enabled !== false && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
         );
 
         if (pageRois.length === 0) {
+          setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
           continue;
         }
 
@@ -228,6 +229,7 @@ export default function Home() {
               const resItem = aiData.extracted_data[0];
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
+                roiId: roi.id,
                 fieldName: resItem.fieldName,
                 bbox: [],
                 extractedText: resItem.text,
@@ -250,6 +252,7 @@ export default function Home() {
 
         const roiResults = await Promise.all(roiPromises);
         combinedResults.push(...(roiResults.filter((r) => r !== null) as (OCRResult & { pageIndex?: number })[]));
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
       }
 
       if (combinedResults.length > 0) {
@@ -271,14 +274,14 @@ export default function Home() {
   const handleRunFullPageOCR = async () => {
     setIsLoading(true);
     setOcrResults([]);
-    setOcrProgress({ currentPage: 0, totalPages: imagesList.length });
+    setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
     try {
       const allRoisFromOcr: (ROI & { pageIndex?: number })[] = [];
       const allOcrResults: (OCRResult & { pageIndex?: number })[] = [];
 
       for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
-        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length });
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
 
         const currentImgUrl = imagesList[pageIdx];
         const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -304,8 +307,13 @@ export default function Home() {
 
         const aiData = await response.json();
         if (!aiData.success || aiData.extracted_data.length === 0) {
+          setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
           continue;
         }
+
+        const generatedRoiIds = aiData.extracted_data.map((_: any, idx: number) =>
+          Date.now() + pageIdx * 100000 + idx + Math.floor(Math.random() * 1000000)
+        );
 
         const pageRoisFromOcr: (ROI & { pageIndex?: number })[] = aiData.extracted_data.map((item: any, idx: number) => {
           const rx = item.x / scaleX;
@@ -321,7 +329,7 @@ export default function Home() {
             : undefined;
 
           return {
-            id: Date.now() + pageIdx * 100000 + idx + Math.floor(Math.random() * 1000000),
+            id: generatedRoiIds[idx],
             fieldName: item.fieldName || `line_${idx + 1}`,
             x: rx,
             y: ry,
@@ -345,6 +353,7 @@ export default function Home() {
 
           return {
             id: Date.now() + pageIdx * 100000 + idx + 1000000 + Math.floor(Math.random() * 1000000),
+            roiId: generatedRoiIds[idx],
             fieldName: item.fieldName || `line_${idx + 1}`,
             bbox: [],
             extractedText: item.text,
@@ -361,6 +370,7 @@ export default function Home() {
 
         allRoisFromOcr.push(...pageRoisFromOcr);
         allOcrResults.push(...pageOcrResults);
+        setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
       }
 
       if (allOcrResults.length > 0) {
@@ -541,6 +551,7 @@ export default function Home() {
             <TemplateRequestPanel
               imagesList={imagesList}
               rois={rois}
+              ocrResults={ocrResults}
               isOpen={isTemplateRequestOpen}
               onClose={() => setIsTemplateRequestOpen(false)}
             />

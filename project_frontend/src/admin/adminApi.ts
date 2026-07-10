@@ -72,6 +72,7 @@ interface ApiTemplateField {
   required_for_verification: boolean;
   extraction_method: string;
   roi_padding?: number | null;
+  verification_weight?: number | null;
   sort_order: number;
 }
 
@@ -138,6 +139,8 @@ export interface DetectionCandidate {
   score: number;
   retrievalScore?: number | null;
   verificationScore?: number | null;
+  textAnchorScore?: number | null;
+  imageAnchorScore?: number | null;
   verificationPassed?: boolean | null;
   finalScore?: number | null;
   finalPassed?: boolean | null;
@@ -200,6 +203,124 @@ export interface DetectionDevResult {
   debug?: Record<string, unknown>;
 }
 
+export interface PrepublishCandidate {
+  rank: number;
+  templateId: string;
+  templateName?: string | null;
+  templateStatus?: string | null;
+  vectorId?: string | null;
+  globalScore: number;
+  textAnchorScore: number;
+  imageAnchorScore: number;
+  verificationScore: number;
+  finalScore: number;
+  alignmentStatus: string;
+  decision: string;
+  finalPassed: boolean;
+  isCurrentDraft?: boolean;
+  source?: "draft" | "published" | string;
+  sourceLabel?: string | null;
+  scoreDifferenceFromTop: number;
+  pageCount?: number | null;
+  fieldCount?: number | null;
+  verification?: Record<string, unknown>;
+  verificationDetails?: Record<string, unknown>[];
+}
+
+export interface PrepublishSimulationResult {
+  template: Template;
+  draftSummary: {
+    templateName?: string | null;
+    templateId: string;
+    status: string;
+    pageCount: number;
+    extractionFieldCount: number;
+    textAnchorCount: number;
+    imageAnchorCount: number;
+    similarityThreshold?: number | null;
+    finalConfidenceThreshold?: number | null;
+  };
+  temporaryEmbedding: {
+    status: string;
+    engine: string;
+    version: string;
+    modelName: string;
+    embeddingDimension: number;
+    inputCount: number;
+    generatedAt?: string;
+    persisted: boolean;
+    note?: string;
+  };
+  candidates: PrepublishCandidate[];
+  verificationAnchorResults: Record<string, unknown>[];
+  separationAnalysis: {
+    top1Score: number;
+    top2Score?: number | null;
+    scoreMargin: number;
+    status: "ready_to_publish" | "needs_review" | "conflict_detected" | "not_ready" | string;
+    simulationPassed: boolean;
+    conflictTemplates: PrepublishCandidate[];
+    message?: string;
+  };
+}
+
+export interface PrepublishDetectionTestResult {
+  testId: string;
+  templateId: string;
+  matched: boolean;
+  selectedTemplate?: PrepublishCandidate | null;
+  selectedTemplateType?: string | null;
+  finalConfidence: number;
+  decisionReason?: string | null;
+  draftTemplateRank?: number | null;
+  passed: boolean;
+  warning: boolean;
+  candidates: PrepublishCandidate[];
+  separationResult: {
+    draftTemplateRank?: number | null;
+    draftFinalScore: number;
+    closestPublishedTemplate?: string | null;
+    closestPublishedScore?: number | null;
+    scoreMargin: number;
+    conflictLevel: string;
+    recommendation: string;
+    separationThreshold: number;
+  };
+  debug?: Record<string, unknown>;
+}
+
+export interface TemplateStepTestItem {
+  fieldId?: string;
+  anchorId?: string;
+  fieldName?: string | null;
+  displayLabel?: string | null;
+  pageNumber?: number | null;
+  extractionMethod?: string | null;
+  ocrText?: string | null;
+  actualText?: string | null;
+  expectedText?: string | null;
+  confidence?: number | null;
+  score?: number | null;
+  fieldScore?: number | null;
+  passed: boolean;
+  status?: string | null;
+  failureReason?: string | null;
+  anchorType?: string | null;
+  verificationMethod?: string | null;
+}
+
+export interface TemplateStepTestResult {
+  templateId: string;
+  status: string;
+  passed?: boolean;
+  score?: number | null;
+  testedCount: number;
+  passedCount: number;
+  failedCount: number;
+  fields?: TemplateStepTestItem[];
+  anchors?: TemplateStepTestItem[];
+}
+
 export interface ApiTemplateRequest {
   id: string;
   request_title: string;
@@ -230,6 +351,7 @@ const mapTemplateStatus = (status: string): TemplateStatus => {
     status === "validated" ||
     status === "embedding_pending" ||
     status === "active" ||
+    status === "nonactive" ||
     status === "pending_review" ||
     status === "embedding_generated" ||
     status === "testing" ||
@@ -321,6 +443,8 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   score: typeof candidate.score === "number" ? candidate.score : 0,
   retrievalScore: typeof candidate.retrieval_score === "number" ? candidate.retrieval_score : null,
   verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
+  textAnchorScore: typeof candidate.text_anchor_score === "number" ? candidate.text_anchor_score : null,
+  imageAnchorScore: typeof candidate.image_anchor_score === "number" ? candidate.image_anchor_score : null,
   verificationPassed: typeof candidate.verification_passed === "boolean" ? candidate.verification_passed : null,
   finalScore: typeof candidate.final_score === "number" ? candidate.final_score : null,
   finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
@@ -414,6 +538,7 @@ const mapApiTemplateField = (field: ApiTemplateField): TemplateField => ({
   requiredForVerification: field.required_for_verification,
   extractionMethod: normalizeExtractionMethod(field.extraction_method),
   roiPadding: field.roi_padding ?? undefined,
+  verificationWeight: field.verification_weight ?? undefined,
   sortOrder: field.sort_order,
 });
 
@@ -721,6 +846,195 @@ export const detectTemplateDev = async (file: File): Promise<DetectionDevResult>
   };
 };
 
+const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishCandidate => ({
+  rank: Number(candidate.rank || 0),
+  templateId: String(candidate.template_id || ""),
+  templateName: (candidate.template_name as string | null | undefined) ?? null,
+  templateStatus: (candidate.template_status as string | null | undefined) ?? null,
+  vectorId: (candidate.vector_id as string | null | undefined) ?? null,
+  globalScore: Number(candidate.global_score || 0),
+  textAnchorScore: Number(candidate.text_anchor_score || 0),
+  imageAnchorScore: Number(candidate.image_anchor_score || 0),
+  verificationScore: Number(candidate.verification_score || 0),
+  finalScore: Number(candidate.final_score || 0),
+  alignmentStatus: String(candidate.alignment_status || "skipped"),
+  decision: String(candidate.decision || ""),
+  finalPassed: Boolean(candidate.final_passed),
+  isCurrentDraft: Boolean(candidate.is_current_draft),
+  source: (candidate.source as string | undefined) || (candidate.is_current_draft ? "draft" : "published"),
+  sourceLabel: (candidate.source_label as string | null | undefined) ?? null,
+  scoreDifferenceFromTop: Number(candidate.score_difference_from_top || 0),
+  pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
+  fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
+  verification: (candidate.verification as Record<string, unknown> | undefined) || {},
+  verificationDetails: Array.isArray(candidate.verification_details)
+    ? (candidate.verification_details as Record<string, unknown>[])
+    : [],
+});
+
+export const runPrepublishSimulation = async (templateId: string): Promise<PrepublishSimulationResult> => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-simulation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Pre-publish simulation failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Pre-publish simulation failed with ${response.status}`);
+  }
+
+  const data = json?.data as Record<string, unknown>;
+  const summary = (data?.draft_summary as Record<string, unknown> | undefined) || {};
+  const temp = (data?.temporary_embedding as Record<string, unknown> | undefined) || {};
+  const separation = (data?.separation_analysis as Record<string, unknown> | undefined) || {};
+  const candidates = Array.isArray(data?.candidates)
+    ? (data.candidates as Record<string, unknown>[]).map(mapPrepublishCandidate)
+    : [];
+  const conflictTemplates = Array.isArray(separation.conflict_templates)
+    ? (separation.conflict_templates as Record<string, unknown>[]).map(mapPrepublishCandidate)
+    : [];
+
+  return {
+    template: mapApiTemplate(data.template as ApiTemplate),
+    draftSummary: {
+      templateName: (summary.template_name as string | null | undefined) ?? null,
+      templateId: String(summary.template_id || templateId),
+      status: String(summary.status || "draft"),
+      pageCount: Number(summary.page_count || 0),
+      extractionFieldCount: Number(summary.extraction_field_count || 0),
+      textAnchorCount: Number(summary.text_anchor_count || 0),
+      imageAnchorCount: Number(summary.image_anchor_count || 0),
+      similarityThreshold: typeof summary.similarity_threshold === "number" ? summary.similarity_threshold : null,
+      finalConfidenceThreshold: typeof summary.final_confidence_threshold === "number" ? summary.final_confidence_threshold : null,
+    },
+    temporaryEmbedding: {
+      status: String(temp.status || "not_generated"),
+      engine: String(temp.engine || "stub"),
+      version: String(temp.version || ""),
+      modelName: String(temp.model_name || ""),
+      embeddingDimension: Number(temp.embedding_dimension || 0),
+      inputCount: Number(temp.input_count || 0),
+      generatedAt: (temp.generated_at as string | undefined) || undefined,
+      persisted: Boolean(temp.persisted),
+      note: (temp.note as string | undefined) || undefined,
+    },
+    candidates,
+    verificationAnchorResults: Array.isArray(data?.verification_anchor_results)
+      ? (data.verification_anchor_results as Record<string, unknown>[])
+      : [],
+    separationAnalysis: {
+      top1Score: Number(separation.top1_score || 0),
+      top2Score: typeof separation.top2_score === "number" ? separation.top2_score : null,
+      scoreMargin: Number(separation.score_margin || 0),
+      status: String(separation.status || "not_ready"),
+      simulationPassed: Boolean(separation.simulation_passed),
+      conflictTemplates,
+      message: (separation.message as string | undefined) || undefined,
+    },
+  };
+};
+
+export const runPrepublishDetectionTest = async (templateId: string, file: File): Promise<PrepublishDetectionTestResult> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-detection-test`, {
+    method: "POST",
+    body: formData,
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Pre-publish detection test failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Pre-publish detection test failed with ${response.status}`);
+  }
+
+  const data = (json?.data as Record<string, unknown> | undefined) || {};
+  const candidates = Array.isArray(data.candidates)
+    ? (data.candidates as Record<string, unknown>[]).map(mapPrepublishCandidate)
+    : [];
+  const separation = (data.separation_result as Record<string, unknown> | undefined) || {};
+  return {
+    testId: String(data.test_id || ""),
+    templateId: String(data.template_id || templateId),
+    matched: Boolean(data.matched),
+    selectedTemplate: data.selected_template ? mapPrepublishCandidate(data.selected_template as Record<string, unknown>) : null,
+    selectedTemplateType: (data.selected_template_type as string | null | undefined) ?? null,
+    finalConfidence: Number(data.final_confidence || 0),
+    decisionReason: (data.decision_reason as string | null | undefined) ?? null,
+    draftTemplateRank: typeof data.draft_template_rank === "number" ? data.draft_template_rank : null,
+    passed: Boolean(data.passed),
+    warning: Boolean(data.warning),
+    candidates,
+    separationResult: {
+      draftTemplateRank: typeof separation.draft_template_rank === "number" ? separation.draft_template_rank : null,
+      draftFinalScore: Number(separation.draft_final_score || 0),
+      closestPublishedTemplate: (separation.closest_published_template as string | null | undefined) ?? null,
+      closestPublishedScore: typeof separation.closest_published_score === "number" ? separation.closest_published_score : null,
+      scoreMargin: Number(separation.score_margin || 0),
+      conflictLevel: String(separation.conflict_level || "not_ready"),
+      recommendation: String(separation.recommendation || ""),
+      separationThreshold: Number(separation.separation_threshold || 0.05),
+    },
+    debug: (data.debug as Record<string, unknown> | undefined) || {},
+  };
+};
+
+export const confirmTemplatePublish = async (templateId: string) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/confirm-publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return mapEmbeddingJobMutationResponse(response);
+};
+
+const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTestItem => ({
+  fieldId: (item.field_id as string | undefined) || undefined,
+  anchorId: (item.anchor_id as string | undefined) || undefined,
+  fieldName: (item.field_name as string | null | undefined) ?? null,
+  displayLabel: (item.display_label as string | null | undefined) ?? null,
+  pageNumber: typeof item.page_number === "number" ? item.page_number : null,
+  extractionMethod: (item.extraction_method as string | null | undefined) ?? null,
+  ocrText: (item.ocr_text as string | null | undefined) ?? null,
+  actualText: (item.actual_text as string | null | undefined) ?? null,
+  expectedText: (item.expected_text as string | null | undefined) ?? null,
+  confidence: typeof item.confidence === "number" ? item.confidence : typeof item.ocr_confidence === "number" ? item.ocr_confidence : null,
+  score: typeof item.score === "number" ? item.score : null,
+  fieldScore: typeof item.field_score === "number" ? item.field_score : null,
+  passed: Boolean(item.passed),
+  status: (item.status as string | null | undefined) ?? null,
+  failureReason: (item.failure_reason as string | null | undefined) ?? null,
+  anchorType: (item.anchor_type as string | null | undefined) ?? null,
+  verificationMethod: (item.verification_method as string | null | undefined) ?? null,
+});
+
+const mapTemplateStepTestResult = (data: Record<string, unknown>): TemplateStepTestResult => ({
+  templateId: String(data.template_id || ""),
+  status: String(data.status || ""),
+  passed: typeof data.passed === "boolean" ? data.passed : undefined,
+  score: typeof data.score === "number" ? data.score : null,
+  testedCount: Number(data.tested_count || 0),
+  passedCount: Number(data.passed_count || 0),
+  failedCount: Number(data.failed_count || 0),
+  fields: Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
+  anchors: Array.isArray(data.anchors) ? (data.anchors as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
+});
+
+const runTemplateStepTest = async (templateId: string, path: "test-extraction" | "test-verification") => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Template step test failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Template step test failed with ${response.status}`);
+  }
+  return mapTemplateStepTestResult((json?.data as Record<string, unknown> | undefined) || {});
+};
+
+export const testTemplateExtractionFields = (templateId: string) => runTemplateStepTest(templateId, "test-extraction");
+
+export const testTemplateVerificationAnchors = (templateId: string) => runTemplateStepTest(templateId, "test-verification");
+
 export const createTemplatePageApi = async (templateId: string, pageNumber: number, sampleImageUrl?: string) =>
   mapTemplateBundleResponse(
     await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages`, {
@@ -784,6 +1098,7 @@ const fieldToApiPayload = (
   required_for_verification: field.requiredForVerification ?? false,
   extraction_method: normalizeExtractionMethod(field.extractionMethod),
   roi_padding: field.roiPadding ?? 0,
+  verification_weight: field.verificationWeight ?? 1,
   sort_order: field.sortOrder ?? 0,
 });
 
@@ -815,6 +1130,7 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
     required_for_verification: patch.requiredForVerification,
     extraction_method: patch.extractionMethod ? normalizeExtractionMethod(patch.extractionMethod) : undefined,
     roi_padding: patch.roiPadding,
+    verification_weight: patch.verificationWeight,
     sort_order: patch.sortOrder,
   };
 

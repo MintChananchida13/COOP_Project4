@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2 } from 'lucide-react';
+import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2, Loader2, ScanSearch } from 'lucide-react';
 import { Rnd } from "react-rnd";
 import { ROI } from '../../types/ocr';
 import { WorkspaceImageMetrics } from './roiGeometry';
@@ -17,6 +17,16 @@ const roiTypePatch = (type: 'text' | 'table' | 'image'): Partial<ROI> => ({
   dataType: type,
   extractionMethod: type === 'table' ? 'ocr_table' : type === 'image' ? 'extract_image' : 'ocr_text',
 });
+
+interface OcrDetectedLine {
+  fieldName?: string;
+  text?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  bbox?: [number, number][];
+}
 
 export interface WorkspaceCustomEditorProps {
   previewUrl: string;
@@ -36,6 +46,7 @@ export interface WorkspaceCustomEditorProps {
   ocrProgress?: {
     currentPage: number;
     totalPages: number;
+    completedPages?: number;
   } | null;
   currentIndex: number;
   imagesList: string[]; 
@@ -47,6 +58,8 @@ export interface WorkspaceCustomEditorProps {
   hideFooter?: boolean;
   workspaceHeightClassName?: string;
   rootClassName?: string;
+  centerCanvas?: boolean;
+  imageFrameClassName?: string;
   rightPanelRenderer?: (api: {
     currentPageRois: (ROI & { pageIndex?: number })[];
     selectedId: number | null;
@@ -58,6 +71,7 @@ export interface WorkspaceCustomEditorProps {
   toolbarExtra?: React.ReactNode;
   getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
+  getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
   onImageMetricsChange?: (metrics: WorkspaceImageMetrics) => void;
 }
 
@@ -83,10 +97,13 @@ export default function WorkspaceCustomEditor({
   hideFooter = false,
   workspaceHeightClassName = "h-[620px]",
   rootClassName = "max-w-7xl mx-auto space-y-6 pb-20",
+  centerCanvas = false,
+  imageFrameClassName = "w-[750px]",
   rightPanelRenderer,
   toolbarExtra,
   getRoiClassName,
   getRoiLabelClassName,
+  getRoiBadges,
   onImageMetricsChange,
 }: WorkspaceCustomEditorProps) {
   const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly ? 'pan' : 'box');
@@ -116,8 +133,8 @@ export default function WorkspaceCustomEditor({
   const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
   const [zoomIndex, setZoomIndex] = useState<number>(2); 
   const currentZoom = ZOOM_STEPS[zoomIndex];
-  const [displayProgress, setDisplayProgress] = useState(0);
-  const [ocrDone, setOcrDone] = useState(false);
+  const [isAutoDetectingRoi, setIsAutoDetectingRoi] = useState(false);
+  const [autoDetectMessage, setAutoDetectMessage] = useState("");
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ scrollLeft: 0, scrollTop: 0, clientX: 0, clientY: 0 });
@@ -256,34 +273,6 @@ export default function WorkspaceCustomEditor({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [onImageMetricsChange, reportImageMetrics]);
-
-  useEffect(() => {
-  if (!isLoading || !ocrProgress) {
-    setDisplayProgress(0);
-    return;
-  }
-
-  const target = Math.min(
-    100,
-    Math.round(
-      (ocrProgress.currentPage / Math.max(ocrProgress.totalPages, 1)) * 100
-    )
-  );
-
-  const timer = window.setInterval(() => {
-    setDisplayProgress((prev) => {
-      if (prev >= target) {
-        window.clearInterval(timer);
-        return target;
-      }
-
-      return Math.min(prev + 1, target);
-    });
-  }, 50);
-
-  return () => window.clearInterval(timer);
-}, [isLoading, ocrProgress?.currentPage, ocrProgress?.totalPages]);
-
 
   const currentPageRois = useMemo(() => {
     return rois.filter(roi => {
@@ -576,35 +565,109 @@ export default function WorkspaceCustomEditor({
   const triggerOCRProcessing = () => {
     if (!imageRef.current) return;
 
-    setDisplayProgress(0);
-    setOcrDone(false);
-
     const scaleX = imageRef.current.naturalWidth / imageRef.current.clientWidth;
     const scaleY = imageRef.current.naturalHeight / imageRef.current.clientHeight;
 
     onRunOCR(scaleX, scaleY);
   };
 
-  useEffect(() => {
-  if (!isLoading) {
-    if (ocrDone) {
-      setDisplayProgress(100);
+  const ocrLineToWorkspaceRoi = (line: OcrDetectedLine, index: number): (ROI & { pageIndex?: number }) | null => {
+    if (!imageRef.current) return null;
+
+    let x = Number(line.x);
+    let y = Number(line.y);
+    let width = Number(line.width);
+    let height = Number(line.height);
+
+    if ((!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) && line.bbox?.length) {
+      const xs = line.bbox.map((point) => Number(point[0])).filter(Number.isFinite);
+      const ys = line.bbox.map((point) => Number(point[1])).filter(Number.isFinite);
+      if (xs.length && ys.length) {
+        x = Math.min(...xs);
+        y = Math.min(...ys);
+        width = Math.max(...xs) - x;
+        height = Math.max(...ys) - y;
+      }
     }
-    return;
-  }
 
-  const timer = window.setInterval(() => {
-    setDisplayProgress((prev) => {
-      if (prev < 70) return prev + 1;
-      if (prev < 90) return prev + 0.4;
-      if (prev < 95) return prev + 0.1;
-      return prev;
-    });
-  }, 350);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
 
-  return () => window.clearInterval(timer);
-}, [isLoading, ocrDone]);
+    const scaleX = imageRef.current.clientWidth / Math.max(imageRef.current.naturalWidth, 1);
+    const scaleY = imageRef.current.clientHeight / Math.max(imageRef.current.naturalHeight, 1);
+    const displayWidth = width * scaleX;
+    const displayHeight = height * scaleY;
 
+    if (displayWidth < 4 || displayHeight < 4) return null;
+
+    const fieldNumber = rois.length + index + 1;
+
+    return {
+      id: Date.now() + currentIndex * 100000 + index + Math.floor(Math.random() * 1000000),
+      fieldName: `field_${fieldNumber}`,
+      x: x * scaleX,
+      y: y * scaleY,
+      width: displayWidth,
+      height: displayHeight,
+      pageIndex: currentIndex,
+      type: "text",
+      dataType: "text",
+      extractionMethod: "ocr_text",
+      role: "data_extraction",
+      enabled: true,
+    };
+  };
+
+  const handleAutoDetectRoi = async () => {
+    if (!previewUrl || isAutoDetectingRoi) return;
+
+    setIsAutoDetectingRoi(true);
+    setAutoDetectMessage("");
+
+    try {
+      if (!imageRef.current?.complete) {
+        await new Promise<void>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve();
+          image.onerror = () => reject(new Error("Cannot load current page image."));
+          image.src = previewUrl;
+        });
+      }
+
+      const response = await fetch("http://localhost:8000/api/ai/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: previewUrl,
+          rois: [],
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.detail || result?.error || "Auto ROI detection failed.");
+      }
+
+      const detectedLines = (result.extracted_data || []) as OcrDetectedLine[];
+      const detectedRois = detectedLines
+        .map((line, index) => ocrLineToWorkspaceRoi(line, index))
+        .filter((roi): roi is ROI & { pageIndex?: number } => roi !== null);
+
+      if (detectedRois.length === 0) {
+        setAutoDetectMessage("OCR did not find usable regions on this page.");
+        return;
+      }
+
+      setRois((prev) => [...prev, ...detectedRois]);
+      setSelectedId(detectedRois[0].id);
+      setActiveTool("box");
+      setAutoDetectMessage(`Created ${detectedRois.length} ROI field${detectedRois.length === 1 ? "" : "s"} on this page.`);
+    } catch (error) {
+      console.error("Auto ROI detection failed.", error);
+      setAutoDetectMessage(error instanceof Error ? error.message : "Auto ROI detection failed.");
+    } finally {
+      setIsAutoDetectingRoi(false);
+    }
+  };
   return (
     <div className={rootClassName}>
       
@@ -771,7 +834,7 @@ export default function WorkspaceCustomEditor({
         {/* Center document canvas */}
         <div 
           ref={viewportRef} 
-          className="min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex items-start justify-start p-6 shadow-inner h-full relative"
+          className={`min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner h-full relative`}
         >
           <div 
             ref={containerRef}
@@ -787,7 +850,7 @@ export default function WorkspaceCustomEditor({
             onMouseLeave={handleMouseUp}
             onDoubleClick={handleDoubleClick}
           >
-            <div className="relative w-[750px] h-auto bg-transparent">
+            <div className={`relative ${imageFrameClassName} h-auto bg-transparent`}>
               {previewUrl && (
                 <img 
                   ref={imageRef}
@@ -835,6 +898,7 @@ export default function WorkspaceCustomEditor({
                   const hasPoints = roi.points && roi.points.length > 0;
                   const selected = selectedId === roi.id;
                   const customRoiClassName = getRoiClassName?.(roi, selected, activeTool);
+                  const roiBadges = getRoiBadges?.(roi) || [];
                   return (
                     <Rnd
                       key={`${roi.type || "roi"}-${roi.pageIndex ?? currentIndex}-${roi.id}-${index}`}
@@ -868,6 +932,21 @@ export default function WorkspaceCustomEditor({
                               strokeDasharray={selectedId === roi.id ? "0" : "3,3"}
                             />
                           </svg>
+                        )}
+
+                        {roiBadges.length > 0 && (
+                          <div className="absolute left-1 top-1 z-20 flex flex-wrap gap-1 pointer-events-none">
+                            {roiBadges.map((badge) => (
+                              <span
+                                key={badge}
+                                className={`rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide shadow-sm ${
+                                  badge === "ANCHOR" ? "bg-amber-500 text-white" : "bg-sky-600 text-white"
+                                }`}
+                              >
+                                {badge}
+                              </span>
+                            ))}
+                          </div>
                         )}
 
                         {showLabels && (
@@ -973,6 +1052,31 @@ export default function WorkspaceCustomEditor({
               >
                 <ArrowLeft size={14} /> กลับไปหน้าปรับภาพ
               </button>
+
+              {!hideOcrActions && (
+                <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Auto ROI</h3>
+                  <button
+                    type="button"
+                    disabled={isLoading || isAutoDetectingRoi || !previewUrl}
+                    onClick={handleAutoDetectRoi}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    {isAutoDetectingRoi ? <Loader2 size={13} className="animate-spin" /> : <ScanSearch size={13} />}
+                    {isAutoDetectingRoi ? "Detecting ROI..." : "ตีกรอบ ROI อัตโนมัติ"}
+                  </button>
+                  <p className="text-[10px] font-semibold leading-relaxed text-slate-500">
+                    สแกนหน้าปัจจุบันแล้วสร้าง ROI ตามกรอบที่ OCR อ่านได้ จากนั้นเลือก field เพื่อแก้ชื่อหรือ Type ต่อได้
+                  </p>
+                  {autoDetectMessage && (
+                    <p className={`rounded-lg px-2.5 py-2 text-[10px] font-bold ${
+                      autoDetectMessage.startsWith("Created") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                    }`}>
+                      {autoDetectMessage}
+                    </p>
+                  )}
+                </section>
+              )}
 
               <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
                 <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ฟิลด์ที่เลือก ({currentPageRois.length})</h3>
@@ -1088,23 +1192,6 @@ export default function WorkspaceCustomEditor({
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
               <button 
                 type="button"
-                disabled={isLoading} 
-                onClick={async () => {
-                  setDisplayProgress(0);
-                  setOcrDone(false);
-
-                  await onRunFullPageOCR();
-
-                  setOcrDone(true);
-                }}
-                className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-900/10 active:scale-98"
-              >
-                <Cpu size={14} className={isLoading ? "animate-spin text-indigo-300" : "text-white"} />
-                {isLoading ? "OCR Entire Document..." : "OCR Entire Document"}
-              </button>
-
-              <button 
-                type="button"
                 disabled={rois.length === 0 || isLoading} 
                 onClick={triggerOCRProcessing} 
                 className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
@@ -1113,26 +1200,23 @@ export default function WorkspaceCustomEditor({
                 {isLoading ? "OCR Selected ROI..." : "OCR Selected ROI"}
               </button>
             </div>
-              {isLoading && ocrProgress && (
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500">
-                    <span>
-                      Processing page {ocrProgress.currentPage} / {ocrProgress.totalPages}
-                    </span>
-                    <span>{Math.round(displayProgress)}%</span>
-                  </div>
-
-                  <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-blue-600 transition-all duration-200"
-                      style={{ width: `${displayProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
           </div>
         </div>}
       </div>}
+
+      {isLoading && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+              <Loader2 size={28} className="animate-spin" />
+            </div>
+            <h3 className="mt-4 text-sm font-black uppercase tracking-wide text-slate-800">Processing OCR</h3>
+            <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">
+              ระบบกำลังอ่านข้อมูลจาก ROI ที่เลือก กรุณารอสักครู่
+            </p>
+          </div>
+        </div>
+      )}
 
     </div>
   );

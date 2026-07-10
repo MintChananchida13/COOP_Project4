@@ -248,6 +248,8 @@ export default function AdminDetectionLabPage() {
                       <p>Final Score: {formatScore(bestCandidate.finalScore ?? bestCandidate.score)}</p>
                       <p>Retrieval Score: {formatScore(bestCandidate.retrievalScore)}</p>
                       <p>Verification Score: {formatScore(bestCandidate.verificationScore)}</p>
+                      <p>Text Anchor Score: {formatScore(bestCandidate.textAnchorScore)}</p>
+                      <p>Image Anchor Score: {formatScore(bestCandidate.imageAnchorScore)}</p>
                       <p>Matched Pages: {bestCandidate.matchedPages ?? "N/A"}</p>
                       <p>Decision: {bestCandidate.decisionReason || "N/A"}</p>
                       <p>Status: {bestCandidate.templateStatus || "N/A"}</p>
@@ -648,19 +650,12 @@ export default function AdminDetectionLabPage() {
                     <th className="px-3 py-2">Final</th>
                     <th className="px-3 py-2">Retrieval</th>
                     <th className="px-3 py-2">Verification</th>
-                    <th className="px-3 py-2">Alignment Status</th>
-                    <th className="px-3 py-2">Align Score</th>
-                    <th className="px-3 py-2">Decision</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Vector ID</th>
-                    <th className="px-3 py-2">Pages</th>
-                    <th className="px-3 py-2">Fields</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
                   {visibleCandidates.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="px-3 py-4 text-center text-slate-500">
+                      <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
                         No candidates to display.
                       </td>
                     </tr>
@@ -675,17 +670,6 @@ export default function AdminDetectionLabPage() {
                           {formatScore(candidate.verificationScore)}
                           {candidate.verificationPassed === false ? " failed" : candidate.verificationPassed === true ? " passed" : ""}
                         </td>
-                        <td className="px-3 py-2">
-                          <span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${alignmentBadgeClass(candidate)}`}>
-                            {alignmentLabel(candidate)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">{formatScore(candidate.alignmentScore)}</td>
-                        <td className="px-3 py-2">{candidate.decisionReason || "N/A"}</td>
-                        <td className="px-3 py-2">{candidate.templateStatus || "N/A"}</td>
-                        <td className="px-3 py-2">{candidate.vectorId || "N/A"}</td>
-                        <td className="px-3 py-2">{candidate.pageCount ?? "N/A"}</td>
-                        <td className="px-3 py-2">{candidate.fieldCount ?? "N/A"}</td>
                       </tr>
                     ))
                   )}
