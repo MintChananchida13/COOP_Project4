@@ -671,14 +671,13 @@ function DraftCandidateCard({
             {candidate.isCurrentDraft && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">Current Draft</span>}
             <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "REVIEW")} />
           </div>
-          <div className="mt-2 grid gap-2 text-[10px] font-bold text-slate-500 sm:grid-cols-3 xl:grid-cols-7">
+          <div className="mt-2 grid gap-2 text-[10px] font-bold text-slate-500 sm:grid-cols-3 xl:grid-cols-6">
             <span>Global {formatPrepublishScore(candidate.globalScore)}</span>
             <span>Image {formatPrepublishScore(candidate.imageAnchorScore)}</span>
             <span>Text {formatPrepublishScore(candidate.textAnchorScore)}</span>
             <span>Verify {formatPrepublishScore(candidate.verificationScore)}</span>
             <span>Final {formatPrepublishScore(candidate.finalScore)}</span>
             <span>Align {candidate.alignmentStatus || "N/A"}</span>
-            <span>Diff {formatPrepublishScore(candidate.scoreDifferenceFromTop)}</span>
           </div>
         </div>
       </button>
@@ -692,7 +691,65 @@ function DraftCandidateCard({
           </div>
           {candidate.verificationDetails && candidate.verificationDetails.length > 0 && (
             <div className="mt-4 rounded-xl bg-slate-50 p-3">
-              <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Detailed Scores</h4>
+              <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Verification Checklist</h4>
+              <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="min-w-full divide-y divide-slate-100 text-[11px]">
+                  <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Anchor</th>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-left">Required</th>
+                      <th className="px-3 py-2 text-left">Score</th>
+                      <th className="px-3 py-2 text-left">Result</th>
+                      <th className="px-3 py-2 text-left">Reason</th>
+                      <th className="px-3 py-2 text-left">Expected</th>
+                      <th className="px-3 py-2 text-left">Actual</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {candidate.verificationDetails.map((detail, index) => {
+                      const required = Boolean(readPrepublishValue(detail, ["required", "required_for_verification"]));
+                      const passed = Boolean(readPrepublishValue(detail, ["passed", "final_passed"]));
+                      return (
+                        <tr key={`${candidate.templateId}-check-${index}`} className={required && !passed ? "bg-red-50" : undefined}>
+                          <td className="px-3 py-2 font-black text-slate-900">
+                            {String(readPrepublishValue(detail, ["field_name", "anchor_name", "name", "display_label"]) || `Anchor ${index + 1}`)}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-600">
+                            {String(readPrepublishValue(detail, ["anchor_type", "verification_method", "match_type"]) || "verification")}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${required ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                              {required ? "Required" : "Optional"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-black text-slate-900">
+                            {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score", "dino_similarity_score"]) || 0))}
+                          </td>
+                          <td className="px-3 py-2">
+                            <DraftStatusPill passed={passed} label={passed ? "PASS" : "FAIL"} />
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-600">
+                            {String(readPrepublishValue(detail, ["failure_reason", "error", "status"]) || "N/A")}
+                          </td>
+                          <td className="max-w-[180px] truncate px-3 py-2 font-semibold text-slate-600">
+                            {String(readPrepublishValue(detail, ["expected_text"]) || "N/A")}
+                          </td>
+                          <td className="max-w-[180px] truncate px-3 py-2 font-semibold text-slate-600">
+                            {String(readPrepublishValue(detail, ["actual_text", "ocr_text"]) || "N/A")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {candidate.verificationDetails.some((detail) => Boolean(readPrepublishValue(detail, ["required", "required_for_verification"])) && !Boolean(readPrepublishValue(detail, ["passed", "final_passed"]))) && (
+                <p className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-bold text-red-700">
+                  Candidate นี้ถูกปฏิเสธด้วย required_verification_failed เพราะมี Required Verification Anchor อย่างน้อย 1 รายการที่ FAIL.
+                </p>
+              )}
+              <h4 className="mt-4 text-[10px] font-black uppercase tracking-wider text-slate-500">ROI Preview / Debug</h4>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 {candidate.verificationDetails.map((detail, index) => (
                   <div key={`${candidate.templateId}-detail-${index}`} className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-600">
@@ -839,7 +896,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const topCandidates = simulation?.candidates.slice(0, 5) || [];
   const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
   const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
-  const detectionMarginWarning = Boolean(detectionTest?.warning);
   const publishPrerequisitesMet = Boolean(simulationPassed && detectionTest);
   const overallReady = publishPrerequisitesMet && (!detectionTest || detectionTestPassed);
   const canRunDetectionTest = Boolean(simulation?.temporaryEmbedding && simulationAction === null && testDocumentFile && !detectionTestAction);
@@ -1278,13 +1334,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                   <DraftSummaryCard label="Decision Reason" value={detectionTest.decisionReason || "N/A"} />
                   <DraftSummaryCard label="Draft Template Rank" value={detectionTest.draftTemplateRank ?? "N/A"} />
                   <DraftSummaryCard label="Result" value={detectionTest.passed ? "PASS" : detectionTest.warning ? "WARNING" : "FAIL"} />
-                  <DraftSummaryCard label="Score Margin" value={formatPrepublishScore(detectionTest.separationResult.scoreMargin)} />
                 </div>
-                {detectionMarginWarning && (
-                  <p className="rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
-                    Draft template ranked first, but the score margin is below the separation threshold.
-                  </p>
-                )}
               </>
             )}
           </div>
@@ -1305,14 +1355,13 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 <th className="px-3 py-2 text-left">Verification</th>
                 <th className="px-3 py-2 text-left">Text Anchor</th>
                 <th className="px-3 py-2 text-left">Image Anchor</th>
-                <th className="px-3 py-2 text-left">Score Margin</th>
                 <th className="px-3 py-2 text-left">Decision</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {(detectionTest?.candidates || []).length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-6 text-center font-semibold text-slate-500">
+                  <td colSpan={9} className="px-3 py-6 text-center font-semibold text-slate-500">
                     Run Detection Test to see unified candidates.
                   </td>
                 </tr>
@@ -1329,7 +1378,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <td className="px-3 py-2">{formatPrepublishScore(candidate.verificationScore)}</td>
                     <td className="px-3 py-2">{formatPrepublishScore(candidate.textAnchorScore)}</td>
                     <td className="px-3 py-2">{formatPrepublishScore(candidate.imageAnchorScore)}</td>
-                    <td className="px-3 py-2">{formatPrepublishScore(candidate.scoreDifferenceFromTop)}</td>
                     <td className="px-3 py-2">
                       <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "FAIL")} />
                     </td>
@@ -1453,7 +1501,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <DraftSummaryCard label="Closest Existing Template" value={simulation?.separationAnalysis.conflictTemplates[0]?.templateName || "N/A"} />
           <DraftSummaryCard label="Similarity" value={formatPrepublishScore(simulation?.separationAnalysis.conflictTemplates[0]?.finalScore)} />
-          <DraftSummaryCard label="Score Margin" value={formatPrepublishScore(simulation?.separationAnalysis.scoreMargin)} />
           <DraftSummaryCard label="Conflict Detection" value={(simulation?.separationAnalysis.status || "not_ready").replaceAll("_", " ")} />
           <DraftSummaryCard label="Recommendation" value={simulation?.separationAnalysis.message || (simulationPassed ? "Ready" : "Run Simulation")} />
         </div>

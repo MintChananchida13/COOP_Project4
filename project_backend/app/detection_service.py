@@ -471,6 +471,8 @@ def _candidate_from_result(
         "final_passed": decision["final_passed"],
         "decision_reason": decision["decision_reason"],
         "decision_path": decision["decision_path"],
+        "required_passed": decision.get("required_passed"),
+        "required_failed_fields": decision.get("required_failed_fields", []),
         "final_confidence_threshold": decision["final_confidence_threshold"],
         "metadata": metadata,
     }
@@ -599,6 +601,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "final_passed": decision["final_passed"],
             "decision_reason": decision["decision_reason"],
             "decision_path": decision["decision_path"],
+            "required_passed": decision.get("required_passed"),
+            "required_failed_fields": decision.get("required_failed_fields", []),
             "final_confidence_threshold": decision["final_confidence_threshold"],
             "metadata": best_page_cand.get("metadata", {}),
         })

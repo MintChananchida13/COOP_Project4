@@ -1254,6 +1254,55 @@ class DecisionService:
     STRONG_VERIFICATION_SCORE = 0.75
     DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.8
 
+    def _truthy(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "pass", "passed"}
+        return bool(value)
+
+    def _required_passed_from_fields(self, verification: Dict[str, Any], fallback: bool) -> bool:
+        checked_fields = verification.get("checked_fields") or verification.get("verification_details") or []
+        if not isinstance(checked_fields, list):
+            return fallback
+        required_fields = [
+            field
+            for field in checked_fields
+            if isinstance(field, dict) and self._truthy(field.get("required"))
+        ]
+        if not required_fields:
+            return True
+        return all(self._truthy(field.get("passed")) for field in required_fields)
+
+    def _required_failed_fields(self, verification: Dict[str, Any]) -> List[Dict[str, Any]]:
+        checked_fields = verification.get("checked_fields") or verification.get("verification_details") or []
+        if not isinstance(checked_fields, list):
+            return []
+        failed_fields: List[Dict[str, Any]] = []
+        for field in checked_fields:
+            if not isinstance(field, dict):
+                continue
+            if not self._truthy(field.get("required")):
+                continue
+            if self._truthy(field.get("passed")):
+                continue
+            failed_fields.append(
+                {
+                    "field_id": field.get("field_id") or field.get("anchor_id"),
+                    "field_name": field.get("field_name") or field.get("anchor_name") or field.get("display_label"),
+                    "display_label": field.get("display_label"),
+                    "anchor_type": field.get("anchor_type"),
+                    "page_number": field.get("page_number"),
+                    "score": field.get("score") if field.get("score") is not None else field.get("field_score"),
+                    "expected_text": field.get("expected_text"),
+                    "actual_text": field.get("actual_text"),
+                    "failure_reason": field.get("failure_reason") or field.get("error"),
+                }
+            )
+        return failed_fields
+
     def final_confidence_threshold(self, template: Optional[Dict[str, Any]], metadata: Dict[str, Any]) -> float:
         raw_threshold = template.get("final_confidence_threshold") if template else metadata.get("final_confidence_threshold")
         try:
@@ -1274,30 +1323,14 @@ class DecisionService:
         verification_score = round(float(verification.get("score", 0.0) or 0.0), 4)
         text_anchor_score = round(float(verification.get("text_anchor_score", verification_score) or 0.0), 4)
         image_anchor_score = round(float(verification.get("image_anchor_score", 1.0) or 0.0), 4)
-        verification_passed = bool(verification.get("passed"))
-        required_passed = bool(verification.get("required_passed", verification_passed))
+        verification_passed = self._truthy(verification.get("passed"))
+        raw_required_passed = self._truthy(verification.get("required_passed", verification_passed))
+        required_passed = self._required_passed_from_fields(verification, raw_required_passed)
+        required_failed_fields = self._required_failed_fields(verification)
         verification_status = verification.get("status")
         final_score = round((retrieval_score * 0.60) + (text_anchor_score * 0.25) + (image_anchor_score * 0.15), 4)
-        final_passed = False
-
-        if verification_status == "ocr_unavailable":
-            decision_path = "ocr_unavailable"
-        elif not required_passed:
-            decision_path = "required_verification_failed"
-        elif retrieval_score >= self.HIGH_RETRIEVAL_SCORE and verification_passed:
-            final_passed = True
-            decision_path = "retrieval_high_pass"
-        elif verification_score >= self.STRONG_VERIFICATION_SCORE and retrieval_score >= self.MIN_RETRIEVAL_SCORE:
-            final_passed = True
-            decision_path = "verification_strong_pass"
-        elif retrieval_score < self.MIN_RETRIEVAL_SCORE:
-            decision_path = "retrieval_too_low"
-        elif verification_status == "no_verification_fields":
-            final_passed = retrieval_score >= self.HIGH_RETRIEVAL_SCORE
-            decision_path = "retrieval_high_pass" if final_passed else "weighted_confidence_failed"
-        else:
-            final_passed = final_score >= final_confidence_threshold
-            decision_path = "weighted_confidence_passed" if final_passed else "weighted_confidence_failed"
+        final_passed = final_score >= final_confidence_threshold
+        decision_path = "final_threshold_passed" if final_passed else "final_threshold_failed"
 
         return {
             "retrieval_score": retrieval_score,
@@ -1310,6 +1343,8 @@ class DecisionService:
             "decision_reason": decision_path,
             "decision_path": decision_path,
             "final_confidence_threshold": final_confidence_threshold,
+            "required_passed": required_passed,
+            "required_failed_fields": required_failed_fields,
         }
 
 
@@ -1744,6 +1779,8 @@ class AdminTemplateService:
             "alignment_status": "skipped",
             "decision": decision["decision_reason"],
             "final_passed": decision["final_passed"],
+            "required_passed": decision.get("required_passed"),
+            "required_failed_fields": decision.get("required_failed_fields", []),
             "is_current_draft": is_current_draft,
             "page_count": candidate_template.get("page_count"),
             "field_count": len(candidate_template.get("fields") or []),
@@ -1891,20 +1928,16 @@ class AdminTemplateService:
             candidates = sorted(candidates, key=lambda item: item["final_score"], reverse=True)
         candidates = candidates[:5]
 
-        top_score = candidates[0]["final_score"] if candidates else 0.0
         for index, candidate in enumerate(candidates, start=1):
             candidate["rank"] = index
-            candidate["score_difference_from_top"] = round(top_score - candidate["final_score"], 4)
 
         top1 = candidates[0] if candidates else None
-        top2 = candidates[1] if len(candidates) > 1 else None
-        margin = round((top1["final_score"] if top1 else 0.0) - (top2["final_score"] if top2 else 0.0), 4)
         conflict_candidates = [
             candidate
             for candidate in candidates
             if not candidate.get("is_current_draft") and candidate["final_score"] >= max(0.75, (top1["final_score"] if top1 else 0.0) - 0.08)
         ]
-        simulation_passed = bool(top1 and top1.get("is_current_draft") and top1.get("final_passed") and margin >= 0.05)
+        simulation_passed = bool(top1 and top1.get("is_current_draft") and top1.get("final_passed"))
         if simulation_passed:
             separation_status = "ready_to_publish"
         elif conflict_candidates:
@@ -1942,8 +1975,6 @@ class AdminTemplateService:
             "verification_anchor_results": draft_candidate.get("verification_details", []),
             "separation_analysis": {
                 "top1_score": top1["final_score"] if top1 else 0.0,
-                "top2_score": top2["final_score"] if top2 else None,
-                "score_margin": margin,
                 "status": separation_status,
                 "simulation_passed": simulation_passed,
                 "conflict_templates": conflict_candidates,
@@ -2004,10 +2035,8 @@ class AdminTemplateService:
         draft_candidate["source_label"] = "Draft / Temporary Embedding"
 
         candidates = sorted([draft_candidate, *candidates], key=lambda item: item["final_score"], reverse=True)[:5]
-        top_score = candidates[0]["final_score"] if candidates else 0.0
         for index, candidate in enumerate(candidates, start=1):
             candidate["rank"] = index
-            candidate["score_difference_from_top"] = round(top_score - candidate["final_score"], 4)
 
         best = candidates[0] if candidates else None
         draft_rank = next((candidate["rank"] for candidate in candidates if candidate.get("is_current_draft")), None)
@@ -2015,17 +2044,11 @@ class AdminTemplateService:
         closest_published = next((candidate for candidate in candidates if not candidate.get("is_current_draft")), None)
         closest_score = float(closest_published.get("final_score") or 0.0) if closest_published else 0.0
         draft_score = float(draft_result.get("final_score") or 0.0) if draft_result else 0.0
-        score_margin = round(draft_score - closest_score, 4)
-        margin_threshold = 0.05
 
-        if draft_rank == 1 and draft_result and draft_result.get("final_passed") and score_margin >= margin_threshold:
+        if draft_rank == 1 and draft_result and draft_result.get("final_passed"):
             conflict_level = "ready"
-            recommendation = "Draft template ranked first with enough separation."
+            recommendation = "Draft template ranked first and passed the detection test."
             test_passed = True
-        elif draft_rank == 1 and draft_result and draft_result.get("final_passed"):
-            conflict_level = "warning"
-            recommendation = "Draft ranked first, but score margin is small. Review similar published templates."
-            test_passed = False
         elif best:
             conflict_level = "conflict_detected"
             recommendation = "Another template ranked above this draft. Review anchors or template separation before publishing."
@@ -2052,10 +2075,8 @@ class AdminTemplateService:
                 "draft_final_score": draft_score,
                 "closest_published_template": closest_published.get("template_name") if closest_published else None,
                 "closest_published_score": closest_score if closest_published else None,
-                "score_margin": score_margin,
                 "conflict_level": conflict_level,
                 "recommendation": recommendation,
-                "separation_threshold": margin_threshold,
             },
             "debug": {
                 "temporary_embedding_persisted": False,

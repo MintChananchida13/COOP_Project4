@@ -146,6 +146,8 @@ export interface DetectionCandidate {
   finalPassed?: boolean | null;
   decisionReason?: string | null;
   decisionPath?: string | null;
+  requiredPassed?: boolean | null;
+  requiredFailedFields?: Record<string, unknown>[];
   finalConfidenceThreshold?: number | null;
   verification?: Record<string, unknown>;
   averageScore?: number | null;
@@ -217,10 +219,11 @@ export interface PrepublishCandidate {
   alignmentStatus: string;
   decision: string;
   finalPassed: boolean;
+  requiredPassed?: boolean | null;
+  requiredFailedFields?: Record<string, unknown>[];
   isCurrentDraft?: boolean;
   source?: "draft" | "published" | string;
   sourceLabel?: string | null;
-  scoreDifferenceFromTop: number;
   pageCount?: number | null;
   fieldCount?: number | null;
   verification?: Record<string, unknown>;
@@ -256,7 +259,6 @@ export interface PrepublishSimulationResult {
   separationAnalysis: {
     top1Score: number;
     top2Score?: number | null;
-    scoreMargin: number;
     status: "ready_to_publish" | "needs_review" | "conflict_detected" | "not_ready" | string;
     simulationPassed: boolean;
     conflictTemplates: PrepublishCandidate[];
@@ -281,10 +283,8 @@ export interface PrepublishDetectionTestResult {
     draftFinalScore: number;
     closestPublishedTemplate?: string | null;
     closestPublishedScore?: number | null;
-    scoreMargin: number;
     conflictLevel: string;
     recommendation: string;
-    separationThreshold: number;
   };
   debug?: Record<string, unknown>;
 }
@@ -456,6 +456,10 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
   decisionReason: (candidate.decision_reason as string | null | undefined) ?? null,
   decisionPath: (candidate.decision_path as string | null | undefined) ?? null,
+  requiredPassed: typeof candidate.required_passed === "boolean" ? candidate.required_passed : null,
+  requiredFailedFields: Array.isArray(candidate.required_failed_fields)
+    ? (candidate.required_failed_fields as Record<string, unknown>[])
+    : [],
   finalConfidenceThreshold: typeof candidate.final_confidence_threshold === "number" ? candidate.final_confidence_threshold : null,
   verification: (candidate.verification as Record<string, unknown> | undefined) || undefined,
   averageScore: typeof candidate.average_score === "number" ? candidate.average_score : null,
@@ -866,10 +870,13 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
   alignmentStatus: String(candidate.alignment_status || "skipped"),
   decision: String(candidate.decision || ""),
   finalPassed: Boolean(candidate.final_passed),
+  requiredPassed: typeof candidate.required_passed === "boolean" ? candidate.required_passed : null,
+  requiredFailedFields: Array.isArray(candidate.required_failed_fields)
+    ? (candidate.required_failed_fields as Record<string, unknown>[])
+    : [],
   isCurrentDraft: Boolean(candidate.is_current_draft),
   source: (candidate.source as string | undefined) || (candidate.is_current_draft ? "draft" : "published"),
   sourceLabel: (candidate.source_label as string | null | undefined) ?? null,
-  scoreDifferenceFromTop: Number(candidate.score_difference_from_top || 0),
   pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
   fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
   verification: (candidate.verification as Record<string, unknown> | undefined) || {},
@@ -931,7 +938,6 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
     separationAnalysis: {
       top1Score: Number(separation.top1_score || 0),
       top2Score: typeof separation.top2_score === "number" ? separation.top2_score : null,
-      scoreMargin: Number(separation.score_margin || 0),
       status: String(separation.status || "not_ready"),
       simulationPassed: Boolean(separation.simulation_passed),
       conflictTemplates,
@@ -975,10 +981,8 @@ export const runPrepublishDetectionTest = async (templateId: string, file: File)
       draftFinalScore: Number(separation.draft_final_score || 0),
       closestPublishedTemplate: (separation.closest_published_template as string | null | undefined) ?? null,
       closestPublishedScore: typeof separation.closest_published_score === "number" ? separation.closest_published_score : null,
-      scoreMargin: Number(separation.score_margin || 0),
       conflictLevel: String(separation.conflict_level || "not_ready"),
       recommendation: String(separation.recommendation || ""),
-      separationThreshold: Number(separation.separation_threshold || 0.05),
     },
     debug: (data.debug as Record<string, unknown> | undefined) || {},
   };

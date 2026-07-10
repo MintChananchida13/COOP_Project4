@@ -178,7 +178,7 @@ export default function WorkspaceTemplateEditorV2({
             userSelectable: false,
             defaultSelected: false,
             useForVerification: true,
-            requiredForVerification: true,
+            requiredForVerification: false,
             extractionMethod: "ocr_text",
             roiPadding: 6,
             verificationWeight: 1,
