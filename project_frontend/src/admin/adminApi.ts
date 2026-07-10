@@ -307,6 +307,12 @@ export interface TemplateStepTestItem {
   failureReason?: string | null;
   anchorType?: string | null;
   verificationMethod?: string | null;
+  embeddingId?: string | null;
+  dinoSimilarityScore?: number | null;
+  referenceCropPreviewDataUrl?: string | null;
+  currentCropPreviewDataUrl?: string | null;
+  referenceCropPreviewUrl?: string | null;
+  currentCropPreviewUrl?: string | null;
 }
 
 export interface TemplateStepTestResult {
@@ -1004,6 +1010,12 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   failureReason: (item.failure_reason as string | null | undefined) ?? null,
   anchorType: (item.anchor_type as string | null | undefined) ?? null,
   verificationMethod: (item.verification_method as string | null | undefined) ?? null,
+  embeddingId: (item.embedding_id as string | null | undefined) ?? null,
+  dinoSimilarityScore: typeof item.dino_similarity_score === "number" ? item.dino_similarity_score : null,
+  referenceCropPreviewDataUrl: (item.reference_crop_preview_data_url as string | null | undefined) ?? null,
+  currentCropPreviewDataUrl: (item.current_crop_preview_data_url as string | null | undefined) ?? null,
+  referenceCropPreviewUrl: (item.reference_crop_preview_url as string | null | undefined) ?? null,
+  currentCropPreviewUrl: (item.current_crop_preview_url as string | null | undefined) ?? null,
 });
 
 const mapTemplateStepTestResult = (data: Record<string, unknown>): TemplateStepTestResult => ({

@@ -1327,11 +1327,27 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                       <div className="rounded-lg bg-white p-3">
                         <div className="text-[10px] font-black uppercase text-slate-400">Reference Preview</div>
-                        <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                        {readPrepublishValue(anchor, ["reference_crop_preview_data_url", "reference_crop_preview_url"]) ? (
+                          <img
+                            src={String(readPrepublishValue(anchor, ["reference_crop_preview_data_url", "reference_crop_preview_url"]))}
+                            alt=""
+                            className="mt-2 h-28 w-full rounded-lg object-contain"
+                          />
+                        ) : (
+                          <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                        )}
                       </div>
                       <div className="rounded-lg bg-white p-3">
                         <div className="text-[10px] font-black uppercase text-slate-400">Test Preview</div>
-                        <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                        {readPrepublishValue(anchor, ["current_crop_preview_data_url", "current_crop_preview_url"]) ? (
+                          <img
+                            src={String(readPrepublishValue(anchor, ["current_crop_preview_data_url", "current_crop_preview_url"]))}
+                            alt=""
+                            className="mt-2 h-28 w-full rounded-lg object-contain"
+                          />
+                        ) : (
+                          <div className="mt-2 text-xs font-semibold text-slate-500">Preview unavailable</div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -1341,8 +1357,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase text-slate-500">
-                    <span className="rounded-full bg-white px-2 py-1">Similarity {formatPrepublishScore(Number(readPrepublishValue(anchor, ["similarity_score", "score", "field_score"]) || 0))}</span>
+                    <span className="rounded-full bg-white px-2 py-1">Similarity {formatPrepublishScore(Number(readPrepublishValue(anchor, ["dino_similarity_score", "similarity_score", "score", "field_score"]) || 0))}</span>
                     <span className="rounded-full bg-white px-2 py-1">Weight {String(readPrepublishValue(anchor, ["weight", "verification_weight"]) || "N/A")}</span>
+                    {readPrepublishValue(anchor, ["embedding_id"]) && (
+                      <span className="rounded-full bg-white px-2 py-1">{String(readPrepublishValue(anchor, ["embedding_id"]))}</span>
+                    )}
                   </div>
                 </div>
               );

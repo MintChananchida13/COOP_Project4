@@ -264,12 +264,34 @@ export default function WorkspaceTemplateEditorV2({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate font-black text-slate-800">{item.displayLabel || item.fieldName || "Field"}</div>
-                  <div className="mt-0.5 text-[9px] font-bold uppercase text-slate-400">Page {item.pageNumber ?? "N/A"}</div>
+                  <div className="mt-0.5 text-[9px] font-bold uppercase text-slate-400">
+                    Page {item.pageNumber ?? "N/A"} {item.anchorType === "image" ? "Image Feature" : item.anchorType === "text" ? "OCR Text" : ""}
+                  </div>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${item.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
                   {item.passed ? "PASS" : "FAIL"}
                 </span>
               </div>
+              {item.anchorType === "image" && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-100 bg-white p-2">
+                    <div className="text-[9px] font-black uppercase text-slate-400">Reference Crop</div>
+                    {item.referenceCropPreviewDataUrl || item.referenceCropPreviewUrl ? (
+                      <img src={item.referenceCropPreviewDataUrl || item.referenceCropPreviewUrl || ""} alt="" className="mt-2 h-24 w-full rounded-md object-contain" />
+                    ) : (
+                      <p className="mt-2 text-[10px] font-semibold text-slate-400">No preview</p>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-slate-100 bg-white p-2">
+                    <div className="text-[9px] font-black uppercase text-slate-400">Current Crop</div>
+                    {item.currentCropPreviewDataUrl || item.currentCropPreviewUrl ? (
+                      <img src={item.currentCropPreviewDataUrl || item.currentCropPreviewUrl || ""} alt="" className="mt-2 h-24 w-full rounded-md object-contain" />
+                    ) : (
+                      <p className="mt-2 text-[10px] font-semibold text-slate-400">No preview</p>
+                    )}
+                  </div>
+                </div>
+              )}
               {(item.ocrText || item.actualText || item.expectedText) && (
                 <div className="mt-2 space-y-1 font-semibold text-slate-600">
                   {item.expectedText && <p>Expected: {item.expectedText}</p>}
@@ -285,6 +307,16 @@ export default function WorkspaceTemplateEditorV2({
                     Score {(item.fieldScore ?? item.score ?? 0).toFixed(2)}
                   </span>
                 ) : null}
+                {item.dinoSimilarityScore !== null && item.dinoSimilarityScore !== undefined && (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
+                    DINO {item.dinoSimilarityScore.toFixed(2)}
+                  </span>
+                )}
+                {item.embeddingId && (
+                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
+                    {item.embeddingId}
+                  </span>
+                )}
                 {item.failureReason && !item.passed && (
                   <span className="rounded bg-red-100 px-1.5 py-0.5 text-red-700">{item.failureReason}</span>
                 )}

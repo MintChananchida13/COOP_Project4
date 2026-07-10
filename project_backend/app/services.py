@@ -379,6 +379,19 @@ def _crop_anchor_roi(image_path_or_source: str, roi: Dict[str, Any], output_path
     return str(output_path)
 
 
+def _image_path_to_data_url(path_value: Optional[str]) -> Optional[str]:
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return None
+    return f"data:image/png;base64,{encoded}"
+
+
 def _save_prepublish_test_image(test_id: str, file_bytes: bytes, page_index: int = 1) -> Path:
     try:
         from PIL import Image
@@ -909,12 +922,15 @@ class VerificationService:
 
     def _score_image_anchor(self, field: Dict[str, Any], image_path: str) -> Dict[str, Any]:
         expected_vector = self._load_anchor_embedding(field["id"])
+        reference_crop_path = _storage_root() / "verification_anchor_crops" / field["template_id"] / f"{field['id']}.png"
         if not expected_vector:
             return {
                 "score": 0.0,
                 "passed": False,
                 "failure_reason": "anchor_embedding_missing",
                 "embedding_id": None,
+                "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
+                "current_crop_preview_data_url": None,
             }
 
         crop_path = _storage_root() / "verification_query_anchor_crops" / field["template_id"] / f"{field['id']}_{uuid4().hex[:8]}.png"
@@ -925,6 +941,8 @@ class VerificationService:
                 "passed": False,
                 "failure_reason": "roi_crop_failed",
                 "embedding_id": f"anchor_emb_{field['id']}",
+                "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
+                "current_crop_preview_data_url": None,
             }
 
         result = encode_images([cropped])
@@ -935,6 +953,9 @@ class VerificationService:
             "failure_reason": "passed" if score >= 0.75 else "below_threshold",
             "embedding_id": f"anchor_emb_{field['id']}",
             "model_version": result.version,
+            "dino_similarity_score": score,
+            "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
+            "current_crop_preview_data_url": _image_path_to_data_url(cropped),
         }
 
     def verify_template(self, template_id: str, page_image_paths: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
@@ -986,6 +1007,9 @@ class VerificationService:
                         "roi_padding": field.get("roi_padding") or 6,
                         "weight": float(field.get("verification_weight") or 1.0),
                         "embedding_id": f"anchor_emb_{field['id']}",
+                        "reference_crop_preview_data_url": None,
+                        "current_crop_preview_data_url": None,
+                        "dino_similarity_score": 0.0,
                         "error": f"No query page image available for page {page_number}",
                     }
                 )
@@ -1019,6 +1043,10 @@ class VerificationService:
                         "roi_padding": field.get("roi_padding") or 6,
                         "weight": float(field.get("verification_weight") or 1.0),
                         "embedding_id": image_match.get("embedding_id"),
+                        "reference_crop_preview_data_url": image_match.get("reference_crop_preview_data_url"),
+                        "current_crop_preview_data_url": image_match.get("current_crop_preview_data_url"),
+                        "dino_similarity_score": image_match.get("dino_similarity_score", image_match["score"]),
+                        "model_version": image_match.get("model_version"),
                         "error": None,
                     }
                 )
@@ -1736,6 +1764,7 @@ class AdminTemplateService:
         }
         if not image_anchors:
             return verification
+        reference_page_paths = self._template_page_image_paths(draft_template["id"], draft_template.get("pages") or [])
 
         checked_fields = []
         for checked in verification.get("checked_fields", []):
@@ -1746,21 +1775,30 @@ class AdminTemplateService:
                 continue
 
             page_number = int(field.get("page_number") or 1)
-            source = query_page_paths.get(page_number)
-            crop_path = _storage_root() / "prepublish_anchor_crops" / draft_template["id"] / f"{field_id}.png"
-            cropped = _crop_anchor_roi(source, field["roi"], crop_path, field.get("roi_padding") or 6) if source else None
-            if cropped:
-                vision_result = encode_images([cropped])
+            query_source = query_page_paths.get(page_number)
+            reference_source = reference_page_paths.get(page_number)
+            crop_root = _storage_root() / "prepublish_anchor_crops" / draft_template["id"]
+            reference_crop_path = crop_root / "reference" / f"{field_id}.png"
+            query_crop_path = crop_root / "query" / f"{field_id}_{uuid4().hex[:8]}.png"
+            reference_crop = _crop_anchor_roi(reference_source, field["roi"], reference_crop_path, field.get("roi_padding") or 6) if reference_source else None
+            query_crop = _crop_anchor_roi(query_source, field["roi"], query_crop_path, field.get("roi_padding") or 6) if query_source else None
+            if reference_crop and query_crop:
+                reference_result = encode_images([reference_crop])
+                query_result = encode_images([query_crop])
+                score = round(float(_cosine_similarity(query_result.vector, reference_result.vector)), 4)
                 checked_fields.append(
                     {
                         **checked,
-                        "field_score": 1.0,
-                        "score": 1.0,
-                        "passed": True,
-                        "failure_reason": "passed",
+                        "field_score": score,
+                        "score": score,
+                        "passed": score >= 0.75,
+                        "failure_reason": "passed" if score >= 0.75 else "below_threshold",
                         "embedding_id": f"temp_anchor_emb_{field_id}",
-                        "model_version": vision_result.version,
+                        "model_version": query_result.version,
+                        "dino_similarity_score": score,
                         "temporary_embedding": True,
+                        "reference_crop_preview_data_url": _image_path_to_data_url(reference_crop),
+                        "current_crop_preview_data_url": _image_path_to_data_url(query_crop),
                         "error": None,
                     }
                 )
@@ -1774,6 +1812,9 @@ class AdminTemplateService:
                         "failure_reason": "temporary_anchor_crop_failed",
                         "embedding_id": f"temp_anchor_emb_{field_id}",
                         "temporary_embedding": True,
+                        "reference_crop_preview_data_url": _image_path_to_data_url(reference_crop),
+                        "current_crop_preview_data_url": _image_path_to_data_url(query_crop),
+                        "dino_similarity_score": 0.0,
                     }
                 )
 
@@ -2132,6 +2173,20 @@ class AdminTemplateService:
         template = self.get_template(template_id)
         if template.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Template not found")
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM template_fields
+                WHERE template_id = ?
+                  AND use_for_verification = 1
+                  AND data_type = 'image'
+                """,
+                (template_id,),
+            ).fetchall()
+            for row in rows:
+                _upsert_image_anchor_embedding(conn, template_id, row)
+            conn.commit()
         page_paths = self._template_page_image_paths(template_id, template.get("pages") or [])
         verification = VerificationService().verify_template(template_id, page_paths)
         checked_fields = verification.get("checked_fields", [])
