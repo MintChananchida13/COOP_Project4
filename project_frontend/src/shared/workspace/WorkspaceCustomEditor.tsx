@@ -1199,7 +1199,7 @@ export default function WorkspaceCustomEditor({
                 type="button"
                 disabled={rois.length === 0 || isLoading} 
                 onClick={triggerOCRProcessing} 
-                className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
+                className="ui-stable-action-lg w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
               >
                 <Cpu size={14} className={isLoading ? "animate-spin text-blue-300" : "text-white"} />
                 {isLoading ? "OCR Selected ROI..." : "OCR Selected ROI"}

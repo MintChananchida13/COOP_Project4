@@ -1134,7 +1134,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             type="button"
             onClick={runPreviewOcr}
             disabled={isPreviewing || extractionFields.length === 0}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
           >
             {isPreviewing ? "Previewing..." : ocrResults.length > 0 ? "Retest OCR" : "Preview OCR Fields"}
           </button>
@@ -1273,7 +1273,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             type="button"
             onClick={handleRunPrepublishSimulation}
             disabled={simulationAction !== null}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
+            className="ui-stable-action rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
           >
             {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
           </button>
@@ -1619,7 +1619,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 type="button"
                 onClick={handleConfirmPublish}
                 disabled={!canConfirmPublish}
-                className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                className="ui-stable-action-lg rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
               </button>
@@ -2328,7 +2328,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
             <p className="mt-1 text-[11px] font-semibold text-slate-500">Runs OCR only on template field ROI, grouped by page.</p>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={runPreviewOcr} disabled={isPreviewing || fields.length === 0} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
+            <button type="button" onClick={runPreviewOcr} disabled={isPreviewing || fields.length === 0} className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
               {isPreviewing ? "Previewing..." : ocrResults.length > 0 ? "Retest" : "Preview OCR Fields"}
             </button>
           </div>
@@ -2407,7 +2407,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
               type="button"
               onClick={handleRunPrepublishSimulation}
               disabled={simulationAction !== null}
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+              className="ui-stable-action rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
             >
               {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
             </button>
@@ -2434,7 +2434,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
               type="button"
               onClick={handleConfirmPublish}
               disabled={!canConfirmPrepublish}
-              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+              className="ui-stable-action-lg rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
               {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
             </button>

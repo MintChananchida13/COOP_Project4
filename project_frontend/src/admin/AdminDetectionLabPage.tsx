@@ -235,7 +235,7 @@ export default function AdminDetectionLabPage() {
             type="button"
             onClick={runDetection}
             disabled={!file || isRunning}
-            className="mt-4 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            className="ui-stable-action-lg mt-4 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
           >
             {isRunning ? "Running Detection..." : "Run Detection"}
           </button>

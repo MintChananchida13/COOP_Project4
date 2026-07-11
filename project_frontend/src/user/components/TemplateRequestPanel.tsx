@@ -321,7 +321,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
               type="button"
               disabled={!canSubmit}
               onClick={handleSubmit}
-              className="w-full px-5 py-3 rounded-xl bg-indigo-600 text-white text-xs font-black uppercase tracking-wider shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
+              className="ui-stable-action w-full px-5 py-3 rounded-xl bg-indigo-600 text-white text-xs font-black uppercase tracking-wider shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
             >
               {status === "submitting" ? "Submitting..." : "Submit"}
             </button>

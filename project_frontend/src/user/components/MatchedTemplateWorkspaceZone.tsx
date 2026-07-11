@@ -1,8 +1,10 @@
 "use client";
 
 import { ArrowLeft, CheckCircle2, Cpu, FileText, Image as ImageIcon, Table } from "lucide-react";
+import { useState } from "react";
 import { ROI } from "../../types/ocr";
 import WorkspaceCustomEditor, { WorkspaceCustomEditorProps } from "../../shared/workspace/WorkspaceCustomEditor";
+import { InlineState, StatusBadge } from "../../shared/ui";
 
 interface MatchedTemplateInfo {
   id: string;
@@ -33,6 +35,8 @@ export default function MatchedTemplateWorkspaceZone({
   onSwitchToCustom,
   ...props
 }: MatchedTemplateWorkspaceZoneProps) {
+  const [fieldQuery, setFieldQuery] = useState("");
+
   return (
     <WorkspaceCustomEditor
       {...props}
@@ -64,34 +68,40 @@ export default function MatchedTemplateWorkspaceZone({
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
         const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
         const selectedRoi = currentPageRois.find((roi) => roi.id === selectedId);
+        const filteredRois = currentPageRois.filter((roi) =>
+          `${roi.fieldName} ${roi.type || ""} ${roi.extractionMethod || ""}`.toLowerCase().includes(fieldQuery.trim().toLowerCase())
+        );
 
         return (
           <>
-            <button
-              type="button"
-              onClick={props.onBackToAdjust}
-              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
-            >
-              <ArrowLeft size={14} /> กลับไปตรวจขอบเขตเอกสาร
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={props.onBackToAdjust}
+                className="ui-button-text inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <ArrowLeft size={14} />
+                กลับไปปรับกรอบ
+              </button>
 
-            <button
-              type="button"
-              onClick={onSwitchToCustom}
-              className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-xs font-black text-indigo-700 shadow-sm transition-all hover:bg-indigo-100"
-            >
-              ไป Custom OCR เพิ่มเติม
-            </button>
+              <button
+                type="button"
+                onClick={onSwitchToCustom}
+                className="ui-button-text rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
+              >
+                Custom OCR
+              </button>
+            </div>
 
-            <section className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-              <div className="flex items-start gap-2">
-                <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-emerald-600" />
-                <div>
-                  <h3 className="text-xs font-black uppercase tracking-wider text-emerald-800">
-                    Template Matched
-                  </h3>
-                  <p className="mt-1 text-sm font-black text-emerald-950">{matchedTemplate.name}</p>
-                  <p className="mt-1 text-[10px] font-semibold text-emerald-700">
+            <section className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm ring-1 ring-emerald-100">
+                  <CheckCircle2 size={18} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="ui-label text-emerald-800">Template Matched</h3>
+                  <p className="ui-card-title mt-1 truncate text-emerald-950">{matchedTemplate.name}</p>
+                  <p className="ui-caption ui-tabular mt-1 text-emerald-700">
                     {matchedTemplate.confidence !== undefined && matchedTemplate.confidence !== null
                       ? `Confidence ${(matchedTemplate.confidence * 100).toFixed(1)}%`
                       : "Confidence N/A"}
@@ -101,51 +111,60 @@ export default function MatchedTemplateWorkspaceZone({
               </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-3">
-              <div className="flex items-center justify-between gap-3">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                    เลือก Field สำหรับ OCR
-                  </h3>
-                  <p className="mt-1 text-[10px] font-semibold text-slate-500">
-                    เลือกข้อมูลที่ต้องการอ่านจาก Template นี้
+                  <h3 className="ui-card-title text-slate-800">เลือก Field สำหรับ OCR</h3>
+                  <p className="ui-body mt-1 text-slate-500">
+                    เลือกรายการข้อมูลที่ต้องการอ่านจาก Template นี้ สามารถปรับตำแหน่งและขนาดกรอบได้ แต่ไม่สามารถเปลี่ยนชื่อหรือประเภท Field
                   </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black text-slate-600">
+                <span className="ui-caption ui-tabular shrink-0 rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
                   {enabledCount}/{currentPageRois.length}
                 </span>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: true }))}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-black text-slate-600 hover:bg-white"
+                  className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
                   Select All
                 </button>
                 <button
                   type="button"
                   onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: false }))}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-black text-slate-600 hover:bg-white"
+                  className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
                   Clear
                 </button>
               </div>
 
+              <div className="mt-3">
+                <input
+                  type="search"
+                  value={fieldQuery}
+                  onChange={(event) => setFieldQuery(event.target.value)}
+                  placeholder="ค้นหา Field..."
+                  className="ui-label w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none"
+                  aria-label="Search template fields"
+                />
+              </div>
+
               <div className="mt-3 max-h-[360px] space-y-2 overflow-y-auto pr-1">
                 {currentPageRois.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                    ไม่พบ Field สำหรับหน้านี้
-                  </p>
+                  <p className="ui-body rounded-xl bg-slate-50 p-3 text-slate-500">ไม่พบ Field สำหรับหน้านี้</p>
+                ) : filteredRois.length === 0 ? (
+                  <p className="ui-body rounded-xl bg-slate-50 p-3 text-slate-500">ไม่พบ Field ที่ตรงกับคำค้นหา</p>
                 ) : (
-                  currentPageRois.map((roi) => {
+                  filteredRois.map((roi) => {
                     const checked = roi.enabled !== false;
                     const selected = selectedId === roi.id;
                     return (
                       <label
                         key={`${roi.pageIndex ?? 0}-${roi.id}`}
-                        className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-xs transition-all ${
+                        className={`ui-label flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition-all ${
                           selected
                             ? "border-emerald-300 bg-emerald-50 text-emerald-950"
                             : checked
@@ -164,11 +183,10 @@ export default function MatchedTemplateWorkspaceZone({
                           {typeIcon(roi)}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate font-black">{roi.fieldName || "(Unnamed)"}</span>
-                          <span className="mt-0.5 block text-[10px] font-bold uppercase text-slate-400">
-                            {typeLabel(roi)}
-                          </span>
+                          <span className="block truncate font-semibold">{roi.fieldName || "(Unnamed)"}</span>
+                          <span className="ui-caption mt-0.5 block text-slate-400">{typeLabel(roi)}</span>
                         </span>
+                        <StatusBadge status={checked ? "ready" : "disabled"} tone={checked ? "success" : "neutral"} />
                       </label>
                     );
                   })
@@ -177,10 +195,10 @@ export default function MatchedTemplateWorkspaceZone({
             </section>
 
             {selectedRoi && (
-              <section className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
-                <h3 className="font-black uppercase tracking-wider text-slate-700">Selected Field</h3>
-                <p className="mt-2 font-black text-slate-900">{selectedRoi.fieldName}</p>
-                <p className="mt-1 text-[10px] font-bold text-slate-500">
+              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <h3 className="ui-label text-slate-700">Selected Field</h3>
+                <p className="ui-card-title mt-2 text-slate-900">{selectedRoi.fieldName}</p>
+                <p className="ui-caption mt-1 text-slate-500">
                   {typeLabel(selectedRoi)} · Page {(selectedRoi.pageIndex ?? 0) + 1}
                 </p>
               </section>
@@ -190,11 +208,12 @@ export default function MatchedTemplateWorkspaceZone({
               type="button"
               disabled={props.isLoading || enabledCount === 0}
               onClick={triggerOCRProcessing}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-wider text-white shadow-sm hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500"
+              className="ui-button-text ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500"
             >
               <Cpu size={14} className={props.isLoading ? "animate-spin" : ""} />
-              {props.isLoading ? "กำลัง OCR..." : "OCR Selected Fields"}
+              {props.isLoading ? "กำลัง OCR..." : `OCR Selected Fields (${enabledCount})`}
             </button>
+            {enabledCount === 0 && <InlineState tone="warning" message="เลือก Field อย่างน้อย 1 รายการก่อนเริ่ม OCR" />}
           </>
         );
       }}

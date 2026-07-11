@@ -9,6 +9,7 @@ import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
 import { ROI, OCRResult, TemplateField } from "../types/ocr";
 import { detectTemplateDev, fetchTemplateBundle } from "../admin/adminApi";
+import { ActionButton, InlineState } from "../shared/ui";
 
 interface PageConfig {
   rotation: number;
@@ -534,15 +535,40 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 py-8 select-none">
+    <main className="min-h-screen bg-slate-50 py-6 select-none">
       <div className="container mx-auto px-6 max-w-7xl space-y-5">
-        <div className="text-center py-2">
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="ui-caption font-semibold text-blue-600">Document AI Workspace</p>
+              <h1 className="ui-page-title mt-1 text-slate-950">Intelligent OCR Studio</h1>
+              <p className="ui-body mt-1 text-slate-500">
+                Upload, confirm document boundary, detect template, select fields, and review OCR results.
+                {imagesList.length > 0 && ` Active page ${currentIndex + 1}/${imagesList.length}`}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ActionButton href="/admin">Admin</ActionButton>
+              {imagesList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAndUploadNew}
+                  className="ui-button-text rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  New Document
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden text-center py-2">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
             Intelligent OCR Portal
           </h1>
         </div>
 
-        <div className="bg-white border border-slate-200/80 rounded-2xl px-6 py-4 flex items-center justify-between shadow-sm">
+        <div className="hidden bg-white border border-slate-200/80 rounded-2xl px-6 py-4 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2.5">
             <div className="w-2.5 h-2.5 rounded-full bg-indigo-600 shadow-sm shadow-indigo-600/30 animate-pulse"></div>
             <span className="text-xs font-bold tracking-wide text-slate-700 uppercase">
@@ -590,11 +616,7 @@ export default function Home() {
 
         {currentStep === "studio" && (
           <>
-            {classificationStatus && (
-              <section className="rounded-2xl border border-indigo-100 bg-indigo-50 px-5 py-4 text-xs font-bold text-indigo-800 shadow-sm">
-                {classificationStatus}
-              </section>
-            )}
+            {classificationStatus && <InlineState tone={matchedTemplate ? "success" : "info"} message={classificationStatus} />}
 
             {matchedTemplate ? (
               <MatchedTemplateWorkspaceZone

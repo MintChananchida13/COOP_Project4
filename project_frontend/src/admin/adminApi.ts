@@ -415,18 +415,23 @@ export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest
   })),
 });
 
-const mapApiTemplate = (template: ApiTemplate): Template => ({
-  id: template.id,
-  name: template.name,
-  documentType: template.document_type || undefined,
-  category: template.category || undefined,
-  status: mapTemplateStatus(template.status),
-  version: template.version,
-  pageCount: template.page_count,
-  similarityThreshold: template.similarity_threshold,
-  finalConfidenceThreshold: template.final_confidence_threshold,
-  rejectionReason: template.rejection_reason || undefined,
-});
+const mapApiTemplate = (template: ApiTemplate): Template => {
+  const previewPage = template.pages?.find((page) => page.sample_image_url || page.normalized_image_url);
+
+  return {
+    id: template.id,
+    name: template.name,
+    documentType: template.document_type || undefined,
+    category: template.category || undefined,
+    status: mapTemplateStatus(template.status),
+    version: template.version,
+    pageCount: template.page_count,
+    similarityThreshold: template.similarity_threshold,
+    finalConfidenceThreshold: template.final_confidence_threshold,
+    rejectionReason: template.rejection_reason || undefined,
+    previewImageUrl: previewPage?.sample_image_url || previewPage?.normalized_image_url || undefined,
+  };
+};
 
 const mapApiEmbeddingJob = (job?: ApiEmbeddingJob | null): EmbeddingJob | null => {
   if (!job) return null;

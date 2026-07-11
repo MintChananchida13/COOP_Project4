@@ -1,28 +1,52 @@
 "use client";
 
-import React, { useState } from 'react';
-import { Upload, Loader2 } from 'lucide-react';
+import React, { useState } from "react";
+import { FileImage, FileText, Loader2, Upload } from "lucide-react";
 
 interface UploadZoneProps {
   onUploadSuccess: (urls: string[]) => void;
 }
 
-export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
-  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+interface PdfJsLib {
+  GlobalWorkerOptions: { workerSrc: string };
+  getDocument: (options: { data: ArrayBuffer }) => {
+    promise: Promise<{
+      numPages: number;
+      getPage: (pageNumber: number) => Promise<{
+        getViewport: (options: { scale: number }) => { width: number; height: number };
+        render: (options: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => {
+          promise: Promise<void>;
+        };
+      }>;
+    }>;
+  };
+}
 
-  // 🔮 ฟังก์ชันโหลดสคริปต์ PDF.js จากภายนอกแบบ Pure Client-Side เพื่อหนีตัวยึด Chunk ของ Turbopack
-  const loadPdfEngine = (): Promise<any> => {
+declare global {
+  interface Window {
+    pdfjsLib?: PdfJsLib;
+  }
+}
+
+export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const loadPdfEngine = (): Promise<PdfJsLib> => {
     return new Promise((resolve, reject) => {
-      if ((window as any).pdfjsLib) {
-        resolve((window as any).pdfjsLib);
+      if (window.pdfjsLib) {
+        resolve(window.pdfjsLib);
         return;
       }
-      const script = document.createElement('script');
-      // ล็อกเวอร์ชันผ่านคลังไฟล์ประมวลผลสากล
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
       script.onload = () => {
-        const pdfjs = (window as any).pdfjsLib;
-        pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        const pdfjs = window.pdfjsLib;
+        if (!pdfjs) {
+          reject(new Error("PDF.js failed to load."));
+          return;
+        }
+        pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
         resolve(pdfjs);
       };
       script.onerror = (err) => reject(err);
@@ -30,37 +54,29 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     });
   };
 
-  // 📄 ฟังก์ชันแกะหน้าเอกสาร PDF ออกมาเป็นภาพพิกเซลดิบ
   const convertPdfToImages = async (file: File): Promise<string[]> => {
     const pdfjsLib = await loadPdfEngine();
     const arrayBuffer = await file.arrayBuffer();
-    
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
     const pdf = await loadingTask.promise;
     const imageUrls: string[] = [];
 
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
       const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 2.0 }); // ขยายสเกลเพื่อความคมชัดของข้อความภาษาไทย
-
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
       if (!ctx) continue;
 
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-
-      await page.render({
-        canvasContext: ctx,
-        viewport: viewport
-      }).promise;
-
-      imageUrls.push(canvas.toDataURL('image/jpeg', 0.95));
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      imageUrls.push(canvas.toDataURL("image/jpeg", 0.95));
     }
+
     return imageUrls;
   };
 
-  // 鼠标 ดักจับเหตุการณ์โยนหรือเลือกไฟล์ (ภาพหลายภาพ หรือไฟล์ PDF)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -69,16 +85,15 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     let accumulatedImages: string[] = [];
 
     try {
-      for (let i = 0; i < files.length; i++) {
+      for (let i = 0; i < files.length; i += 1) {
         const file = files[i];
-        
-        if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
           const pdfImages = await convertPdfToImages(file);
           accumulatedImages = [...accumulatedImages, ...pdfImages];
         } else {
           const base64 = await new Promise<string>((resolve) => {
             const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
+            reader.onload = () => resolve(String(reader.result || ""));
             reader.readAsDataURL(file);
           });
           accumulatedImages.push(base64);
@@ -89,50 +104,86 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
         onUploadSuccess(accumulatedImages);
       }
     } catch (error) {
-      alert("เกิดข้อผิดพลาดในการแปลงไฟล์เอกสาร");
+      alert("เกิดข้อผิดพลาดในการเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");
       console.error(error);
     } finally {
       setIsProcessing(false);
+      e.target.value = "";
     }
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto py-12 px-4 animate-fade-in">
-      <div className={`relative group border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 shadow-sm min-h-[340px] flex flex-col items-center justify-center bg-white ${isProcessing ? 'border-indigo-300 bg-indigo-50/10' : 'border-slate-200 hover:border-indigo-500 hover:shadow-indigo-500/5'}`}>
-        
+    <div className="mx-auto w-full max-w-4xl px-4 py-8">
+      <div className="mb-5 text-center">
+        <p className="ui-caption font-semibold text-blue-600">Document Intake</p>
+        <h2 className="ui-section-title mt-1 text-slate-950">นำเข้าเอกสารสำหรับ OCR</h2>
+        <p className="ui-body mx-auto mt-2 max-w-2xl text-slate-500">
+          รองรับไฟล์ภาพและ PDF หลายหน้า หลังอัปโหลดระบบจะพาไปตรวจขอบเขตเอกสารก่อนเริ่มตรวจจับ Template
+        </p>
+      </div>
+
+      <div
+        className={`group relative flex min-h-[360px] flex-col items-center justify-center rounded-3xl border bg-white p-10 text-center shadow-sm transition-all duration-300 ${
+          isProcessing
+            ? "border-blue-200 bg-blue-50/40"
+            : "border-slate-200 hover:border-blue-300 hover:shadow-lg hover:shadow-slate-200/70"
+        }`}
+      >
         {isProcessing ? (
-          <div className="flex flex-col items-center justify-center space-y-4 animate-fade-in">
-            <Loader2 className="h-10 w-10 text-indigo-600 animate-spin" />
-            <p className="text-xs font-bold text-slate-600">กำลังประมวลผลและสกัดหน้าเอกสาร...</p>
-            <p className="text-[10px] text-slate-400 font-mono">กำลังคุยกับ Vanilla Engine บนเบราว์เซอร์...</p>
+          <div className="flex flex-col items-center justify-center space-y-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm ring-1 ring-blue-100">
+              <Loader2 className="h-7 w-7 animate-spin" />
+            </div>
+            <div>
+              <p className="ui-card-title text-slate-800">กำลังเตรียมไฟล์เอกสาร</p>
+              <p className="ui-body mt-1 text-slate-500">
+                หากเป็น PDF ระบบจะแปลงแต่ละหน้าเป็นภาพก่อนดำเนินการต่อ
+              </p>
+            </div>
           </div>
         ) : (
           <>
-            <div className="absolute inset-0 bg-gradient-to-b from-indigo-50/0 to-indigo-50/0 group-hover:to-indigo-50/20 opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none" />
-            <input 
-              type="file" 
-              accept="image/*,application/pdf" 
-              multiple 
-              className="absolute inset-0 opacity-0 cursor-pointer z-10" 
-              onChange={handleFileChange} 
+            <div className="pointer-events-none absolute inset-0 rounded-3xl bg-gradient-to-b from-blue-50/0 to-blue-50/60 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              className="absolute inset-0 z-10 cursor-pointer opacity-0"
+              aria-label="Upload document files"
+              onChange={handleFileChange}
             />
-            <div className="relative mb-6 p-4 rounded-full bg-slate-50 border border-slate-100 text-slate-400 group-hover:text-indigo-600 group-hover:bg-indigo-50 group-hover:border-indigo-100 transition-all duration-300 group-hover:scale-110 shadow-sm">
-              <Upload className="h-8 w-8" strokeWidth={2} />
+
+            <div className="relative mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 shadow-sm transition-all duration-300 group-hover:border-blue-200 group-hover:bg-blue-50 group-hover:text-blue-600">
+              <Upload className="h-8 w-8" strokeWidth={2.2} />
             </div>
-            <div className="space-y-2 relative z-20">
-              <h3 className="text-sm font-bold text-slate-700 tracking-tight group-hover:text-indigo-600">
-                Import Documents / Multi-Files
+
+            <div className="relative z-20 space-y-2">
+              <h3 className="ui-card-title text-slate-900">
+                วางไฟล์เอกสารที่นี่ หรือคลิกเพื่อเลือกไฟล์
               </h3>
-              <p className="text-xs text-slate-400 font-medium max-w-sm mx-auto leading-relaxed">
-                ลากและวางไฟล์ หรือ <span className="text-indigo-600 font-semibold underline decoration-2 decoration-indigo-200">คลิกเพื่อเปิดไฟล์</span>
+              <p className="ui-body mx-auto max-w-md text-slate-500">
+                เลือกไฟล์ภาพหรือ PDF หลายหน้าได้พร้อมกัน ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
               </p>
             </div>
-            <div className="mt-8 px-3 py-1 rounded-md bg-slate-100 text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider group-hover:bg-indigo-50 group-hover:text-indigo-500 transition-colors">
-              Supports: PDF, JPG, PNG, WEBP
+
+            <div className="relative z-20 mt-8 flex flex-wrap justify-center gap-2">
+              {[
+                { label: "PDF", Icon: FileText },
+                { label: "JPG", Icon: FileImage },
+                { label: "PNG", Icon: FileImage },
+                { label: "WEBP", Icon: FileImage },
+              ].map(({ label, Icon }) => (
+                <span
+                  key={label}
+                  className="ui-caption inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-500"
+                >
+                  <Icon size={12} />
+                  {label}
+                </span>
+              ))}
             </div>
           </>
         )}
-
       </div>
     </div>
   );

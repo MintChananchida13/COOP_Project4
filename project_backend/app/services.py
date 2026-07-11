@@ -1683,7 +1683,25 @@ class AdminTemplateService:
     def list_templates(self) -> Dict[str, Any]:
         with _connect() as conn:
             rows = conn.execute("SELECT * FROM templates ORDER BY created_at DESC").fetchall()
-        return {"templates": [_template_row_to_api(row) for row in rows]}
+            page_rows = conn.execute(
+                """
+                SELECT * FROM template_pages
+                ORDER BY template_id ASC, page_number ASC
+                """
+            ).fetchall()
+
+        pages_by_template: Dict[str, List[Dict[str, Any]]] = {}
+        for page_row in page_rows:
+            page = _template_page_row_to_api(page_row)
+            pages_by_template.setdefault(page["template_id"], []).append(page)
+
+        templates = []
+        for row in rows:
+            template = _template_row_to_api(row)
+            template["pages"] = pages_by_template.get(template["id"], [])
+            templates.append(template)
+
+        return {"templates": templates}
 
     def get_template(self, template_id: str) -> Dict[str, Any]:
         with _connect() as conn:

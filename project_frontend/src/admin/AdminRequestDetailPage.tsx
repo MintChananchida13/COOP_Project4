@@ -470,7 +470,7 @@ export default function AdminRequestDetailPage({
                 type="button"
                 onClick={handleConvert}
                 disabled={isConverting || loadStatus !== "loaded"}
-                className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
+                className="ui-stable-action-lg rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
                 {isConverting ? "Converting..." : "Convert to Template Draft"}
               </button>
@@ -487,7 +487,7 @@ export default function AdminRequestDetailPage({
                 type="button"
                 onClick={() => setIsDeleteConfirmOpen(true)}
                 disabled={isDeleting || loadStatus !== "loaded"}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-red-700 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400"
+                className="ui-stable-action rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-red-700 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400"
               >
                 {isDeleting ? "Deleting..." : "Delete Request"}
               </button>
@@ -521,7 +521,7 @@ export default function AdminRequestDetailPage({
                 type="button"
                 onClick={handleDelete}
                 disabled={isDeleting}
-                className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-700 disabled:bg-slate-300 disabled:text-slate-500"
+                className="ui-stable-action-sm rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
                 {isDeleting ? "Deleting..." : "Delete"}
               </button>

@@ -9,6 +9,7 @@ import {
   FilePenLine,
 } from "lucide-react";
 import { useAdminState } from "./AdminState";
+import { EmptyState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 export default function AdminDashboard() {
   const { dashboard, requests, templates } = useAdminState();
@@ -22,20 +23,11 @@ export default function AdminDashboard() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">
-              Admin Overview
-            </p>
-            <h1 className="mt-1 text-xl font-black text-slate-900">
-              Template OCR Dashboard
-            </h1>
-            <p className="mt-1 text-xs font-semibold text-slate-400">
-              Monitor template requests, drafts, approvals, and rejected items.
-            </p>
-          </div>
-
+      <PageHeader
+        eyebrow="Admin Overview"
+        title="Template OCR Dashboard"
+        description="Monitor template requests, drafts, approvals, and rejected items."
+        actions={
           <Link
             href="/admin/requests"
             className="inline-flex w-fit items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
@@ -43,14 +35,14 @@ export default function AdminDashboard() {
             Review Requests
             <ArrowUpRight size={13} />
           </Link>
-        </div>
-      </div>
+        }
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map(([label, value, Icon, tone]) => (
           <div
             key={label}
-            className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+            className={`${cardClassName} p-4`}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -134,7 +126,7 @@ function DashboardList({
   emptyText: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className={`${cardClassName} p-4`}>
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
@@ -154,9 +146,7 @@ function DashboardList({
 
       <div className="space-y-2">
         {items.length === 0 ? (
-          <p className="rounded-xl bg-slate-50 p-3 text-sm font-semibold text-slate-400">
-            {emptyText}
-          </p>
+          <EmptyState title={emptyText} message="Items will appear here after backend data is available." />
         ) : (
           items.map((item) => (
             <div
@@ -173,15 +163,7 @@ function DashboardList({
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
-                <span
-                  className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${
-                    item.tone === "amber"
-                      ? "bg-amber-50 text-amber-600"
-                      : "bg-indigo-50 text-indigo-600"
-                  }`}
-                >
-                  {item.status}
-                </span>
+                <StatusBadge status={item.status} tone={item.tone === "amber" ? "warning" : "primary"} />
 
                 {item.editHref && (
                   <Link
