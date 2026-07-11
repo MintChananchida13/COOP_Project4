@@ -9,6 +9,45 @@ const formatSignedScore = (score?: number | null) =>
 const readText = (value: unknown) => (typeof value === "string" && value.trim() ? value : "N/A");
 const readValue = (value: unknown) => (typeof value === "number" || typeof value === "boolean" ? String(value) : readText(value));
 const readScore = (value: unknown) => (typeof value === "number" ? formatScore(value) : "N/A");
+const isImageVerificationField = (field: Record<string, unknown>) =>
+  field.anchor_type === "image" ||
+  field.verification_method === "image_feature" ||
+  field.match_type === "image_feature";
+const readPreviewValue = (field: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = field[key];
+    if (typeof value === "string" && value.trim()) return previewSrc(value);
+  }
+  return "";
+};
+const renderVerificationExpected = (field: Record<string, unknown>) => {
+  if (!isImageVerificationField(field)) return readText(field.expected_text);
+  const src = readPreviewValue(field, ["reference_crop_preview_data_url", "reference_crop_preview_url"]);
+  if (!src) return <span className="text-slate-400">Reference image unavailable</span>;
+  return (
+    <div className="w-32 rounded-lg border border-orange-100 bg-orange-50 p-1.5">
+      <img src={src} alt="Expected anchor reference" className="h-20 w-full rounded bg-white object-contain" />
+      <div className="mt-1 text-[9px] font-black uppercase text-orange-700">Reference</div>
+    </div>
+  );
+};
+const renderVerificationActual = (field: Record<string, unknown>) => {
+  if (!isImageVerificationField(field)) return readText(field.actual_text);
+  const src = readPreviewValue(field, ["current_crop_preview_data_url", "current_crop_preview_url"]);
+  if (!src) return <span className="text-slate-400">Test image unavailable</span>;
+  return (
+    <div className="w-32 rounded-lg border border-sky-100 bg-sky-50 p-1.5">
+      <img src={src} alt="Actual anchor crop" className="h-20 w-full rounded bg-white object-contain" />
+      <div className="mt-1 text-[9px] font-black uppercase text-sky-700">Current</div>
+    </div>
+  );
+};
+const DebugMetric = ({ label, value }: { label: string; value: string }) => (
+  <div className="rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
+    <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</div>
+    <div className="mt-1 break-words text-[11px] font-bold text-slate-700">{value}</div>
+  </div>
+);
 const verificationFields = (candidate?: DetectionCandidate | null) => {
   const verification = candidate?.verification || {};
   const fields = verification.verification_details || verification.checked_fields;
@@ -591,7 +630,6 @@ export default function AdminDetectionLabPage() {
                             <th className="px-3 py-2">Actual</th>
                             <th className="px-3 py-2">Match</th>
                             <th className="px-3 py-2">Score</th>
-                            <th className="px-3 py-2">Result</th>
                             <th className="px-3 py-2">Reason</th>
                           </tr>
                         </thead>
@@ -599,13 +637,10 @@ export default function AdminDetectionLabPage() {
                           {currentVerificationFields.map((field, index) => (
                             <tr key={`${readText(field.field_id)}-${index}`}>
                               <td className="px-3 py-2">{readText(field.field_name)}</td>
-                              <td className="px-3 py-2">{readText(field.expected_text)}</td>
-                              <td className="px-3 py-2">{readText(field.actual_text)}</td>
+                              <td className="px-3 py-2 align-top">{renderVerificationExpected(field)}</td>
+                              <td className="px-3 py-2 align-top">{renderVerificationActual(field)}</td>
                               <td className="px-3 py-2">{readText(field.match_type)}</td>
                               <td className="px-3 py-2">{readScore(field.field_score ?? field.score)}</td>
-                              <td className={`px-3 py-2 font-black ${field.passed ? "text-emerald-600" : "text-red-600"}`}>
-                                {field.passed ? "Passed" : "Failed"}
-                              </td>
                               <td className="px-3 py-2">{readText(field.failure_reason || field.error)}</td>
                             </tr>
                           ))}
@@ -616,18 +651,41 @@ export default function AdminDetectionLabPage() {
                       <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
                         Show Debug Details
                       </summary>
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
                         {currentVerificationFields.map((field, index) => (
-                          <div key={`verification-debug-${readText(field.field_id)}-${index}`} className="rounded-lg border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-600">
-                            <div className="font-black text-slate-800">{readText(field.field_name)}</div>
-                            <div className="mt-2 space-y-1">
-                              <p>Normalized Expected: {readText(field.normalized_expected)}</p>
-                              <p>Normalized Actual: {readText(field.normalized_actual)}</p>
-                              <p>Text Similarity: {readScore(field.text_similarity_score)}</p>
-                              <p>OCR Confidence: {readScore(field.ocr_confidence)}</p>
-                              <p>Threshold: {readScore(field.verification_threshold)}</p>
-                              <p>Field Score: {readScore(field.field_score ?? field.score)}</p>
-                              <p>Failure Reason: {readText(field.failure_reason || field.error)}</p>
+                          <div key={`verification-debug-${readText(field.field_id)}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-600">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <div className="font-black text-slate-900">{readText(field.field_name)}</div>
+                                <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                                  {isImageVerificationField(field) ? "Image Anchor" : "Text Anchor"}
+                                </div>
+                              </div>
+                              <span className="rounded-full bg-indigo-100 px-2 py-1 text-[10px] font-black uppercase text-indigo-700">
+                                Final input {readScore(field.field_score ?? field.score)}
+                              </span>
+                            </div>
+                            {isImageVerificationField(field) && (
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                <div>
+                                  <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-orange-700">Expected Reference</div>
+                                  {renderVerificationExpected(field)}
+                                </div>
+                                <div>
+                                  <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-sky-700">Actual Crop</div>
+                                  {renderVerificationActual(field)}
+                                </div>
+                              </div>
+                            )}
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                              <DebugMetric label="Normalized Expected" value={readText(field.normalized_expected)} />
+                              <DebugMetric label="Normalized Actual" value={readText(field.normalized_actual)} />
+                              <DebugMetric label="Text Similarity" value={readScore(field.text_similarity_score)} />
+                              <DebugMetric label="OCR Confidence" value={readScore(field.ocr_confidence)} />
+                              <DebugMetric label="DINO Similarity" value={readScore(field.dino_similarity_score)} />
+                              <DebugMetric label="Threshold" value={readScore(field.verification_threshold)} />
+                              <DebugMetric label="Field Score" value={readScore(field.field_score ?? field.score)} />
+                              <DebugMetric label="Reason" value={readText(field.failure_reason || field.error)} />
                             </div>
                           </div>
                         ))}
@@ -668,7 +726,6 @@ export default function AdminDetectionLabPage() {
                         <td className="px-3 py-2">{formatScore(candidate.retrievalScore)}</td>
                         <td className="px-3 py-2">
                           {formatScore(candidate.verificationScore)}
-                          {candidate.verificationPassed === false ? " failed" : candidate.verificationPassed === true ? " passed" : ""}
                         </td>
                       </tr>
                     ))

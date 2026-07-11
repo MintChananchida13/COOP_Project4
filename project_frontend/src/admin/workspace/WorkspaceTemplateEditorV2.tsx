@@ -334,41 +334,13 @@ export default function WorkspaceTemplateEditorV2({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
-              {step === "verification_anchors" ? "2.2 Verification Anchors" : "2.1 Define Extraction Fields"}
+              {step === "verification_anchors" ? "2.2 Verification Anchors" : "2.1 Workspace ROI"}
             </h2>
             <p className="mt-1 text-xs font-semibold text-slate-500">
               {step === "verification_anchors"
                 ? "Anchors confirm the template only. They are never returned as extraction results."
                 : "Extraction fields are the data returned to the end user."}
             </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setStep("extraction_fields");
-                setMode("extraction_fields");
-                setSelectedId(null);
-                clearStepTest();
-              }}
-              className={`rounded-xl px-4 py-2 text-xs font-black ${step === "extraction_fields" ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-700"}`}
-            >
-              Define Extraction Fields
-            </button>
-            {step === "verification_anchors" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setStep("verification_anchors");
-                  setMode("verification_anchors");
-                  setSelectedId(null);
-                  clearStepTest();
-                }}
-                className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-black text-white"
-              >
-                Verification Anchors
-              </button>
-            )}
           </div>
         </div>
       </section>
@@ -469,6 +441,20 @@ export default function WorkspaceTemplateEditorV2({
               </>
             ) : (
               <>
+                <section className="rounded-xl border border-slate-200 bg-white p-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep("extraction_fields");
+                      setMode("extraction_fields");
+                      setSelectedId(null);
+                      clearStepTest();
+                    }}
+                    className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+                  >
+                    Back to 2.1 Define Extraction Fields
+                  </button>
+                </section>
                 <section className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
                   <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Verification Anchors</h3>
                   <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
@@ -528,30 +514,6 @@ export default function WorkspaceTemplateEditorV2({
                 )}
               </>
             )}
-            <section className="space-y-2 border-t border-slate-200 pt-4">
-              {step === "extraction_fields" ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStep("verification_anchors");
-                    setMode("verification_anchors");
-                    setSelectedId(null);
-                    clearStepTest();
-                  }}
-                  className="w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700"
-                >
-                  Next: Verification Anchors
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onRunTestMode}
-                  className="w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white hover:bg-slate-800"
-                >
-                  Test Mode
-                </button>
-              )}
-            </section>
           </>
         )}
       />
@@ -609,6 +571,33 @@ export default function WorkspaceTemplateEditorV2({
           <p className="mt-4 rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">
             No step test results yet.
           </p>
+        )}
+        {step === "extraction_fields" && (
+          <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setStep("verification_anchors");
+                setMode("verification_anchors");
+                setSelectedId(null);
+                clearStepTest();
+              }}
+              className="rounded-xl bg-amber-600 px-5 py-2.5 text-xs font-black text-white hover:bg-amber-700"
+            >
+              Next: Verification Anchors
+            </button>
+          </div>
+        )}
+        {step === "verification_anchors" && (
+          <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              onClick={onRunTestMode}
+              className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-slate-800"
+            >
+              Test Mode
+            </button>
+          </div>
         )}
       </section>
     </div>

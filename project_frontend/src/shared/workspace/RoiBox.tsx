@@ -34,18 +34,27 @@ export default function RoiBox({
   const hasPoints = roi.points && roi.points.length > 0;
   const roiKind = (roi as WorkspaceRoi & { kind?: string }).kind;
   const isIgnoreRegion = roiKind === "ignore_region";
+  const isVerificationAnchor = roiKind === "verification_anchor";
   const isDimmed = !selected && (dimmed || !checked);
   const boxClass = selected
-    ? "border-sky-500 bg-sky-400/25 ring-4 ring-sky-300/45 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+    ? isVerificationAnchor
+      ? "border-orange-600 bg-orange-400/25 ring-4 ring-orange-300/45 shadow-[0_0_0_1px_rgba(234,88,12,0.35)]"
+      : "border-sky-500 bg-sky-400/25 ring-4 ring-sky-300/45 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
     : checked
-      ? isIgnoreRegion
+      ? isVerificationAnchor
+        ? "border-orange-600 bg-orange-400/20 ring-2 ring-orange-500/20"
+        : isIgnoreRegion
         ? "border-amber-600 bg-amber-400/20 ring-2 ring-amber-500/20"
         : "border-indigo-600 bg-indigo-500/15 ring-2 ring-indigo-500/20"
       : "border-slate-400 bg-slate-400/5";
   const labelClass = selected
-    ? "bg-sky-600 border-sky-600 text-white"
+    ? isVerificationAnchor
+      ? "bg-orange-600 border-orange-600 text-white"
+      : "bg-sky-600 border-sky-600 text-white"
     : checked
-      ? isIgnoreRegion
+      ? isVerificationAnchor
+        ? "bg-orange-600 border-orange-600 text-white"
+        : isIgnoreRegion
         ? "bg-amber-600 border-amber-600 text-white"
         : "bg-indigo-600 border-indigo-600 text-white"
       : "bg-white border-slate-200 text-slate-500";
@@ -72,8 +81,18 @@ export default function RoiBox({
           <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
             <polygon
               points={roi.points?.map((p) => `${p.x - roi.x},${p.y - roi.y}`).join(" ")}
-              fill={selected ? "rgba(14, 165, 233, 0.24)" : checked ? "rgba(79, 70, 229, 0.18)" : "rgba(100, 116, 139, 0.08)"}
-              stroke={selected ? "#0284c7" : checked ? "#4f46e5" : "#64748b"}
+              fill={
+                selected
+                  ? isVerificationAnchor
+                    ? "rgba(249, 115, 22, 0.24)"
+                    : "rgba(14, 165, 233, 0.24)"
+                  : checked
+                    ? isVerificationAnchor
+                      ? "rgba(249, 115, 22, 0.18)"
+                      : "rgba(79, 70, 229, 0.18)"
+                    : "rgba(100, 116, 139, 0.08)"
+              }
+              stroke={selected ? (isVerificationAnchor ? "#ea580c" : "#0284c7") : checked ? (isVerificationAnchor ? "#f97316" : "#4f46e5") : "#64748b"}
               strokeWidth="2"
               strokeDasharray={readonly ? "4,3" : "0"}
             />

@@ -471,8 +471,9 @@ const buildValidationItems = (
 
 const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): WorkspaceRoi & { kind: string; pageNumber: number } => {
   const box = ratioToImageBox(field.roi, metrics);
+  const isAnchor = field.useForVerification;
   return {
-    id: stableNumericId(`field:${field.id}`),
+    id: stableNumericId(`${isAnchor ? "anchor" : "field"}:${field.id}`),
     fieldName: field.displayLabel || field.fieldName,
     x: box.x,
     y: box.y,
@@ -480,7 +481,7 @@ const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): Works
     height: box.height,
     pageIndex: field.pageNumber - 1,
     pageNumber: field.pageNumber,
-    kind: "template_field",
+    kind: isAnchor ? "verification_anchor" : "extraction_field",
     type: field.dataType === "table" ? "table" : field.dataType === "image" ? "image" : "text",
   };
 };
@@ -630,6 +631,27 @@ function DraftSummaryCard({ label, value }: { label: string; value: string | num
     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</div>
       <div className="mt-1 text-lg font-black text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function DraftOverviewMetric({ label, value, tone = "slate" }: { label: string; value: string | number; tone?: "slate" | "indigo" | "orange" | "emerald" }) {
+  const toneClass = {
+    slate: "border-slate-200 bg-slate-50 text-slate-900",
+    indigo: "border-indigo-100 bg-indigo-50 text-indigo-950",
+    orange: "border-orange-100 bg-orange-50 text-orange-950",
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-950",
+  }[tone];
+  const labelClass = {
+    slate: "text-slate-500",
+    indigo: "text-indigo-600",
+    orange: "text-orange-700",
+    emerald: "text-emerald-700",
+  }[tone];
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${toneClass}`}>
+      <div className={`text-[9px] font-black uppercase tracking-wider ${labelClass}`}>{label}</div>
+      <div className="mt-1 truncate text-sm font-black">{value}</div>
     </div>
   );
 }
@@ -1058,13 +1080,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             Back to Edit Template
           </Link>
         </div>
-        <div className="mt-4 grid gap-2 lg:grid-cols-5">
+        <div className="mt-4 grid gap-2 lg:grid-cols-4">
           {[
             [1, "Review ROI & OCR"],
             [2, "Embedding Simulation"],
-            [3, "New Document Test"],
-            [4, "Candidate Details"],
-            [5, "Publish Review"],
+            [3, "Candidate Details"],
+            [4, "Publish Review"],
           ].map(([step, label]) => (
             <button
               key={String(step)}
@@ -1088,19 +1109,21 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <DraftSectionHeader title="1. Draft Template Summary" subtitle="This page validates the draft before any production embedding is saved." />
-          <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
+          <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700">
             {template.status}
           </span>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <DraftSummaryCard label="Template Name" value={template.name} />
-          <DraftSummaryCard label="Status" value={simulation?.draftSummary.status || template.status} />
-          <DraftSummaryCard label="Pages" value={simulation?.draftSummary.pageCount ?? safePages.length} />
-          <DraftSummaryCard label="Extraction Fields" value={simulation?.draftSummary.extractionFieldCount ?? extractionFields.length} />
-          <DraftSummaryCard label="Text Anchors" value={simulation?.draftSummary.textAnchorCount ?? textAnchors.length} />
-          <DraftSummaryCard label="Image Anchors" value={simulation?.draftSummary.imageAnchorCount ?? imageAnchors.length} />
-          <DraftSummaryCard label="DINOv2 Model" value={simulation?.temporaryEmbedding.modelName || "Not simulated"} />
-          <DraftSummaryCard label="Embedding Dimension" value={simulation?.temporaryEmbedding.embeddingDimension || "Not simulated"} />
+        <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <DraftOverviewMetric label="Template Name" value={template.name} />
+            <DraftOverviewMetric label="Status" value={simulation?.draftSummary.status || template.status} tone="emerald" />
+            <DraftOverviewMetric label="Pages" value={simulation?.draftSummary.pageCount ?? safePages.length} />
+            <DraftOverviewMetric label="Extraction Fields" value={simulation?.draftSummary.extractionFieldCount ?? extractionFields.length} tone="indigo" />
+            <DraftOverviewMetric label="Text Anchors" value={simulation?.draftSummary.textAnchorCount ?? textAnchors.length} tone="orange" />
+            <DraftOverviewMetric label="Image Anchors" value={simulation?.draftSummary.imageAnchorCount ?? imageAnchors.length} tone="orange" />
+            <DraftOverviewMetric label="DINOv2 Model" value={simulation?.temporaryEmbedding.modelName || "Not simulated"} />
+            <DraftOverviewMetric label="Embedding Dimension" value={simulation?.temporaryEmbedding.embeddingDimension || "Not simulated"} />
+          </div>
         </div>
       </section>
 
@@ -1143,29 +1166,39 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             />
           </WorkspaceCanvas>
           <aside className="space-y-3">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <h4 className="text-xs font-black text-slate-800">Page {currentPageNumber} Extraction Fields</h4>
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-black text-indigo-950">Page {currentPageNumber} Extraction Fields</h4>
+                <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[9px] font-black uppercase text-white">Blue ROI</span>
+              </div>
               <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
                 {currentPageFields.length === 0 ? (
-                  <p className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-500">No extraction fields on this page.</p>
+                  <p className="rounded-lg bg-white p-3 text-xs font-semibold text-indigo-500">No extraction fields on this page.</p>
                 ) : (
                   currentPageFields.map((field) => (
                     <button
                       key={field.id}
                       type="button"
                       onClick={() => setSelectedFieldId(field.id)}
-                      className={`w-full rounded-lg border p-3 text-left text-xs ${selectedFieldId === field.id ? "border-indigo-400 bg-indigo-50 text-indigo-900" : "border-slate-200 bg-white text-slate-700"}`}
+                      className={`w-full rounded-lg border p-3 text-left text-xs transition-colors ${
+                        selectedFieldId === field.id
+                          ? "border-indigo-500 bg-white text-indigo-950 shadow-sm ring-2 ring-indigo-200"
+                          : "border-indigo-100 bg-white/85 text-indigo-900 hover:border-indigo-300"
+                      }`}
                     >
                       <div className="font-black">{field.displayLabel}</div>
-                      <div className="mt-1 text-[10px] font-bold text-slate-500">{field.fieldName}</div>
-                      <div className="mt-1 text-[9px] font-black uppercase text-slate-400">{field.extractionMethod}</div>
+                      <div className="mt-1 text-[10px] font-bold text-indigo-500">{field.fieldName}</div>
+                      <div className="mt-2 w-fit rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">{field.extractionMethod}</div>
                     </button>
                   ))
                 )}
               </div>
             </div>
-            <div className="rounded-xl border border-orange-100 bg-orange-50 p-3">
-              <h4 className="text-xs font-black text-orange-900">Page {currentPageNumber} Verification Anchors</h4>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/80 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-black text-orange-950">Page {currentPageNumber} Verification Anchors</h4>
+                <span className="rounded-full bg-orange-600 px-2 py-0.5 text-[9px] font-black uppercase text-white">Orange ROI</span>
+              </div>
               <div className="mt-3 space-y-2">
                 {currentPageAnchors.length === 0 ? (
                   <p className="text-xs font-semibold text-orange-700">No anchors on this page.</p>
@@ -1175,10 +1208,17 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                       key={anchor.id}
                       type="button"
                       onClick={() => setSelectedFieldId(anchor.id)}
-                      className={`w-full rounded-lg border p-3 text-left text-xs ${selectedFieldId === anchor.id ? "border-orange-400 bg-white text-orange-900" : "border-orange-100 bg-white/70 text-orange-800"}`}
+                      className={`w-full rounded-lg border p-3 text-left text-xs transition-colors ${
+                        selectedFieldId === anchor.id
+                          ? "border-orange-500 bg-white text-orange-950 shadow-sm ring-2 ring-orange-200"
+                          : "border-orange-100 bg-white/80 text-orange-900 hover:border-orange-300"
+                      }`}
                     >
                       <div className="font-black">{anchor.displayLabel}</div>
-                      <div className="mt-1 text-[10px] font-bold">Expected: {anchor.expectedText || "N/A"}</div>
+                      <div className="mt-1 text-[10px] font-bold text-orange-700">Expected: {anchor.expectedText || "N/A"}</div>
+                      <div className="mt-2 w-fit rounded-full bg-orange-100 px-2 py-0.5 text-[9px] font-black uppercase text-orange-700">
+                        {anchor.dataType === "image" ? "Image Anchor" : "Text Anchor"}
+                      </div>
                     </button>
                   ))
                 )}
@@ -1224,7 +1264,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
 
       {validationStep === 2 && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
             title="3. Temporary Embedding Simulation"
             subtitle="Run this after reviewing ROI and OCR preview. The temporary embedding is used only for this pre-publish test."
@@ -1233,19 +1273,35 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             type="button"
             onClick={handleRunPrepublishSimulation}
             disabled={simulationAction !== null}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
           >
             {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
           </button>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+        <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Simulation Pipeline</h4>
+              <p className="mt-1 text-[10px] font-semibold text-slate-500">Temporary only. Nothing is saved to Qdrant or production storage.</p>
+            </div>
+            <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${
+              simulationAction === "run"
+                ? "bg-indigo-100 text-indigo-700"
+                : simulation
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-slate-200 text-slate-600"
+            }`}>
+              {simulationAction === "run" ? "Running" : simulation ? "Completed" : "Not Started"}
+            </span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-7">
           {prepublishSimulationSteps.map((step, index) => {
             const isDone = Boolean(simulation) || index < simulationStep;
             const isCurrent = simulationAction === "run" && index === simulationStep;
             return (
               <div
                 key={step}
-                className={`rounded-xl border p-3 text-xs font-black ${
+                className={`rounded-lg border px-2.5 py-2 text-[10px] font-black ${
                   isDone
                     ? "border-emerald-100 bg-emerald-50 text-emerald-700"
                     : isCurrent
@@ -1253,19 +1309,24 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                       : "border-slate-100 bg-slate-50 text-slate-400"
                 }`}
               >
-                {isDone ? <CheckCircle2 size={15} /> : isCurrent ? <Info size={15} /> : <span className="block h-[15px]" />}
-                <div className="mt-2">{step}</div>
+                <div className="flex items-center gap-2">
+                  {isDone ? <CheckCircle2 size={14} /> : isCurrent ? <Info size={14} /> : <span className="block h-3.5 w-3.5 rounded-full bg-slate-200" />}
+                  <span className="leading-snug">{step}</span>
+                </div>
               </div>
             );
           })}
+          </div>
         </div>
         {simulation?.temporaryEmbedding && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <DraftSummaryCard label="Status" value={simulation.temporaryEmbedding.status} />
-            <DraftSummaryCard label="Model" value={simulation.temporaryEmbedding.modelName || "N/A"} />
-            <DraftSummaryCard label="Engine" value={simulation.temporaryEmbedding.engine} />
-            <DraftSummaryCard label="Dimension" value={simulation.temporaryEmbedding.embeddingDimension} />
-            <DraftSummaryCard label="Generated" value={simulation.temporaryEmbedding.generatedAt || "N/A"} />
+          <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              <DraftOverviewMetric label="Status" value={simulation.temporaryEmbedding.status} tone="emerald" />
+              <DraftOverviewMetric label="Model" value={simulation.temporaryEmbedding.modelName || "N/A"} />
+              <DraftOverviewMetric label="Engine" value={simulation.temporaryEmbedding.engine} tone="indigo" />
+              <DraftOverviewMetric label="Dimension" value={simulation.temporaryEmbedding.embeddingDimension} />
+              <DraftOverviewMetric label="Generated" value={simulation.temporaryEmbedding.generatedAt || "N/A"} />
+            </div>
           </div>
         )}
       </section>
@@ -1274,75 +1335,75 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       {validationStep === 3 && (
       <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
-            title="4. Test with a New Document"
+            title="Test with a New Document"
             subtitle="Upload a different image or multi-page PDF to compare this draft temporary embedding against published templates."
           />
           <button
             type="button"
             onClick={handleRunDetectionTest}
             disabled={!canRunDetectionTest}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
           >
             {detectionTestAction ? "Running..." : "Run Detection Test"}
           </button>
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <label className="block text-xs font-black uppercase tracking-wider text-slate-700">Test Document</label>
+        <div className="mt-4 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-700">Test Document</label>
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp,application/pdf"
               onChange={(event) => handleTestDocumentChange(event.target.files?.[0] || null)}
-              className="mt-3 block w-full text-xs font-semibold text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-xs file:font-black file:text-white"
+              className="mt-3 block w-full text-[11px] font-semibold text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-[11px] file:font-black file:text-white"
             />
             {testDocumentFile && (
-              <div className="mt-3 rounded-lg bg-white p-3 text-xs font-semibold text-slate-600">
-                <div className="font-black text-slate-900">{testDocumentFile.name}</div>
+              <div className="mt-3 rounded-lg bg-white p-2.5 text-[11px] font-semibold text-slate-600">
+                <div className="truncate font-black text-slate-900">{testDocumentFile.name}</div>
                 <div className="mt-1">{Math.round(testDocumentFile.size / 1024)} KB</div>
               </div>
             )}
             {testDocumentPreviewUrl ? (
-              <img src={testDocumentPreviewUrl} alt="" className="mt-3 max-h-56 w-full rounded-xl border border-slate-200 bg-white object-contain" />
+              <img src={testDocumentPreviewUrl} alt="" className="mt-3 max-h-44 w-full rounded-lg border border-slate-200 bg-white object-contain" />
             ) : (
-              <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs font-semibold text-slate-500">
+              <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-[11px] font-semibold text-slate-500">
                 {testDocumentFile?.type === "application/pdf" ? "PDF selected. Preview will be generated by backend during test." : "PNG, JPEG, WebP, or PDF"}
               </div>
             )}
             {!simulation?.temporaryEmbedding && (
-              <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
+              <p className="mt-3 rounded-lg bg-amber-50 p-2.5 text-[11px] font-bold text-amber-700">
                 Run Temporary Embedding Simulation before testing a new document.
               </p>
             )}
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             {detectionTestError && <p className="rounded-xl bg-red-50 p-3 text-xs font-black text-red-700">{detectionTestError}</p>}
             {!detectionTest ? (
-              <div className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs font-semibold text-slate-500">
                 No new document detection test has been run yet.
               </div>
             ) : (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <DraftSummaryCard label="Matched" value={detectionTest.matched ? "YES" : "NO"} />
-                  <DraftSummaryCard label="Selected Template" value={detectionTest.selectedTemplate?.templateName || detectionTest.selectedTemplate?.templateId || "N/A"} />
-                  <DraftSummaryCard label="Selected Type" value={detectionTest.selectedTemplateType || "N/A"} />
-                  <DraftSummaryCard label="Final Confidence" value={formatPrepublishScore(detectionTest.finalConfidence)} />
-                  <DraftSummaryCard label="Decision Reason" value={detectionTest.decisionReason || "N/A"} />
-                  <DraftSummaryCard label="Draft Template Rank" value={detectionTest.draftTemplateRank ?? "N/A"} />
-                  <DraftSummaryCard label="Result" value={detectionTest.passed ? "PASS" : detectionTest.warning ? "WARNING" : "FAIL"} />
+              <div className="rounded-xl border border-slate-100 bg-white p-3">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <DraftOverviewMetric label="Matched" value={detectionTest.matched ? "YES" : "NO"} tone={detectionTest.matched ? "emerald" : "slate"} />
+                  <DraftOverviewMetric label="Selected Template" value={detectionTest.selectedTemplate?.templateName || detectionTest.selectedTemplate?.templateId || "N/A"} />
+                  <DraftOverviewMetric label="Selected Type" value={detectionTest.selectedTemplateType || "N/A"} />
+                  <DraftOverviewMetric label="Final Confidence" value={formatPrepublishScore(detectionTest.finalConfidence)} tone="indigo" />
+                  <DraftOverviewMetric label="Decision Reason" value={detectionTest.decisionReason || "N/A"} />
+                  <DraftOverviewMetric label="Draft Template Rank" value={detectionTest.draftTemplateRank ?? "N/A"} />
+                  <DraftOverviewMetric label="Result" value={detectionTest.passed ? "PASS" : detectionTest.warning ? "WARNING" : "FAIL"} tone={detectionTest.passed ? "emerald" : detectionTest.warning ? "orange" : "slate"} />
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="Candidate Ranking" subtitle="Draft temporary embedding and published Qdrant embeddings are ranked together." />
+        <DraftSectionHeader title="3. Candidate Details" subtitle="Review unified ranking and expand candidates only when detailed verification/debug is needed." />
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200 text-xs">
             <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -1402,29 +1463,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         </div>
       </section>
       </>
-      )}
-
-      {validationStep === 4 && (
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="Candidate Details" subtitle="Open a candidate to inspect retrieval, anchor, verification, preview, and decision details." />
-        <div className="mt-4 space-y-3">
-          {(detectionTest?.candidates || []).length === 0 ? (
-            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">Run New Document Detection Test to inspect candidate details.</p>
-          ) : (
-            detectionTest?.candidates.map((candidate) => {
-              const key = `${candidate.templateId}-${candidate.rank}-detail-step`;
-              return (
-                <DraftCandidateCard
-                  key={key}
-                  candidate={candidate}
-                  open={Boolean(expandedDetectionCandidates[key])}
-                  onToggle={() => setExpandedDetectionCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
-                />
-              );
-            })
-          )}
-        </div>
-      </section>
       )}
 
       {false && (
@@ -1494,25 +1532,46 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       </section>
       )}
 
-      {validationStep === 5 && (
+      {validationStep === 4 && (
       <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <DraftSectionHeader title="Template Separation" subtitle="Final separation summary before publishing." />
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <DraftSummaryCard label="Closest Existing Template" value={simulation?.separationAnalysis.conflictTemplates[0]?.templateName || "N/A"} />
-          <DraftSummaryCard label="Similarity" value={formatPrepublishScore(simulation?.separationAnalysis.conflictTemplates[0]?.finalScore)} />
-          <DraftSummaryCard label="Conflict Detection" value={(simulation?.separationAnalysis.status || "not_ready").replaceAll("_", " ")} />
-          <DraftSummaryCard label="Recommendation" value={simulation?.separationAnalysis.message || (simulationPassed ? "Ready" : "Run Simulation")} />
-        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Simulation Separation</h4>
+              <DraftStatusPill passed={simulationPassed} label={simulationPassed ? "READY" : "WAIT"} />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <DraftOverviewMetric label="Closest Existing Template" value={simulation?.separationAnalysis.conflictTemplates[0]?.templateName || "N/A"} />
+              <DraftOverviewMetric label="Similarity" value={formatPrepublishScore(simulation?.separationAnalysis.conflictTemplates[0]?.finalScore)} />
+              <DraftOverviewMetric label="Conflict Detection" value={(simulation?.separationAnalysis.status || "not_ready").replaceAll("_", " ")} tone={simulationPassed ? "emerald" : "orange"} />
+              <DraftOverviewMetric label="Recommendation" value={simulation?.separationAnalysis.message || (simulationPassed ? "Ready" : "Run Simulation")} />
+            </div>
+          </div>
         {detectionTest && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <DraftSummaryCard label="New Doc Draft Rank" value={detectionTest.separationResult.draftTemplateRank ?? "N/A"} />
-            <DraftSummaryCard label="Draft Final Score" value={formatPrepublishScore(detectionTest.separationResult.draftFinalScore)} />
-            <DraftSummaryCard label="Closest Published" value={detectionTest.separationResult.closestPublishedTemplate || "N/A"} />
-            <DraftSummaryCard label="Closest Published Score" value={formatPrepublishScore(detectionTest.separationResult.closestPublishedScore)} />
-            <DraftSummaryCard label="New Doc Recommendation" value={detectionTest.separationResult.recommendation || "N/A"} />
+          <div className="rounded-xl border border-slate-100 bg-white p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">New Document Separation</h4>
+              <DraftStatusPill passed={detectionTestPassed} label={detectionTestPassed ? "PASS" : "REVIEW"} />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <DraftOverviewMetric label="Draft Rank" value={detectionTest.separationResult.draftTemplateRank ?? "N/A"} tone={detectionTestPassed ? "emerald" : "orange"} />
+              <DraftOverviewMetric label="Draft Final Score" value={formatPrepublishScore(detectionTest.separationResult.draftFinalScore)} tone="indigo" />
+              <DraftOverviewMetric label="Closest Published" value={detectionTest.separationResult.closestPublishedTemplate || "N/A"} />
+              <DraftOverviewMetric label="Closest Published Score" value={formatPrepublishScore(detectionTest.separationResult.closestPublishedScore)} />
+              <div className="sm:col-span-2">
+                <DraftOverviewMetric label="Recommendation" value={detectionTest.separationResult.recommendation || "N/A"} />
+              </div>
+            </div>
           </div>
         )}
+        {!detectionTest && (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">
+            Run New Document Test to see document-level separation before publishing.
+          </div>
+        )}
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

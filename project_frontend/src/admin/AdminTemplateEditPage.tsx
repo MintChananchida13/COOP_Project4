@@ -485,9 +485,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             </p>
           </div>
 
-          <button type="button" onClick={handleAddPage} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white">
-            Add Page
-          </button>
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">

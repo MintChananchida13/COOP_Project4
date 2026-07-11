@@ -67,6 +67,7 @@ export interface WorkspaceCustomEditorProps {
     updateROI: (id: number, fields: Partial<ROI>) => void;
     deleteROI: (id: number) => void;
     moveROI: (index: number, direction: 'up' | 'down') => void;
+    triggerOCRProcessing: () => void;
   }) => React.ReactNode;
   toolbarExtra?: React.ReactNode;
   getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
@@ -1042,7 +1043,7 @@ export default function WorkspaceCustomEditor({
         {/* Right properties panel */}
         {!hideRightPanel && <div className="min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
           {rightPanelRenderer ? (
-            rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI })
+            rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI, triggerOCRProcessing })
           ) : (
             <>
               <button

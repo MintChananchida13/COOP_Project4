@@ -4,9 +4,11 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import AdjustZone from "../user/components/AdjustZone";
 import WorkspaceZone from "../user/components/WorkspaceZone";
+import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWorkspaceZone";
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
-import { ROI, OCRResult } from "../types/ocr";
+import { ROI, OCRResult, TemplateField } from "../types/ocr";
+import { detectTemplateDev, fetchTemplateBundle } from "../admin/adminApi";
 
 interface PageConfig {
   rotation: number;
@@ -94,6 +96,63 @@ const cropRoiToImage = (
   return canvas.toDataURL("image/jpeg", 0.95);
 };
 
+const dataUrlToFile = async (dataUrl: string, filename: string) => {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], filename, { type: blob.type || "image/jpeg" });
+};
+
+const stableNumericId = (value: string) =>
+  Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
+
+const loadImageElement = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const imageObj = new Image();
+    imageObj.onload = () => resolve(imageObj);
+    imageObj.onerror = reject;
+    imageObj.src = src;
+  });
+
+const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList: string[]) => {
+  const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
+
+  return fields
+    .filter((field) => !field.useForVerification)
+    .map((field) => {
+      const pageIndex = Math.max(0, field.pageNumber - 1);
+      const pageImage = pageImages[pageIndex];
+      const displayWidth = 750;
+      const displayHeight = pageImage?.naturalWidth
+        ? (pageImage.naturalHeight / pageImage.naturalWidth) * displayWidth
+        : 1000;
+
+      const type =
+        field.extractionMethod === "ocr_table" || field.dataType === "table"
+          ? "table"
+          : field.extractionMethod === "extract_image" || field.dataType === "image"
+            ? "image"
+            : "text";
+
+      return {
+        id: stableNumericId(`template-field:${field.id}`),
+        fieldName: field.displayLabel || field.fieldName,
+        x: field.roi.xRatio * displayWidth,
+        y: field.roi.yRatio * displayHeight,
+        width: field.roi.widthRatio * displayWidth,
+        height: field.roi.heightRatio * displayHeight,
+        pageIndex,
+        type,
+        dataType: field.dataType || type,
+        extractionMethod:
+          field.extractionMethod === "ocr_table" || field.extractionMethod === "extract_image"
+            ? field.extractionMethod
+            : "ocr_text",
+        role: "data_extraction",
+        enabled: field.defaultSelected !== false,
+      } satisfies ROI & { pageIndex?: number };
+    });
+};
+
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
   const [imagesList, setImagesList] = useState<string[]>([]);
@@ -110,6 +169,13 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
+  const [classificationStatus, setClassificationStatus] = useState<string>("");
+  const [matchedTemplate, setMatchedTemplate] = useState<{
+    id: string;
+    name: string;
+    confidence?: number | null;
+    decisionReason?: string | null;
+  } | null>(null);
 
   const handleUploadSuccess = (urls: string[]) => {
     setImagesList(urls);
@@ -120,6 +186,8 @@ export default function Home() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setClassificationStatus("");
+    setMatchedTemplate(null);
     setPagesConfig(
       urls.map(() => ({
         rotation: 0,
@@ -150,17 +218,59 @@ export default function Home() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setClassificationStatus("");
+    setMatchedTemplate(null);
     setCurrentStep("upload");
   };
 
-  const handleBatchConfirm = (finalProcessedImages: string[]) => {
+  const handleBatchConfirm = async (finalProcessedImages: string[]) => {
     setImagesList(finalProcessedImages);
     setPreviewUrl(finalProcessedImages[currentIndex] || finalProcessedImages[0] || "");
     setImage(finalProcessedImages[currentIndex] || finalProcessedImages[0] || null);
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setMatchedTemplate(null);
     setCurrentStep("studio");
+    setClassificationStatus("กำลังแยกประเภทเอกสารจากภาพที่ยืนยันขอบเขตแล้ว...");
+
+    try {
+      const firstImage = finalProcessedImages[0];
+      if (!firstImage) {
+        setClassificationStatus("ไม่พบภาพสำหรับแยกประเภทเอกสาร ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+        return;
+      }
+
+      const file = await dataUrlToFile(firstImage, "confirmed-document.jpg");
+      const detection = await detectTemplateDev(file);
+      const templateId = detection.bestCandidate?.templateId;
+
+      if (!detection.matched || !templateId) {
+        setClassificationStatus("ไม่พบ Template ที่มั่นใจพอ ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+        return;
+      }
+
+      const bundle = await fetchTemplateBundle(templateId);
+      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, finalProcessedImages);
+      setMatchedTemplate({
+        id: bundle.template.id,
+        name: bundle.template.name,
+        confidence: detection.bestCandidate?.finalScore ?? detection.bestCandidate?.score ?? null,
+        decisionReason: detection.bestCandidate?.decisionReason ?? null,
+      });
+
+      if (detectedRois.length === 0) {
+        setClassificationStatus(`ตรวจพบ Template: ${bundle.template.name} แต่ยังไม่มี Extraction ROI ให้ใช้งาน`);
+        return;
+      }
+
+      setRois(detectedRois);
+      setSelectedId(detectedRois[0]?.id ?? null);
+      setClassificationStatus(`ตรวจพบ Template: ${bundle.template.name} และโหลด ROI สำหรับ OCR แล้ว`);
+    } catch (error) {
+      console.warn("Document classification after boundary confirmation failed.", error);
+      setClassificationStatus("ตรวจจับ Template ไม่สำเร็จ ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+    }
   };
 
   const handleRunOCR = async () => {
@@ -479,29 +589,64 @@ export default function Home() {
         )}
 
         {currentStep === "studio" && (
-          <WorkspaceZone
-            previewUrl={imagesList[currentIndex] || previewUrl}
-            image={imagesList[currentIndex] || image}
-            brightness={pagesConfig[currentIndex]?.brightness ?? 100}
-            contrast={pagesConfig[currentIndex]?.contrast ?? 100}
-            rotation={pagesConfig[currentIndex]?.rotation ?? 0}
-            rois={rois}
-            setRois={setRois}
-            selectedId={selectedId}
-            setSelectedId={setSelectedId}
-            onBackToAdjust={() => setCurrentStep("adjust")}
-            deleteROI={(id) => setRois((p) => p.filter((roi) => roi.id !== id))}
-            isLoading={isLoading}
-            onRunOCR={handleRunOCR}
-            onRunFullPageOCR={handleRunFullPageOCR}
-            ocrProgress={ocrProgress}
-            currentIndex={currentIndex}
-            imagesList={imagesList}
-            onIndexChange={(nextIdx) => {
-              setCurrentIndex(nextIdx);
-              setSelectedId(null);
-            }}
-          />
+          <>
+            {classificationStatus && (
+              <section className="rounded-2xl border border-indigo-100 bg-indigo-50 px-5 py-4 text-xs font-bold text-indigo-800 shadow-sm">
+                {classificationStatus}
+              </section>
+            )}
+
+            {matchedTemplate ? (
+              <MatchedTemplateWorkspaceZone
+                matchedTemplate={matchedTemplate}
+                previewUrl={imagesList[currentIndex] || previewUrl}
+                image={imagesList[currentIndex] || image}
+                brightness={pagesConfig[currentIndex]?.brightness ?? 100}
+                contrast={pagesConfig[currentIndex]?.contrast ?? 100}
+                rotation={pagesConfig[currentIndex]?.rotation ?? 0}
+                rois={rois}
+                setRois={setRois}
+                selectedId={selectedId}
+                setSelectedId={setSelectedId}
+                onBackToAdjust={() => setCurrentStep("adjust")}
+                deleteROI={(id) => setRois((p) => p.filter((roi) => roi.id !== id))}
+                isLoading={isLoading}
+                onRunOCR={handleRunOCR}
+                onRunFullPageOCR={handleRunFullPageOCR}
+                ocrProgress={ocrProgress}
+                currentIndex={currentIndex}
+                imagesList={imagesList}
+                onIndexChange={(nextIdx) => {
+                  setCurrentIndex(nextIdx);
+                  setSelectedId(null);
+                }}
+              />
+            ) : (
+              <WorkspaceZone
+                previewUrl={imagesList[currentIndex] || previewUrl}
+                image={imagesList[currentIndex] || image}
+                brightness={pagesConfig[currentIndex]?.brightness ?? 100}
+                contrast={pagesConfig[currentIndex]?.contrast ?? 100}
+                rotation={pagesConfig[currentIndex]?.rotation ?? 0}
+                rois={rois}
+                setRois={setRois}
+                selectedId={selectedId}
+                setSelectedId={setSelectedId}
+                onBackToAdjust={() => setCurrentStep("adjust")}
+                deleteROI={(id) => setRois((p) => p.filter((roi) => roi.id !== id))}
+                isLoading={isLoading}
+                onRunOCR={handleRunOCR}
+                onRunFullPageOCR={handleRunFullPageOCR}
+                ocrProgress={ocrProgress}
+                currentIndex={currentIndex}
+                imagesList={imagesList}
+                onIndexChange={(nextIdx) => {
+                  setCurrentIndex(nextIdx);
+                  setSelectedId(null);
+                }}
+              />
+            )}
+          </>
         )}
 
         {currentStep === "editor" && (
