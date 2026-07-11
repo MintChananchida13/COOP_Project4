@@ -13,6 +13,7 @@ interface MatchedTemplateInfo {
 
 interface MatchedTemplateWorkspaceZoneProps extends WorkspaceCustomEditorProps {
   matchedTemplate: MatchedTemplateInfo;
+  onSwitchToCustom: () => void;
 }
 
 const typeLabel = (roi: ROI) => {
@@ -29,19 +30,18 @@ const typeIcon = (roi: ROI) => {
 
 export default function MatchedTemplateWorkspaceZone({
   matchedTemplate,
+  onSwitchToCustom,
   ...props
 }: MatchedTemplateWorkspaceZoneProps) {
   return (
     <WorkspaceCustomEditor
       {...props}
-      readOnly
+      readOnly={false}
       hideOcrActions
+      hideDrawTools
+      lockRoiMetadata
       centerCanvas
-      getRoiBadges={(roi) => {
-        if (roi.extractionMethod === "extract_image") return ["IMAGE"];
-        if (roi.extractionMethod === "ocr_table") return ["TABLE"];
-        return ["OCR"];
-      }}
+      getRoiBadges={() => []}
       getRoiClassName={(roi, selected) => {
         const disabled = roi.enabled === false;
         return `rnd-box-item border transition-shadow ${
@@ -73,6 +73,14 @@ export default function MatchedTemplateWorkspaceZone({
               className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
             >
               <ArrowLeft size={14} /> กลับไปตรวจขอบเขตเอกสาร
+            </button>
+
+            <button
+              type="button"
+              onClick={onSwitchToCustom}
+              className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-xs font-black text-indigo-700 shadow-sm transition-all hover:bg-indigo-100"
+            >
+              ไป Custom OCR เพิ่มเติม
             </button>
 
             <section className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">

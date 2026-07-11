@@ -56,6 +56,8 @@ export interface WorkspaceCustomEditorProps {
   hideStepProgress?: boolean;
   hideRightPanel?: boolean;
   hideFooter?: boolean;
+  hideDrawTools?: boolean;
+  lockRoiMetadata?: boolean;
   workspaceHeightClassName?: string;
   rootClassName?: string;
   centerCanvas?: boolean;
@@ -96,6 +98,8 @@ export default function WorkspaceCustomEditor({
   hideStepProgress = false,
   hideRightPanel = false,
   hideFooter = false,
+  hideDrawTools = false,
+  lockRoiMetadata = false,
   workspaceHeightClassName = "h-[620px]",
   rootClassName = "max-w-7xl mx-auto space-y-6 pb-20",
   centerCanvas = false,
@@ -107,7 +111,7 @@ export default function WorkspaceCustomEditor({
   getRoiBadges,
   onImageMetricsChange,
 }: WorkspaceCustomEditorProps) {
-  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly ? 'pan' : 'box');
+  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly || hideDrawTools ? 'pan' : 'box');
   const [activeDrawPoints, setActiveDrawPoints] = useState<{ x: number; y: number }[]>([]);
 
   // Calculate the bounding box for custom ROI points.
@@ -714,7 +718,7 @@ export default function WorkspaceCustomEditor({
           >
             <Hand size={20} />
           </button>
-          {!readOnly && (
+          {!readOnly && !hideDrawTools && (
             <>
               <button 
                 type="button"
@@ -743,10 +747,10 @@ export default function WorkspaceCustomEditor({
             </>
           )}
 
-          {!readOnly && <div className="w-8 h-[1px] bg-slate-200 my-2"></div>}
+          {!readOnly && !hideDrawTools && <div className="w-8 h-[1px] bg-slate-200 my-2"></div>}
 
           {/* Undo and redo buttons */}
-          {!readOnly && (
+          {!readOnly && !hideDrawTools && (
             <>
               <button 
                 type="button"
@@ -814,7 +818,7 @@ export default function WorkspaceCustomEditor({
 
           <div className="w-8 h-[1px] bg-slate-200 my-2"></div>
           
-          {!readOnly && <button 
+          {!readOnly && !hideDrawTools && <button 
             type="button"
             onClick={() => { 
               setRois(prev => prev.filter(roi => {
@@ -961,7 +965,7 @@ export default function WorkspaceCustomEditor({
                         )}
 
                       {/* Floating Menu Popover */}
-                      {!readOnly && selectedId === roi.id && (
+                      {!readOnly && !lockRoiMetadata && selectedId === roi.id && (
                         <div 
                           className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-60 bg-white border border-slate-200 rounded-xl shadow-xl p-3 z-50 text-slate-800 flex flex-col gap-2 pointer-events-auto"
                           onMouseDown={(e) => e.stopPropagation()}

@@ -616,6 +616,10 @@ export default function Home() {
                 ocrProgress={ocrProgress}
                 currentIndex={currentIndex}
                 imagesList={imagesList}
+                onSwitchToCustom={() => {
+                  setMatchedTemplate(null);
+                  setClassificationStatus("เปิด Custom OCR ต่อจาก ROI ของ Template ที่ตรวจพบ สามารถเพิ่มหรือแก้ไขกรอบได้ตามต้องการ");
+                }}
                 onIndexChange={(nextIdx) => {
                   setCurrentIndex(nextIdx);
                   setSelectedId(null);
