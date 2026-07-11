@@ -1328,7 +1328,8 @@ class DecisionService:
         required_passed = self._required_passed_from_fields(verification, raw_required_passed)
         required_failed_fields = self._required_failed_fields(verification)
         verification_status = verification.get("status")
-        final_score = round((retrieval_score * 0.60) + (text_anchor_score * 0.25) + (image_anchor_score * 0.15), 4)
+        anchor_score = round((text_anchor_score + image_anchor_score) / 2, 4)
+        final_score = round((retrieval_score * 0.50) + (anchor_score * 0.50), 4)
         final_passed = final_score >= final_confidence_threshold
         decision_path = "final_threshold_passed" if final_passed else "final_threshold_failed"
 
@@ -1337,6 +1338,7 @@ class DecisionService:
             "verification_score": verification_score,
             "text_anchor_score": text_anchor_score,
             "image_anchor_score": image_anchor_score,
+            "anchor_score": anchor_score,
             "verification_passed": verification_passed,
             "final_score": round(float(final_score), 4),
             "final_passed": final_passed,
@@ -1792,6 +1794,7 @@ class AdminTemplateService:
             "global_score": round(float(global_score), 4),
             "text_anchor_score": decision["text_anchor_score"],
             "image_anchor_score": decision["image_anchor_score"],
+            "anchor_score": decision.get("anchor_score"),
             "verification_score": decision["verification_score"],
             "final_score": decision["final_score"],
             "alignment_status": "skipped",
