@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CheckCircle2 } from "lucide-react";
 import { OCRResult, ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
 
@@ -85,6 +86,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
   const [requestMode, setRequestMode] = useState<TemplateRequestMode>("image_only");
   const [status, setStatus] = useState<RequestStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
+  const [submittedRequestId, setSubmittedRequestId] = useState("");
 
   const enabledRois = useMemo(() => rois.filter((roi) => roi.enabled !== false), [rois]);
   const fieldsByPage = useMemo(() => {
@@ -192,6 +194,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     try {
       const requestedFields = requestMode === "image_with_roi" ? await buildRequestedFields() : [];
       const requestId = await submitWithBackend(requestedFields);
+      setSubmittedRequestId(requestId);
       setStatus("submitted");
       setStatusMessage(`Template request submitted: ${requestId}`);
     } catch (error) {
@@ -201,11 +204,22 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     }
   };
 
+  const resetAndClose = () => {
+    setRequestTitle("");
+    setDocumentType("");
+    setUserNote("");
+    setRequestMode("image_only");
+    setStatus("idle");
+    setStatusMessage("");
+    setSubmittedRequestId("");
+    onClose();
+  };
+
   return (
     <div className={`fixed inset-0 z-50 ${isOpen ? "pointer-events-auto" : "pointer-events-none"}`} aria-hidden={!isOpen}>
       <div
         className={`absolute inset-0 bg-slate-950/30 transition-opacity ${isOpen ? "opacity-100" : "opacity-0"}`}
-        onClick={onClose}
+        onClick={status === "submitting" ? undefined : onClose}
       />
       <aside
         className={`absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl transition-transform duration-200 ${
@@ -222,7 +236,8 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
             </div>
             <button
               type="button"
-              onClick={onClose}
+              onClick={status === "submitted" ? resetAndClose : onClose}
+              disabled={status === "submitting"}
               className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-black text-slate-500 hover:bg-slate-50"
             >
               Close
@@ -327,6 +342,32 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
             </button>
           </div>
         </div>
+
+        {status === "submitted" && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/35 px-5">
+            <div className="w-full max-w-sm rounded-3xl border border-emerald-100 bg-white p-6 text-center shadow-2xl">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+                <CheckCircle2 size={30} strokeWidth={2.2} />
+              </div>
+              <h3 className="mt-4 text-lg font-black text-slate-900">ส่งคำขอเรียบร้อยแล้ว</h3>
+              <p className="mt-2 text-sm font-medium leading-6 text-slate-600">
+                ระบบส่ง Template Request ให้ผู้ดูแลตรวจสอบแล้ว
+              </p>
+              {submittedRequestId && (
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500">
+                  Request ID: <span className="font-black text-slate-700">{submittedRequestId}</span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={resetAndClose}
+                className="ui-stable-action mt-5 w-full rounded-xl bg-emerald-600 px-5 py-3 text-xs font-black uppercase tracking-wider text-white shadow-sm hover:bg-emerald-700"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
     </div>
   );
