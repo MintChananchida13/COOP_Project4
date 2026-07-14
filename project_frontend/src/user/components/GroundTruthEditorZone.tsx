@@ -10,6 +10,37 @@ const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   return <FileText size={size} className="shrink-0 text-slate-400" />;
 };
 
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read image blob"));
+    reader.readAsDataURL(blob);
+  });
+
+const imageUrlToCanvasSafeSrc = async (src: string) => {
+  if (!src || src.startsWith("data:") || src.startsWith("blob:")) return src;
+  const response = await fetch(src, { mode: "cors" });
+  if (!response.ok) throw new Error(`Unable to load preview image: ${response.status}`);
+  return blobToDataUrl(await response.blob());
+};
+
+const loadCanvasSafeImage = async (src: string) =>
+  new Promise<HTMLImageElement>(async (resolve, reject) => {
+    try {
+      const safeSrc = await imageUrlToCanvasSafeSrc(src);
+      const img = new Image();
+      if (!safeSrc.startsWith("data:") && !safeSrc.startsWith("blob:")) {
+        img.crossOrigin = "anonymous";
+      }
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = safeSrc;
+    } catch (error) {
+      reject(error);
+    }
+  });
+
 
 const CroppedRoiPreview = ({
   previewUrl,
@@ -23,8 +54,12 @@ const CroppedRoiPreview = ({
   const [cropSrc, setCropSrc] = useState<string>("");
 
   useEffect(() => {
-    const img = new Image();
-    img.onload = () => {
+    let cancelled = false;
+
+    const renderCrop = async () => {
+      const img = await loadCanvasSafeImage(previewUrl);
+      if (cancelled) return;
+
       const scaleX = img.naturalWidth / 750;
       const scaleY = img.naturalHeight / ((img.naturalHeight / img.naturalWidth) * 750);
       
@@ -70,10 +105,20 @@ const CroppedRoiPreview = ({
         Math.max(1, realH)
       );
       ctx.restore();
-      
-      setCropSrc(canvas.toDataURL("image/jpeg", 0.9));
+
+      if (!cancelled) {
+        setCropSrc(canvas.toDataURL("image/jpeg", 0.9));
+      }
     };
-    img.src = previewUrl;
+
+    renderCrop().catch((error) => {
+      console.warn("Unable to render ROI preview crop.", error);
+      if (!cancelled) setCropSrc("");
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [previewUrl, roi]);
 
   if (!cropSrc) {

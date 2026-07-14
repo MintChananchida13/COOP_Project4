@@ -175,7 +175,45 @@ export interface DetectionCandidate {
   alignmentMatchImagePreviewUrl?: string | null;
   alignedImagePreviewUrl?: string | null;
   normalizedImagePreviewUrl?: string | null;
+  extractionImagePreviewUrl?: string | null;
+  roiCoordinateSpace?: "template_canvas" | "projected" | string | null;
+  projection?: Record<string, unknown>;
+  projectedFields?: DetectionProjectedField[];
   metadata?: Record<string, unknown>;
+}
+
+export interface DetectionProjectedField {
+  fieldId?: string | null;
+  fieldName?: string | null;
+  displayLabel?: string | null;
+  pageNumber?: number | null;
+  templateRoi?: Record<string, unknown>;
+  projectedRoiBeforeClip?: DetectionProjectedField["projectedRoi"];
+  projectedRoi?: {
+    page_number?: number | null;
+    x_ratio?: number | null;
+    y_ratio?: number | null;
+    width_ratio?: number | null;
+    height_ratio?: number | null;
+  } | null;
+  adaptiveRoi?: DetectionProjectedField["projectedRoi"];
+  adaptiveStatus?: string | null;
+  adaptiveSearchRegion?: DetectionProjectedField["projectedRoi"];
+  adaptiveWordBoxes?: Record<string, unknown>[];
+  adaptiveWordGroups?: Record<string, unknown>[];
+  adaptiveRankedWordGroups?: Record<string, unknown>[];
+  adaptiveConfidence?: number | null;
+  adaptiveWordCount?: number | null;
+  adaptiveCoverage?: number | null;
+  adaptiveOcrConfidence?: number | null;
+  adaptiveValidationResult?: Record<string, unknown>;
+  adaptiveFallbackReason?: string | null;
+  projectedPolygon?: number[][];
+  projectedPolygonBeforeClip?: number[][];
+  projectionMethod?: string | null;
+  projectionValid?: boolean | null;
+  projectionValidationResult?: Record<string, unknown>;
+  fallbackUsed?: boolean | null;
 }
 
 export interface DetectionPageResult {
@@ -448,6 +486,34 @@ const mapApiEmbeddingJob = (job?: ApiEmbeddingJob | null): EmbeddingJob | null =
   };
 };
 
+const mapProjectedField = (field: Record<string, unknown>): DetectionProjectedField => ({
+  fieldId: (field.field_id as string | null | undefined) ?? null,
+  fieldName: (field.field_name as string | null | undefined) ?? null,
+  displayLabel: (field.display_label as string | null | undefined) ?? null,
+  pageNumber: typeof field.page_number === "number" ? field.page_number : null,
+  templateRoi: (field.template_roi as Record<string, unknown> | undefined) || undefined,
+  projectedRoiBeforeClip: (field.projected_roi_before_clip as DetectionProjectedField["projectedRoiBeforeClip"]) || null,
+  projectedRoi: (field.projected_roi as DetectionProjectedField["projectedRoi"]) || null,
+  adaptiveRoi: (field.adaptive_roi as DetectionProjectedField["adaptiveRoi"]) || null,
+  adaptiveStatus: (field.adaptive_status as string | null | undefined) ?? null,
+  adaptiveSearchRegion: (field.adaptive_search_region as DetectionProjectedField["adaptiveSearchRegion"]) || null,
+  adaptiveWordBoxes: Array.isArray(field.adaptive_word_boxes) ? (field.adaptive_word_boxes as Record<string, unknown>[]) : [],
+  adaptiveWordGroups: Array.isArray(field.adaptive_word_groups) ? (field.adaptive_word_groups as Record<string, unknown>[]) : [],
+  adaptiveRankedWordGroups: Array.isArray(field.adaptive_ranked_word_groups) ? (field.adaptive_ranked_word_groups as Record<string, unknown>[]) : [],
+  adaptiveConfidence: typeof field.adaptive_confidence === "number" ? field.adaptive_confidence : null,
+  adaptiveWordCount: typeof field.adaptive_word_count === "number" ? field.adaptive_word_count : null,
+  adaptiveCoverage: typeof field.adaptive_coverage === "number" ? field.adaptive_coverage : null,
+  adaptiveOcrConfidence: typeof field.adaptive_ocr_confidence === "number" ? field.adaptive_ocr_confidence : null,
+  adaptiveValidationResult: (field.adaptive_validation_result as Record<string, unknown> | undefined) || undefined,
+  adaptiveFallbackReason: (field.adaptive_fallback_reason as string | null | undefined) ?? null,
+  projectedPolygon: Array.isArray(field.projected_polygon) ? (field.projected_polygon as number[][]) : undefined,
+  projectedPolygonBeforeClip: Array.isArray(field.projected_polygon_before_clip) ? (field.projected_polygon_before_clip as number[][]) : undefined,
+  projectionMethod: (field.projection_method as string | null | undefined) ?? null,
+  projectionValid: typeof field.projection_valid === "boolean" ? field.projection_valid : null,
+  projectionValidationResult: (field.projection_validation_result as Record<string, unknown> | undefined) || undefined,
+  fallbackUsed: typeof field.fallback_used === "boolean" ? field.fallback_used : null,
+});
+
 const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCandidate => ({
   templateId: (candidate.template_id as string | null | undefined) ?? null,
   vectorId: (candidate.vector_id as string | null | undefined) ?? null,
@@ -501,6 +567,12 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   alignmentMatchImagePreviewUrl: (candidate.alignment_match_image_preview_url as string | null | undefined) ?? null,
   alignedImagePreviewUrl: (candidate.aligned_image_preview_url as string | null | undefined) ?? null,
   normalizedImagePreviewUrl: (candidate.normalized_image_preview_url as string | null | undefined) ?? null,
+  extractionImagePreviewUrl: (candidate.extraction_image_preview_url as string | null | undefined) ?? null,
+  roiCoordinateSpace: (candidate.roi_coordinate_space as string | null | undefined) ?? null,
+  projection: (candidate.projection as Record<string, unknown> | undefined) || undefined,
+  projectedFields: Array.isArray(candidate.projected_fields)
+    ? (candidate.projected_fields as Record<string, unknown>[]).map(mapProjectedField)
+    : [],
   metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
 });
 

@@ -8,7 +8,7 @@ import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWork
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
 import { ROI, OCRResult, TemplateField } from "../types/ocr";
-import { detectTemplateDev, fetchTemplateBundle } from "../admin/adminApi";
+import { ADMIN_API_BASE_URL, detectTemplateDev, fetchTemplateBundle, type DetectionDevResult, type DetectionProjectedField } from "../admin/adminApi";
 import { ActionButton, InlineState } from "../shared/ui";
 
 interface PageConfig {
@@ -103,24 +103,72 @@ const dataUrlToFile = async (dataUrl: string, filename: string) => {
   return new File([blob], filename, { type: blob.type || "image/jpeg" });
 };
 
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read image blob"));
+    reader.readAsDataURL(blob);
+  });
+
+const imageUrlToCanvasSafeSrc = async (src: string) => {
+  if (!src || src.startsWith("data:") || src.startsWith("blob:")) return src;
+  const response = await fetch(src, { mode: "cors" });
+  if (!response.ok) throw new Error(`Unable to load extraction image: ${response.status}`);
+  return blobToDataUrl(await response.blob());
+};
+
+const backendPreviewSrc = (value?: string | null) => {
+  if (!value) return "";
+  if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("http")) return value;
+  if (value.startsWith("/")) return `${ADMIN_API_BASE_URL}${value}`;
+  return value;
+};
+
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
 
 const loadImageElement = (src: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const imageObj = new Image();
+    if (!src.startsWith("data:") && !src.startsWith("blob:")) {
+      imageObj.crossOrigin = "anonymous";
+    }
     imageObj.onload = () => resolve(imageObj);
     imageObj.onerror = reject;
     imageObj.src = src;
   });
 
-const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList: string[]) => {
+const templateFieldsToWorkspaceRois = async (
+  fields: TemplateField[],
+  imageList: string[],
+  projectedFields: DetectionProjectedField[] = []
+) => {
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
+  const projectedByFieldId = new Map(
+    projectedFields
+      .filter((field) => field.fieldId && field.projectedRoi && field.projectionValid !== false)
+      .map((field) => [field.fieldId as string, field])
+  );
 
   return fields
     .filter((field) => !field.useForVerification)
     .map((field) => {
-      const pageIndex = Math.max(0, field.pageNumber - 1);
+      const projectedField = projectedByFieldId.get(field.id);
+      const projectedRoi =
+        projectedField?.adaptiveStatus === "refined" && projectedField.adaptiveRoi
+          ? projectedField.adaptiveRoi
+          : projectedField?.projectedRoi;
+      const roi = projectedRoi
+        ? {
+            pageNumber: Number(projectedRoi.page_number ?? field.pageNumber),
+            xRatio: Number(projectedRoi.x_ratio ?? field.roi.xRatio),
+            yRatio: Number(projectedRoi.y_ratio ?? field.roi.yRatio),
+            widthRatio: Number(projectedRoi.width_ratio ?? field.roi.widthRatio),
+            heightRatio: Number(projectedRoi.height_ratio ?? field.roi.heightRatio),
+          }
+        : field.roi;
+      const pageIndex = Math.max(0, roi.pageNumber - 1);
       const pageImage = pageImages[pageIndex];
       const displayWidth = 750;
       const displayHeight = pageImage?.naturalWidth
@@ -137,10 +185,10 @@ const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList:
       return {
         id: stableNumericId(`template-field:${field.id}`),
         fieldName: field.displayLabel || field.fieldName,
-        x: field.roi.xRatio * displayWidth,
-        y: field.roi.yRatio * displayHeight,
-        width: field.roi.widthRatio * displayWidth,
-        height: field.roi.heightRatio * displayHeight,
+        x: roi.xRatio * displayWidth,
+        y: roi.yRatio * displayHeight,
+        width: roi.widthRatio * displayWidth,
+        height: roi.heightRatio * displayHeight,
         pageIndex,
         type,
         dataType: field.dataType || type,
@@ -152,6 +200,36 @@ const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList:
         enabled: field.defaultSelected !== false,
       } satisfies ROI & { pageIndex?: number };
     });
+};
+
+const buildTemplateCanvasImages = async (sourceImages: string[], detection: DetectionDevResult, templateId: string) => {
+  const pages = detection.pages || [];
+  return Promise.all(sourceImages.map(async (sourceImage, pageIndex) => {
+    const page = pages.find((item) => item.pageIndex === pageIndex + 1);
+    const pageCandidate =
+      page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
+      (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null);
+    const extractionSrc = backendPreviewSrc(pageCandidate?.extractionImagePreviewUrl);
+    if (!extractionSrc) return sourceImage;
+    try {
+      return await imageUrlToCanvasSafeSrc(extractionSrc);
+    } catch (error) {
+      console.warn("Unable to convert extraction image to canvas-safe data URL.", error);
+      return sourceImage;
+    }
+  }));
+};
+
+const downloadTextFile = (filename: string, content: string, mimeType = "application/json") => {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 export default function Home() {
@@ -171,11 +249,18 @@ export default function Home() {
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
   const [classificationStatus, setClassificationStatus] = useState<string>("");
+  const [exportJson, setExportJson] = useState<string>("");
+  const [copyStatus, setCopyStatus] = useState<string>("");
   const [matchedTemplate, setMatchedTemplate] = useState<{
     id: string;
     name: string;
     confidence?: number | null;
     decisionReason?: string | null;
+    projectionStatus?: string | null;
+    projectionConfidence?: number | null;
+    projectionFallbackReason?: string | null;
+    adaptiveRefinedCount?: number | null;
+    adaptiveFallbackCount?: number | null;
   } | null>(null);
 
   const handleUploadSuccess = (urls: string[]) => {
@@ -252,12 +337,37 @@ export default function Home() {
       }
 
       const bundle = await fetchTemplateBundle(templateId);
-      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, finalProcessedImages);
+      const templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
+      setImagesList(templateCanvasImages);
+      setPreviewUrl(templateCanvasImages[currentIndex] || templateCanvasImages[0] || "");
+      setImage(templateCanvasImages[currentIndex] || templateCanvasImages[0] || null);
+
+      const detectedRois = await templateFieldsToWorkspaceRois(
+        bundle.fields,
+        templateCanvasImages,
+        detection.bestCandidate?.projectedFields || []
+      );
+      const projection = detection.bestCandidate?.projection || {};
+      const roiCoordinateSpace = detection.bestCandidate?.roiCoordinateSpace || (projection.roi_coordinate_space as string | undefined);
       setMatchedTemplate({
         id: bundle.template.id,
         name: bundle.template.name,
         confidence: detection.bestCandidate?.finalScore ?? detection.bestCandidate?.score ?? null,
         decisionReason: detection.bestCandidate?.decisionReason ?? null,
+        projectionStatus: (projection.status as string | null | undefined) ?? null,
+        projectionConfidence: typeof projection.confidence === "number" ? projection.confidence : null,
+        projectionFallbackReason:
+          roiCoordinateSpace === "template_canvas"
+            ? "Using aligned template canvas and original template ROI"
+            : ((projection.fallback_reason as string | null | undefined) ?? null),
+        adaptiveRefinedCount:
+          typeof (projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_refined === "number"
+            ? ((projection.adaptive_refinement as Record<string, unknown>).text_fields_refined as number)
+            : null,
+        adaptiveFallbackCount:
+          typeof (projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_fallback === "number"
+            ? ((projection.adaptive_refinement as Record<string, unknown>).text_fields_fallback as number)
+            : null,
       });
 
       if (detectedRois.length === 0) {
@@ -300,12 +410,7 @@ export default function Home() {
         }
 
         const currentImgUrl = imagesList[pageIdx];
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const imageObj = new Image();
-          imageObj.onload = () => resolve(imageObj);
-          imageObj.onerror = (err) => reject(err);
-          imageObj.src = currentImgUrl;
-        });
+        const img = await loadImageElement(currentImgUrl);
 
         const renderedWidth = 750;
         const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
@@ -395,12 +500,7 @@ export default function Home() {
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
 
         const currentImgUrl = imagesList[pageIdx];
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const imageObj = new Image();
-          imageObj.onload = () => resolve(imageObj);
-          imageObj.onerror = (err) => reject(err);
-          imageObj.src = currentImgUrl;
-        });
+        const img = await loadImageElement(currentImgUrl);
 
         const renderedWidth = 750;
         const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
@@ -531,6 +631,79 @@ export default function Home() {
     } catch (error) {
       console.error(error);
       alert("เกิดข้อผิดพลาดในการบันทึกข้อมูล");
+    }
+  };
+
+  const buildExportPayload = () => {
+    const exportedAt = new Date().toISOString();
+    const fields = ocrResults.map((result) => {
+      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      return {
+        field_name: result.fieldName,
+        value: result.extractedText,
+        original_text: result.originalText ?? result.extractedText,
+        confidence: result.confidence,
+        page_number: (result.pageIndex ?? matchedRoi?.pageIndex ?? 0) + 1,
+        type: result.type || matchedRoi?.type || "text",
+        data_type: result.dataType || matchedRoi?.dataType || "string",
+        extraction_method: matchedRoi?.extractionMethod || "ocr_text",
+        roi: matchedRoi
+          ? {
+              x: matchedRoi.x,
+              y: matchedRoi.y,
+              width: matchedRoi.width,
+              height: matchedRoi.height,
+              page_index: matchedRoi.pageIndex ?? 0,
+              points: matchedRoi.points || null,
+            }
+          : null,
+      };
+    });
+
+    return {
+      export_version: "1.0",
+      exported_at: exportedAt,
+      source: "ocr_studio",
+      document: {
+        page_count: imagesList.length,
+        active_page: currentIndex + 1,
+      },
+      template_match: matchedTemplate
+        ? {
+            template_id: matchedTemplate.id,
+            template_name: matchedTemplate.name,
+            confidence: matchedTemplate.confidence ?? null,
+            decision_reason: matchedTemplate.decisionReason ?? null,
+            projection_status: matchedTemplate.projectionStatus ?? null,
+          }
+        : null,
+      summary: {
+        field_count: fields.length,
+        average_confidence:
+          fields.length > 0
+            ? Number((fields.reduce((sum, field) => sum + Number(field.confidence || 0), 0) / fields.length).toFixed(4))
+            : 0,
+      },
+      fields,
+      pages: imagesList.map((_, index) => ({
+        page_number: index + 1,
+        field_count: fields.filter((field) => field.page_number === index + 1).length,
+      })),
+    };
+  };
+
+  const handleOpenExportJson = () => {
+    setCopyStatus("");
+    setExportJson(JSON.stringify(buildExportPayload(), null, 2));
+  };
+
+  const handleCopyExportJson = async () => {
+    if (!exportJson) return;
+    try {
+      await navigator.clipboard.writeText(exportJson);
+      setCopyStatus("Copied JSON to clipboard.");
+    } catch {
+      setCopyStatus("Copy failed. You can select and copy the JSON manually.");
     }
   };
 
@@ -698,7 +871,7 @@ export default function Home() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <button
                   type="button"
-                  onClick={() => console.info("Export action is not implemented yet.")}
+                  onClick={handleOpenExportJson}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
                   Export
@@ -726,6 +899,53 @@ export default function Home() {
               isOpen={isTemplateRequestOpen}
               onClose={() => setIsTemplateRequestOpen(false)}
             />
+            {exportJson && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <section className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export JSON</h2>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Structured OCR result from the current session.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyExportJson}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                      >
+                        Copy JSON
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadTextFile(`ocr-export-${Date.now()}.json`, exportJson)}
+                        className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+                      >
+                        Download JSON
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExportJson("")}
+                        className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  {copyStatus && (
+                    <div className="border-b border-slate-100 bg-emerald-50 px-5 py-2 text-xs font-bold text-emerald-700">
+                      {copyStatus}
+                    </div>
+                  )}
+                  <div className="min-h-0 flex-1 overflow-auto bg-slate-950 p-4">
+                    <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-slate-100">
+                      {exportJson}
+                    </pre>
+                  </div>
+                </section>
+              </div>
+            )}
           </>
         )}
       </div>

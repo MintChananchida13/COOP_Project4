@@ -11,6 +11,11 @@ interface MatchedTemplateInfo {
   name: string;
   confidence?: number | null;
   decisionReason?: string | null;
+  projectionStatus?: string | null;
+  projectionConfidence?: number | null;
+  projectionFallbackReason?: string | null;
+  adaptiveRefinedCount?: number | null;
+  adaptiveFallbackCount?: number | null;
 }
 
 interface MatchedTemplateWorkspaceZoneProps extends WorkspaceCustomEditorProps {
@@ -107,6 +112,42 @@ export default function MatchedTemplateWorkspaceZone({
                       : "Confidence N/A"}
                     {matchedTemplate.decisionReason ? ` · ${matchedTemplate.decisionReason}` : ""}
                   </p>
+                  {matchedTemplate.projectionStatus && (
+                    <div className="mt-3 rounded-xl border border-emerald-100 bg-white/75 px-3 py-2">
+                      <p className="ui-caption font-semibold text-emerald-800">
+                        {matchedTemplate.projectionStatus === "success" || matchedTemplate.projectionStatus === "partial"
+                          ? "ROI adjusted automatically"
+                          : "ROI fallback used"}
+                      </p>
+                      <p className="ui-caption ui-tabular mt-0.5 text-emerald-700">
+                        Projection {matchedTemplate.projectionStatus}
+                        {matchedTemplate.projectionConfidence !== undefined && matchedTemplate.projectionConfidence !== null
+                          ? ` · confidence ${(matchedTemplate.projectionConfidence * 100).toFixed(1)}%`
+                          : ""}
+                      </p>
+                      {matchedTemplate.projectionFallbackReason && (
+                        <p className="ui-caption mt-0.5 text-amber-700">{matchedTemplate.projectionFallbackReason}</p>
+                      )}
+                      {(matchedTemplate.adaptiveRefinedCount !== undefined || matchedTemplate.adaptiveFallbackCount !== undefined) && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <span
+                            title="Adaptive ROI refined text fields using OCR word boxes inside the projected search region."
+                            className="ui-caption ui-tabular rounded-full bg-emerald-100 px-2 py-1 font-bold text-emerald-700"
+                          >
+                            Adaptive ROI Ready {matchedTemplate.adaptiveRefinedCount ?? 0}
+                          </span>
+                          {(matchedTemplate.adaptiveFallbackCount ?? 0) > 0 && (
+                            <span
+                              title="Some fields used projected ROI because OCR word boxes were not reliable enough."
+                              className="ui-caption ui-tabular rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-700"
+                            >
+                              Adaptive ROI Fallback {matchedTemplate.adaptiveFallbackCount ?? 0}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </section>

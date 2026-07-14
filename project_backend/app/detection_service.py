@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .alignment_service import AlignmentService
+from .anchor_projection_service import AnchorProjectionService
 from .image_normalization import ImageNormalizationService
 from .services import DecisionService, VerificationService
 from .vector_store_adapter import search_similar_templates
@@ -22,6 +23,7 @@ verification_service = VerificationService()
 decision_service = DecisionService()
 normalization_service = ImageNormalizationService()
 alignment_service = AlignmentService()
+projection_service = AnchorProjectionService()
 
 
 def _db_path() -> Path:
@@ -87,6 +89,48 @@ def _fetch_template_page_image_source(template_id: str, page_number: int) -> Opt
     if row is None:
         return None
     return row["normalized_image_url"] or row["sample_image_url"]
+
+
+def _fetch_template_fields(template_id: str) -> List[Dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM template_fields
+            WHERE template_id = ?
+            ORDER BY page_number ASC, sort_order ASC, created_at ASC
+            """,
+            (template_id,),
+        ).fetchall()
+
+    fields: List[Dict[str, Any]] = []
+    for row in rows:
+        fields.append(
+            {
+                "id": row["id"],
+                "template_id": row["template_id"],
+                "template_page_id": row["template_page_id"],
+                "page_number": row["page_number"],
+                "field_name": row["field_name"],
+                "display_label": row["display_label"],
+                "roi": {
+                    "page_number": row["page_number"],
+                    "x_ratio": row["roi_x_ratio"],
+                    "y_ratio": row["roi_y_ratio"],
+                    "width_ratio": row["roi_width_ratio"],
+                    "height_ratio": row["roi_height_ratio"],
+                },
+                "data_type": row["data_type"],
+                "use_for_verification": bool(row["use_for_verification"]),
+                "expected_text": row["expected_text"],
+                "match_type": row["match_type"],
+                "required_for_verification": bool(row["required_for_verification"]),
+                "extraction_method": row["extraction_method"],
+                "roi_padding": row["roi_padding"],
+                "verification_weight": row["verification_weight"] if "verification_weight" in row.keys() else 1.0,
+            }
+        )
+    return fields
 
 
 def _image_to_data_url(path: Path) -> str:
@@ -250,6 +294,87 @@ def _alignment_reason(
     return str(alignment.get("error") or alignment_debug.get("reason") or "alignment process failed")
 
 
+def _template_canvas_projection(
+    template_id: str,
+    fields: List[Dict[str, Any]],
+    alignment_status: str,
+    alignment_reason: str,
+    extraction_image_path: str,
+    extraction_image_preview_url: Optional[str],
+) -> Dict[str, Any]:
+    extraction_fields = [field for field in fields if not field.get("use_for_verification")]
+    projected_fields = []
+    for field in extraction_fields:
+        roi = field.get("roi") or {}
+        projected_fields.append(
+            {
+                "field_id": field.get("id"),
+                "field_name": field.get("field_name"),
+                "display_label": field.get("display_label"),
+                "page_number": field.get("page_number"),
+                "template_roi": roi,
+                "projected_polygon_before_clip": [],
+                "projected_polygon": [],
+                "projected_roi_before_clip": roi,
+                "projected_roi": roi,
+                "adaptive_roi": roi,
+                "adaptive_search_region": None,
+                "adaptive_word_boxes": [],
+                "adaptive_word_groups": [],
+                "adaptive_ranked_word_groups": [],
+                "adaptive_status": "not_run",
+                "adaptive_confidence": None,
+                "adaptive_word_count": 0,
+                "adaptive_coverage": None,
+                "adaptive_ocr_confidence": None,
+                "adaptive_validation_result": {
+                    "passed": True,
+                    "errors": [],
+                    "warnings": ["adaptive_roi_not_required_template_canvas"],
+                },
+                "adaptive_fallback_reason": None,
+                "projection_method": "template_canvas",
+                "projection_valid": True,
+                "projection_validation_result": {
+                    "passed": True,
+                    "errors": [],
+                    "warnings": [],
+                    "reason": "roi_uses_template_canvas_after_alignment",
+                },
+                "fallback_used": False,
+            }
+        )
+
+    return {
+        "template_id": template_id,
+        "status": "success",
+        "method": "template_canvas",
+        "anchors_expected": 0,
+        "anchors_matched": 0,
+        "inliers": 0,
+        "reprojection_error": None,
+        "confidence": 1.0,
+        "fallback_reason": None,
+        "matched_anchors": [],
+        "adaptive_refinement": {
+            "enabled": False,
+            "reason": "template_canvas_alignment_used",
+            "text_fields_refined": 0,
+            "text_fields_fallback": 0,
+            "average_adaptive_confidence": 0.0,
+            "average_coverage": 0.0,
+            "average_ocr_confidence": 0.0,
+            "search_padding_ratio": 0.0,
+        },
+        "projected_fields": projected_fields,
+        "roi_coordinate_space": "template_canvas",
+        "extraction_image_path": extraction_image_path,
+        "extraction_image_preview_url": extraction_image_preview_url,
+        "alignment_status": alignment_status,
+        "alignment_reason": alignment_reason,
+    }
+
+
 def _align_candidate_page(
     template_id: str,
     page_number: int,
@@ -359,14 +484,9 @@ def _candidate_from_result(
     aligned_verification = None
     aligned_score = None
 
-    # 2) ถ้า normalized ยังไม่ผ่าน หรือคะแนนต่ำ ค่อยลอง alignment
-    should_try_alignment = (
-        template_id is not None
-        and (
-            not bool(normalized_verification.get("passed"))
-            or normalized_score < 0.75
-        )
-    )
+    # 2) Template alignment is part of the production path.
+    # The alignment service precheck skips ORB when geometry already matches.
+    should_try_alignment = template_id is not None
 
     if should_try_alignment:
         alignment = _align_candidate_page(
@@ -386,10 +506,9 @@ def _candidate_from_result(
             )
             aligned_score = float(aligned_verification.get("score") or 0.0)
 
-            # 3) ใช้ aligned เฉพาะถ้าดีกว่า normalized
-            if aligned_score > normalized_score:
-                verification = aligned_verification
-                verification_source_used = "aligned"
+            # 3) Use the template-canvas aligned image for extraction/verification.
+            verification = aligned_verification
+            verification_source_used = "aligned"
 
     alignment_debug = alignment.get("alignment_debug") or {}
     alignment_score = float(alignment.get("alignment_score") or alignment_debug.get("alignment_score") or 0.0)
@@ -425,6 +544,66 @@ def _candidate_from_result(
         verification,
         final_confidence_threshold,
     )
+    extraction_image_path = str(alignment.get("aligned_image_path") or query_image_path) if verification_source_used == "aligned" else query_image_path
+    extraction_image_preview_url = _detection_debug_url(extraction_image_path)
+    roi_coordinate_space = "template_canvas" if alignment_status in {"aligned", "skipped"} else "projected"
+
+    projection = {
+        "template_id": template_id,
+        "status": "skipped",
+        "method": "not_run",
+        "anchors_expected": 0,
+        "anchors_matched": 0,
+        "inliers": 0,
+        "reprojection_error": None,
+        "confidence": 0.0,
+        "fallback_reason": "candidate_did_not_pass_final_decision",
+        "matched_anchors": [],
+        "projected_fields": [],
+        "roi_coordinate_space": roi_coordinate_space,
+        "extraction_image_path": extraction_image_path,
+        "extraction_image_preview_url": extraction_image_preview_url,
+    }
+    if template_id and decision["final_passed"]:
+        template_fields = _fetch_template_fields(template_id)
+        if roi_coordinate_space == "template_canvas":
+            projection = _template_canvas_projection(
+                template_id,
+                template_fields,
+                alignment_status,
+                alignment_reason,
+                extraction_image_path,
+                extraction_image_preview_url,
+            )
+        else:
+            try:
+                projection_page_paths = dict(page_image_paths)
+                projection_page_paths[page_index] = extraction_image_path
+                projection = projection_service.project(
+                    template_id,
+                    template_fields,
+                    projection_page_paths,
+                )
+                projection["roi_coordinate_space"] = roi_coordinate_space
+                projection["extraction_image_path"] = extraction_image_path
+                projection["extraction_image_preview_url"] = extraction_image_preview_url
+            except Exception as error:
+                projection = {
+                    "template_id": template_id,
+                    "status": "failed",
+                    "method": "ratio_fallback",
+                    "anchors_expected": 0,
+                    "anchors_matched": 0,
+                    "inliers": 0,
+                    "reprojection_error": None,
+                    "confidence": 0.0,
+                    "fallback_reason": f"projection_runtime_error: {error}",
+                    "matched_anchors": [],
+                    "projected_fields": [],
+                    "roi_coordinate_space": roi_coordinate_space,
+                    "extraction_image_path": extraction_image_path,
+                    "extraction_image_preview_url": extraction_image_preview_url,
+                }
 
     return {
         "template_id": template_id,
@@ -461,6 +640,9 @@ def _candidate_from_result(
         "aligned_image_preview_url": alignment.get("aligned_image_preview_url"),
         "normalized_image_path": query_image_path,
         "normalized_image_preview_url": _detection_debug_url(query_image_path),
+        "extraction_image_path": extraction_image_path,
+        "extraction_image_preview_url": extraction_image_preview_url,
+        "roi_coordinate_space": roi_coordinate_space,
 
         "verification": verification,
         "verification_score": decision["verification_score"],
@@ -475,6 +657,8 @@ def _candidate_from_result(
         "required_passed": decision.get("required_passed"),
         "required_failed_fields": decision.get("required_failed_fields", []),
         "final_confidence_threshold": decision["final_confidence_threshold"],
+        "projection": projection,
+        "projected_fields": projection.get("projected_fields", []),
         "metadata": metadata,
     }
 
@@ -593,6 +777,9 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "aligned_image_preview_url": best_page_cand.get("aligned_image_preview_url"),
             "normalized_image_path": best_page_cand.get("normalized_image_path"),
             "normalized_image_preview_url": best_page_cand.get("normalized_image_preview_url"),
+            "extraction_image_path": best_page_cand.get("extraction_image_path"),
+            "extraction_image_preview_url": best_page_cand.get("extraction_image_preview_url"),
+            "roi_coordinate_space": best_page_cand.get("roi_coordinate_space"),
             "verification": best_page_cand.get("verification"),
             "verification_score": decision["verification_score"],
             "text_anchor_score": decision.get("text_anchor_score"),
@@ -606,6 +793,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "required_passed": decision.get("required_passed"),
             "required_failed_fields": decision.get("required_failed_fields", []),
             "final_confidence_threshold": decision["final_confidence_threshold"],
+            "projection": best_page_cand.get("projection"),
+            "projected_fields": best_page_cand.get("projected_fields", []),
             "metadata": best_page_cand.get("metadata", {}),
         })
 

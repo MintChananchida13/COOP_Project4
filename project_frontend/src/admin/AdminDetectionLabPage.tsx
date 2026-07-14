@@ -94,6 +94,29 @@ const alignmentBadgeClass = (candidate?: DetectionCandidate | null) => {
   return "bg-red-100 text-red-700";
 };
 const readBool = (value: unknown) => (value === true ? "true" : value === false ? "false" : "N/A");
+const ratioStyle = (roi: Record<string, unknown> | null | undefined) => {
+  if (!roi) return null;
+  const x = typeof roi.x_ratio === "number" ? roi.x_ratio : 0;
+  const y = typeof roi.y_ratio === "number" ? roi.y_ratio : 0;
+  const width = typeof roi.width_ratio === "number" ? roi.width_ratio : 0;
+  const height = typeof roi.height_ratio === "number" ? roi.height_ratio : 0;
+  return {
+    left: `${Math.max(0, Math.min(1, x)) * 100}%`,
+    top: `${Math.max(0, Math.min(1, y)) * 100}%`,
+    width: `${Math.max(0, Math.min(1, width)) * 100}%`,
+    height: `${Math.max(0, Math.min(1, height)) * 100}%`,
+  };
+};
+
+type OverlayLayerKey = "template" | "projected" | "adaptive" | "words" | "anchors";
+
+const overlayLayerOptions: { key: OverlayLayerKey; label: string; className: string }[] = [
+  { key: "template", label: "Template ROI", className: "border-red-500 bg-red-500/10" },
+  { key: "projected", label: "Projected ROI", className: "border-orange-500 bg-orange-500/10" },
+  { key: "adaptive", label: "Adaptive ROI", className: "border-emerald-500 bg-emerald-500/10" },
+  { key: "words", label: "OCR Word Boxes", className: "border-sky-500 bg-sky-500/10" },
+  { key: "anchors", label: "Verification Anchors", className: "border-purple-500 bg-purple-500/10" },
+];
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -102,6 +125,13 @@ export default function AdminDetectionLabPage() {
   const [pageIndex, setPageIndex] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState("");
+  const [overlayLayers, setOverlayLayers] = useState<Record<OverlayLayerKey, boolean>>({
+    template: false,
+    projected: true,
+    adaptive: true,
+    words: false,
+    anchors: false,
+  });
 
   useEffect(() => {
     if (!file || file.type === "application/pdf") {
@@ -154,6 +184,11 @@ export default function AdminDetectionLabPage() {
       ? (currentNormalizationDebug.transform_validation as Record<string, unknown>)
       : null;
   const currentVerificationFields = verificationFields(verificationCandidate);
+  const projectionCandidate = verificationCandidate || alignmentCandidate;
+  const projectedOverlayFields = projectionCandidate?.projectedFields || [];
+  const matchedAnchors = Array.isArray(projectionCandidate?.projection?.matched_anchors)
+    ? (projectionCandidate?.projection?.matched_anchors as Record<string, unknown>[])
+    : [];
   const isPdf = file?.type === "application/pdf";
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
   const convertedPageCount = typeof result?.debug?.converted_page_count === "number" ? result.debug.converted_page_count : 0;
@@ -419,7 +454,60 @@ export default function AdminDetectionLabPage() {
                 <div>
                   {currentPage?.imagePreviewDataUrl && (
                     <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                      <img src={currentPage.imagePreviewDataUrl} alt={`Detection page ${currentPage.pageIndex}`} className="max-h-[460px] w-full object-contain" />
+                      <div className="flex flex-wrap gap-2 border-b border-slate-200 bg-white p-3">
+                        {overlayLayerOptions.map((layer) => (
+                          <button
+                            key={layer.key}
+                            type="button"
+                            onClick={() => setOverlayLayers((current) => ({ ...current, [layer.key]: !current[layer.key] }))}
+                            className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-black uppercase ${
+                              overlayLayers[layer.key] ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-slate-50 text-slate-500"
+                            }`}
+                          >
+                            {layer.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="relative mx-auto max-h-[460px] w-full">
+                        <img src={currentPage.imagePreviewDataUrl} alt={`Detection page ${currentPage.pageIndex}`} className="max-h-[460px] w-full object-contain" />
+                        <div className="pointer-events-none absolute inset-0">
+                          {overlayLayers.template &&
+                            projectedOverlayFields.map((field, index) => {
+                              const style = ratioStyle(field.templateRoi);
+                              return style ? <div key={`template-${field.fieldId}-${index}`} className="absolute border-2 border-red-500 bg-red-500/10" style={style} /> : null;
+                            })}
+                          {overlayLayers.projected &&
+                            projectedOverlayFields.map((field, index) => {
+                              const style = ratioStyle(field.projectedRoi as Record<string, unknown>);
+                              return style ? <div key={`projected-${field.fieldId}-${index}`} className="absolute border-2 border-orange-500 bg-orange-500/10" style={style} /> : null;
+                            })}
+                          {overlayLayers.adaptive &&
+                            projectedOverlayFields.map((field, index) => {
+                              const style = ratioStyle(field.adaptiveRoi as Record<string, unknown>);
+                              return style ? <div key={`adaptive-${field.fieldId}-${index}`} className="absolute border-2 border-emerald-500 bg-emerald-500/10" style={style} /> : null;
+                            })}
+                          {overlayLayers.words &&
+                            projectedOverlayFields.flatMap((field, fieldIndex) =>
+                              (field.adaptiveWordBoxes || []).map((box, wordIndex) => {
+                                const style = ratioStyle((box.bbox as Record<string, unknown> | undefined) || null);
+                                return style ? <div key={`word-${fieldIndex}-${wordIndex}`} className="absolute border border-sky-500 bg-sky-500/10" style={style} /> : null;
+                              })
+                            )}
+                          {overlayLayers.anchors &&
+                            matchedAnchors.map((anchor, index) => {
+                              const style = ratioStyle(anchor.expected_bbox as Record<string, unknown> | undefined);
+                              return style ? <div key={`anchor-${index}`} className="absolute border-2 border-purple-500 bg-purple-500/10" style={style} /> : null;
+                            })}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 border-t border-slate-200 bg-white p-3 text-[10px] font-black uppercase text-slate-500">
+                        {overlayLayerOptions.map((layer) => (
+                          <span key={`legend-${layer.key}`} className="inline-flex items-center gap-1.5">
+                            <span className={`h-3 w-3 rounded border ${layer.className}`} />
+                            {layer.label}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {currentPage && (
@@ -621,6 +709,97 @@ export default function AdminDetectionLabPage() {
                     <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-600">
                       Candidate: {verificationCandidate.templateName || "N/A"} · Decision: {verificationCandidate.decisionPath || verificationCandidate.decisionReason || "N/A"}
                     </div>
+                    {verificationCandidate.projection && (
+                      <details className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                        <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                          ROI Projection
+                        </summary>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                          <DebugMetric label="Status" value={readText(verificationCandidate.projection.status)} />
+                          <DebugMetric label="Method" value={readText(verificationCandidate.projection.method)} />
+                          <DebugMetric label="Anchors Matched" value={readText(verificationCandidate.projection.anchors_matched)} />
+                          <DebugMetric label="Confidence" value={readScore(verificationCandidate.projection.confidence)} />
+                          <DebugMetric label="Inliers" value={readText(verificationCandidate.projection.inliers)} />
+                          <DebugMetric label="Reprojection Error" value={readScore(verificationCandidate.projection.reprojection_error)} />
+                          <DebugMetric label="Projected Fields" value={readText(verificationCandidate.projectedFields?.length ?? 0)} />
+                          <DebugMetric
+                            label="Adaptive Refined"
+                            value={readText((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_refined)}
+                          />
+                          <DebugMetric
+                            label="Adaptive Fallback"
+                            value={readText((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_fallback)}
+                          />
+                          <DebugMetric
+                            label="Avg Adaptive Confidence"
+                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_adaptive_confidence)}
+                          />
+                          <DebugMetric
+                            label="Avg Coverage"
+                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_coverage)}
+                          />
+                          <DebugMetric
+                            label="Avg OCR Confidence"
+                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_ocr_confidence)}
+                          />
+                          <DebugMetric label="Fallback Reason" value={readText(verificationCandidate.projection.fallback_reason)} />
+                        </div>
+                        {verificationCandidate.projectedFields && verificationCandidate.projectedFields.length > 0 && (
+                          <div className="mt-3 overflow-hidden rounded-xl border border-emerald-100 bg-white">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-emerald-50 text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                                <tr>
+                                  <th className="px-3 py-2">Field</th>
+                                  <th className="px-3 py-2">Projection</th>
+                                  <th className="px-3 py-2">Before Clip</th>
+                                  <th className="px-3 py-2">After Clip</th>
+                                  <th className="px-3 py-2">Validation</th>
+                                  <th className="px-3 py-2">Adaptive</th>
+                                  <th className="px-3 py-2">Confidence</th>
+                                  <th className="px-3 py-2">Coverage</th>
+                                  <th className="px-3 py-2">Word Boxes</th>
+                                  <th className="px-3 py-2">Reason</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-emerald-50 font-semibold text-slate-700">
+                                {verificationCandidate.projectedFields.map((field, index) => (
+                                  <tr key={`${field.fieldId || "projected"}-${index}`}>
+                                    <td className="px-3 py-2">{field.displayLabel || field.fieldName || "N/A"}</td>
+                                    <td className="px-3 py-2">{field.projectionMethod || "N/A"}</td>
+                                    <td className="px-3 py-2">
+                                      {field.projectedRoiBeforeClip
+                                        ? `${formatScore(field.projectedRoiBeforeClip.x_ratio)} / ${formatScore(field.projectedRoiBeforeClip.y_ratio)} / ${formatScore(field.projectedRoiBeforeClip.width_ratio)} / ${formatScore(field.projectedRoiBeforeClip.height_ratio)}`
+                                        : "N/A"}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {field.projectedRoi
+                                        ? `${formatScore(field.projectedRoi.x_ratio)} / ${formatScore(field.projectedRoi.y_ratio)} / ${formatScore(field.projectedRoi.width_ratio)} / ${formatScore(field.projectedRoi.height_ratio)}`
+                                        : "N/A"}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {field.projectionValidationResult
+                                        ? `${field.projectionValidationResult.passed === true ? "passed" : "failed"} ${
+                                            Array.isArray(field.projectionValidationResult.errors) && field.projectionValidationResult.errors.length
+                                              ? `(${field.projectionValidationResult.errors.join(", ")})`
+                                              : Array.isArray(field.projectionValidationResult.warnings) && field.projectionValidationResult.warnings.length
+                                                ? `(${field.projectionValidationResult.warnings.join(", ")})`
+                                                : ""
+                                          }`
+                                        : "N/A"}
+                                    </td>
+                                    <td className="px-3 py-2">{field.adaptiveStatus || "N/A"}</td>
+                                    <td className="px-3 py-2">{formatScore(field.adaptiveConfidence)}</td>
+                                    <td className="px-3 py-2">{formatScore(field.adaptiveCoverage)}</td>
+                                    <td className="px-3 py-2">{field.adaptiveWordBoxes?.length ?? 0}</td>
+                                    <td className="px-3 py-2">{field.adaptiveFallbackReason || "N/A"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </details>
+                    )}
                     <div className="overflow-hidden rounded-xl border border-slate-200">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">

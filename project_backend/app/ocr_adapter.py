@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 class OcrUnavailableError(RuntimeError):
@@ -68,4 +68,58 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "text": " ".join(texts).strip(),
         "confidence": round(float(confidence), 4),
+    }
+
+
+def _bbox_from_easyocr_points(points: Any) -> Dict[str, float]:
+    xs = [float(point[0]) for point in points if len(point) >= 2]
+    ys = [float(point[1]) for point in points if len(point) >= 2]
+    if not xs or not ys:
+        return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+    left = min(xs)
+    top = min(ys)
+    right = max(xs)
+    bottom = max(ys)
+    return {
+        "x": round(left, 4),
+        "y": round(top, 4),
+        "width": round(max(0.0, right - left), 4),
+        "height": round(max(0.0, bottom - top), 4),
+    }
+
+
+def ocr_text_regions(image_path: str) -> Dict[str, Any]:
+    Image, np = _load_image()
+    path = Path(image_path)
+    if not path.exists():
+        raise ValueError(f"OCR image not found: {image_path}")
+
+    image = Image.open(path).convert("RGB")
+    image_width, image_height = image.size
+    reader = _load_reader()
+    results = reader.readtext(np.array(image))
+
+    regions: List[Dict[str, Any]] = []
+    for result in results:
+        if len(result) < 2:
+            continue
+        bbox = _bbox_from_easyocr_points(result[0])
+        text = str(result[1] or "").strip()
+        confidence = float(result[2]) if len(result) >= 3 else 0.0
+        regions.append(
+            {
+                "text": text,
+                "confidence": round(confidence, 4),
+                "bbox": bbox,
+                "center": {
+                    "x": round(bbox["x"] + bbox["width"] / 2, 4),
+                    "y": round(bbox["y"] + bbox["height"] / 2, 4),
+                },
+            }
+        )
+
+    return {
+        "image_width": image_width,
+        "image_height": image_height,
+        "regions": regions,
     }
