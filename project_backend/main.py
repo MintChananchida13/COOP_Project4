@@ -4,7 +4,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import easyocr
@@ -82,7 +82,7 @@ def crop_opencv_region(opencv_img: np.ndarray, x: int, y: int, w: int, h: int) -
     return opencv_img[y:y_end, x:x_end]
 
 
-def ocr_crop(opencv_img: np.ndarray) -> Tuple[str, float]:
+def preprocess_ocr_variants(opencv_img: np.ndarray) -> List[Tuple[str, np.ndarray]]:
     padded = cv2.copyMakeBorder(
         opencv_img,
         15,
@@ -92,17 +92,92 @@ def ocr_crop(opencv_img: np.ndarray) -> Tuple[str, float]:
         cv2.BORDER_CONSTANT,
         value=[255, 255, 255],
     )
+    variants: List[Tuple[str, np.ndarray]] = [("original_padded", padded)]
+
+    height, width = padded.shape[:2]
+    if max(height, width) < 900:
+        variants.append(("upscaled_2x", cv2.resize(padded, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)))
+
+    gray = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
+    variants.append(("grayscale", cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)))
+
+    sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    sharpened = cv2.filter2D(gray, -1, sharpen_kernel)
+    variants.append(("sharpened", cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)))
+
     try:
-        ocr_result = ocr_engine.readtext(padded)
-        if not ocr_result:
-            return "", 0.0
-        texts = [str(line[1]) for line in ocr_result]
-        confs = [float(line[2]) for line in ocr_result]
-        confidence = sum(confs) / len(confs) if confs else 0.0
-        return " ".join(texts).strip(), confidence
+        thresholded = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            31,
+            7,
+        )
+        variants.append(("adaptive_threshold", cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR)))
+    except cv2.error:
+        pass
+
+    return variants
+
+
+def _segments_from_easyocr(ocr_result: list) -> List[Dict[str, Any]]:
+    segments = []
+    for line in ocr_result:
+        bbox, text, conf = line
+        segments.append(
+            {
+                "text": str(text),
+                "confidence": float(conf),
+                "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
+            }
+        )
+    return segments
+
+
+def _summarize_ocr_segments(segments: List[Dict[str, Any]]) -> Tuple[str, float]:
+    if not segments:
+        return "", 0.0
+    texts = [str(segment["text"]) for segment in segments]
+    confs = [float(segment["confidence"]) for segment in segments]
+    confidence = sum(confs) / len(confs) if confs else 0.0
+    return " ".join(texts).strip(), confidence
+
+
+def ocr_crop(opencv_img: np.ndarray) -> Dict[str, Any]:
+    best_result: Dict[str, Any] = {
+        "text": "",
+        "confidence": 0.0,
+        "segments": [],
+        "preprocessing": "none",
+        "attempts": [],
+    }
+    try:
+        for variant_name, variant_image in preprocess_ocr_variants(opencv_img):
+            ocr_result = ocr_engine.readtext(variant_image)
+            segments = _segments_from_easyocr(ocr_result)
+            text, confidence = _summarize_ocr_segments(segments)
+            attempt = {
+                "preprocessing": variant_name,
+                "text": text,
+                "confidence": float(confidence),
+                "segment_count": len(segments),
+                "segments": segments,
+            }
+            best_result["attempts"].append(attempt)
+            if text and (confidence > float(best_result["confidence"]) or not best_result["text"]):
+                best_result.update(
+                    {
+                        "text": text,
+                        "confidence": float(confidence),
+                        "segments": segments,
+                        "preprocessing": variant_name,
+                    }
+                )
+        return best_result
     except Exception as err:
         print(f"OCR crop error: {err}")
-        return "", 0.0
+        return best_result
 
 
 @app.get("/")
@@ -151,6 +226,15 @@ async def process_document(payload: DocumentPayload):
                         "width": float(w),
                         "height": float(h),
                         "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
+                        "raw_segments": [
+                            {
+                                "text": str(text),
+                                "confidence": float(conf),
+                                "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
+                            }
+                        ],
+                        "ocr_attempts": [],
+                        "ocr_preprocessing": "full_page",
                     }
                 )
         else:
@@ -169,7 +253,9 @@ async def process_document(payload: DocumentPayload):
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 cv2.imwrite(filepath, crop_img)
 
-                extracted_text, confidence_score = ocr_crop(crop_img)
+                ocr_result = ocr_crop(crop_img)
+                extracted_text = str(ocr_result.get("text") or "")
+                confidence_score = float(ocr_result.get("confidence") or 0.0)
                 if not extracted_text:
                     extracted_text = "(no text found in ROI)"
                     confidence_score = 0.0
@@ -180,6 +266,9 @@ async def process_document(payload: DocumentPayload):
                         "text": extracted_text,
                         "confidence": confidence_score,
                         "saved_path": filepath,
+                        "raw_segments": ocr_result.get("segments", []),
+                        "ocr_attempts": ocr_result.get("attempts", []),
+                        "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
                     }
                 )
 

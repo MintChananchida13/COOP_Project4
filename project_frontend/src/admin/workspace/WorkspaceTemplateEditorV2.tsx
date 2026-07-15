@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { SetStateAction, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
@@ -18,6 +19,7 @@ interface WorkspaceTemplateEditorProps {
   ignoreRegions: IgnoreRegion[];
   onAddField: (roi?: RoiRatio, defaults?: Partial<TemplateField>) => void;
   onUpdateField: (fieldId: string, patch: Partial<TemplateField>) => void;
+  onReorderFields: (orderedFieldIds: string[]) => void;
   onDeleteField: (fieldId: string) => void;
   onAddIgnoreRegion: (roi?: RoiRatio) => void;
   onUpdateIgnoreRegion: (regionId: string, patch: Partial<IgnoreRegion>) => void;
@@ -100,6 +102,7 @@ export default function WorkspaceTemplateEditorV2({
   ignoreRegions,
   onAddField,
   onUpdateField,
+  onReorderFields,
   onDeleteField,
   onAddIgnoreRegion,
   onUpdateIgnoreRegion,
@@ -118,8 +121,18 @@ export default function WorkspaceTemplateEditorV2({
   const currentPageNumber = currentPage + 1;
   const selectedPage = pages[currentPage];
 
-  const extractionFields = fields.filter((field) => !isAnchor(field));
-  const verificationAnchors = fields.filter(isAnchor);
+  const orderedFields = useMemo(
+    () =>
+      [...fields].sort(
+        (left, right) =>
+          left.pageNumber - right.pageNumber ||
+          (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+          left.fieldName.localeCompare(right.fieldName)
+      ),
+    [fields]
+  );
+  const extractionFields = orderedFields.filter((field) => !isAnchor(field));
+  const verificationAnchors = orderedFields.filter(isAnchor);
   const currentPageExtractionFields = extractionFields.filter((field) => field.pageNumber === currentPageNumber);
   const currentPageAnchors = verificationAnchors.filter((field) => field.pageNumber === currentPageNumber);
 
@@ -227,6 +240,18 @@ export default function WorkspaceTemplateEditorV2({
     } else {
       onUpdateField(anchor.id, { dataType: "text", extractionMethod: "ocr_text" });
     }
+  };
+
+  const moveExtractionFieldOrder = (fieldId: string, direction: -1 | 1) => {
+    const currentIndex = currentPageExtractionFields.findIndex((field) => field.id === fieldId);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentPageExtractionFields.length) return;
+
+    const nextOrder = [...currentPageExtractionFields];
+    const [field] = nextOrder.splice(currentIndex, 1);
+    nextOrder.splice(nextIndex, 0, field);
+    onReorderFields(nextOrder.map((item) => item.id));
+    selectField(field);
   };
 
   const clearStepTest = () => {
@@ -419,11 +444,47 @@ export default function WorkspaceTemplateEditorV2({
                   <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
                     {panelRois.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">No ROI on this page.</p>
-                    ) : panelRois.map((roi) => (
-                      <button key={roi.id} type="button" onClick={() => selectRoi(roi.id)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50">
-                        {roi.fieldName}
-                      </button>
-                    ))}
+                    ) : panelRois.map((roi, index) => {
+                      const sourceField = currentPageExtractionFields.find((field) => field.id === (roi as AdminRoi).sourceId);
+                      const isSelected = selectedId === roi.id;
+                      return (
+                        <div
+                          key={roi.id}
+                          className={`flex items-center gap-1.5 rounded-lg border bg-white px-2 py-2 text-[11px] font-bold ${
+                            isSelected ? "border-indigo-300 text-indigo-800 shadow-sm" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          <button type="button" onClick={() => selectRoi(roi.id)} className="min-w-0 flex-1 truncate text-left">
+                            <span className="mr-1 text-slate-400">{index + 1}.</span>
+                            {roi.fieldName}
+                          </button>
+                          {mode === "extraction_fields" && sourceField && (
+                            <div className="flex shrink-0 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => moveExtractionFieldOrder(sourceField.id, -1)}
+                                disabled={index === 0}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                title="Move field up"
+                                aria-label="Move field up"
+                              >
+                                <ChevronUp size={14} strokeWidth={2.25} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveExtractionFieldOrder(sourceField.id, 1)}
+                                disabled={index === panelRois.length - 1}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                title="Move field down"
+                                aria-label="Move field down"
+                              >
+                                <ChevronDown size={14} strokeWidth={2.25} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
                 {mode === "extraction_fields" && selectedExtractionField && (

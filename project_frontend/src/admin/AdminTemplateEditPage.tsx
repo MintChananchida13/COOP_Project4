@@ -266,6 +266,41 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       });
   };
 
+  const handleReorderFields = (orderedFieldIds: string[]) => {
+    const orderMap = new Map(orderedFieldIds.map((fieldId, index) => [fieldId, index + 1]));
+    const previousFields = selectedTemplateFields;
+    const changedFields = previousFields
+      .filter((field) => orderMap.has(field.id) && field.sortOrder !== orderMap.get(field.id))
+      .map((field) => ({ ...field, sortOrder: orderMap.get(field.id) || field.sortOrder || 0 }));
+
+    if (changedFields.length === 0) return;
+
+    setSelectedTemplateFields((prev) =>
+      prev.map((field) => {
+        const nextSortOrder = orderMap.get(field.id);
+        return nextSortOrder ? { ...field, sortOrder: nextSortOrder } : field;
+      })
+    );
+
+    const fieldsToPersist = changedFields.filter((field) => !field.id.startsWith("local_field_"));
+    if (!canPersistToBackend || fieldsToPersist.length === 0) {
+      setLocalOnly("Field order saved locally.");
+      return;
+    }
+
+    Promise.all(fieldsToPersist.map((field) => updateTemplateFieldApi(templateId, field.id, { sortOrder: field.sortOrder })))
+      .then((bundles) => {
+        const latestBundle = bundles[bundles.length - 1];
+        if (latestBundle) applyBundle(latestBundle);
+        setSaved("Field order saved.");
+      })
+      .catch((error) => {
+        console.warn("Field reorder failed.", error);
+        setSelectedTemplateFields(previousFields);
+        setLocalOnly("Field order could not be persisted.");
+      });
+  };
+
   const handleDeleteField = (fieldId: string) => {
     const previousFields = selectedTemplateFields;
     setSelectedTemplateFields((prev) => prev.filter((field) => field.id !== fieldId));
@@ -517,6 +552,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             ignoreRegions={selectedIgnoreRegions}
             onAddField={handleAddField}
             onUpdateField={handleUpdateField}
+            onReorderFields={handleReorderFields}
             onDeleteField={handleDeleteField}
             onAddIgnoreRegion={handleAddIgnoreRegion}
             onUpdateIgnoreRegion={handleUpdateIgnoreRegion}

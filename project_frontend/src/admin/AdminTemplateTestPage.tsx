@@ -710,7 +710,20 @@ function DraftCandidateCard({
             <DraftSummaryCard label="Template Status" value={candidate.templateStatus || "N/A"} />
             <DraftSummaryCard label="Page Count" value={candidate.pageCount ?? "N/A"} />
             <DraftSummaryCard label="Field Count" value={candidate.fieldCount ?? "N/A"} />
+            <DraftSummaryCard label="Alignment" value={candidate.alignmentStatus || "N/A"} />
+            <DraftSummaryCard label="Verification Image" value={candidate.verificationSourceUsed || "N/A"} />
+            <DraftSummaryCard label="Alignment Reason" value={candidate.alignmentReason || "N/A"} />
           </div>
+          {candidate.alignmentDetails && candidate.alignmentDetails.length > 0 && (
+            <details className="mt-4 rounded-xl bg-slate-50 p-3 text-xs">
+              <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-500">
+                Alignment Details
+              </summary>
+              <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-white p-3 text-[10px] font-semibold text-slate-600">
+                {JSON.stringify(candidate.alignmentDetails, null, 2)}
+              </pre>
+            </details>
+          )}
           {candidate.verificationDetails && candidate.verificationDetails.length > 0 && (
             <div className="mt-4 rounded-xl bg-slate-50 p-3">
               <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Verification Checklist</h4>
@@ -918,8 +931,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const topCandidates = simulation?.candidates.slice(0, 5) || [];
   const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
   const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
-  const publishPrerequisitesMet = Boolean(simulationPassed && detectionTest);
-  const overallReady = publishPrerequisitesMet && (!detectionTest || detectionTestPassed);
+  const publishPrerequisitesMet = Boolean(simulationPassed && detectionTestPassed);
+  const overallReady = publishPrerequisitesMet;
   const canRunDetectionTest = Boolean(simulation?.temporaryEmbedding && simulationAction === null && testDocumentFile && !detectionTestAction);
   const canConfirmPublish = publishPrerequisitesMet && simulationAction === null && template?.status !== "active";
 
@@ -1080,11 +1093,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             Back to Edit Template
           </Link>
         </div>
-        <div className="mt-4 grid gap-2 lg:grid-cols-4">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {[
             [1, "Review ROI & OCR"],
             [2, "Embedding Simulation"],
-            [3, "Candidate Details"],
+            [3, "New Document Test"],
             [4, "Publish Review"],
           ].map(([step, label]) => (
             <button
@@ -1333,7 +1346,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       )}
 
       {validationStep === 3 && (
-      <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
@@ -1401,9 +1413,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </div>
         </div>
       </section>
+      )}
 
+      {validationStep === 3 && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="3. Candidate Details" subtitle="Review unified ranking and expand candidates only when detailed verification/debug is needed." />
+        <DraftSectionHeader title="Candidate Details" subtitle="Review unified ranking and expand candidates only when detailed verification/debug is needed." />
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200 text-xs">
             <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -1462,7 +1476,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           })}
         </div>
       </section>
-      </>
       )}
 
       {false && (
@@ -1609,7 +1622,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
               )}
               {detectionTest && !detectionTestPassed && (
                 <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
-                  Warning: the draft template did not clearly rank first in the new document test. Review the candidate ranking before publishing.
+                  The draft template must rank first and pass the new document test before publishing.
                 </p>
               )}
               {publishConfirmed && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-xs font-black text-emerald-700">Template published successfully.</p>}
@@ -1619,17 +1632,13 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 type="button"
                 onClick={handleConfirmPublish}
                 disabled={!canConfirmPublish}
-                className="ui-stable-action-lg rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                className="ui-stable-action-lg rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmPublish}
-                disabled={!canConfirmPublish}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
-              >
-                {template.status === "active" ? "Publish Template Complete" : "Publish Template"}
+                {template.status === "active"
+                  ? "Publish Template Complete"
+                  : simulationAction === "confirm"
+                    ? "Publishing..."
+                    : "Confirm and Publish Template"}
               </button>
             </div>
           </div>

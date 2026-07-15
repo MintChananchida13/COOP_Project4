@@ -41,6 +41,9 @@ const loadCanvasSafeImage = async (src: string) =>
     }
   });
 
+const getRawOcrText = (result: OCRResult & { pageIndex?: number }) =>
+  result.originalText !== undefined ? result.originalText : result.extractedText;
+
 
 const CroppedRoiPreview = ({
   previewUrl,
@@ -514,8 +517,12 @@ export default function GroundTruthEditorZone({
                               <span className="text-[9px] font-bold text-slate-400">ROI crop preview</span>
                             </div>
                           ) : (
-                            <div className="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-slate-650 font-medium text-xs break-words leading-relaxed shadow-sm">
-                              {res.originalText || <span className="text-slate-400 italic">(No text)</span>}
+                            <div
+                              className="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-slate-650 font-medium text-xs break-words leading-relaxed shadow-sm normal-case"
+                              style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
+                              translate="no"
+                            >
+                              {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(No text)</span>}
                             </div>
                           )}
                           <span className={`w-fit px-1.5 py-0.5 rounded text-[10px] font-mono font-bold mt-1 ${res.confidence >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
@@ -536,6 +543,14 @@ export default function GroundTruthEditorZone({
                               value={res.extractedText} 
                               onFocus={() => setActiveFieldId(res.id)} 
                               onInput={autoResizeTextarea}
+                              autoCapitalize="off"
+                              autoComplete="off"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              translate="no"
+                              data-gramm="false"
+                              data-gramm_editor="false"
+                              data-enable-grammarly="false"
                               ref={(el) => {
                                 if (el) {
                                   el.style.height = "auto";
@@ -543,7 +558,8 @@ export default function GroundTruthEditorZone({
                                 }
                               }}
                               onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))} 
-                              className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner" 
+                              className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner normal-case" 
+                              style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
                               placeholder="Edit OCR text..."
                               rows={1}
                             />

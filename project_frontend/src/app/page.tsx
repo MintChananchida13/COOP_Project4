@@ -153,6 +153,12 @@ const templateFieldsToWorkspaceRois = async (
 
   return fields
     .filter((field) => !field.useForVerification)
+    .sort(
+      (left, right) =>
+        left.pageNumber - right.pageNumber ||
+        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+        left.fieldName.localeCompare(right.fieldName)
+    )
     .map((field) => {
       const projectedField = projectedByFieldId.get(field.id);
       const projectedRoi =
@@ -249,6 +255,8 @@ export default function Home() {
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
   const [classificationStatus, setClassificationStatus] = useState<string>("");
+  const [isTemplateDecisionOpen, setIsTemplateDecisionOpen] = useState<boolean>(false);
+  const [templateDecisionStatus, setTemplateDecisionStatus] = useState<string>("");
   const [exportJson, setExportJson] = useState<string>("");
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [matchedTemplate, setMatchedTemplate] = useState<{
@@ -273,6 +281,8 @@ export default function Home() {
     setSelectedId(null);
     setOcrResults([]);
     setClassificationStatus("");
+    setIsTemplateDecisionOpen(false);
+    setTemplateDecisionStatus("");
     setMatchedTemplate(null);
     setPagesConfig(
       urls.map(() => ({
@@ -305,6 +315,8 @@ export default function Home() {
     setSelectedId(null);
     setOcrResults([]);
     setClassificationStatus("");
+    setIsTemplateDecisionOpen(false);
+    setTemplateDecisionStatus("");
     setMatchedTemplate(null);
     setCurrentStep("upload");
   };
@@ -318,6 +330,8 @@ export default function Home() {
     setOcrResults([]);
     setMatchedTemplate(null);
     setCurrentStep("studio");
+    setIsTemplateDecisionOpen(true);
+    setTemplateDecisionStatus("กำลังเตรียมภาพที่ยืนยันขอบเขตแล้ว");
     setClassificationStatus("กำลังแยกประเภทเอกสารจากภาพที่ยืนยันขอบเขตแล้ว...");
 
     try {
@@ -327,6 +341,7 @@ export default function Home() {
         return;
       }
 
+      setTemplateDecisionStatus("กำลังค้นหา Template ที่ใกล้เคียงที่สุด");
       const file = await dataUrlToFile(firstImage, "confirmed-document.jpg");
       const detection = await detectTemplateDev(file);
       const templateId = detection.bestCandidate?.templateId;
@@ -336,7 +351,9 @@ export default function Home() {
         return;
       }
 
+      setTemplateDecisionStatus("พบ Template แล้ว กำลังโหลดโครงสร้าง ROI");
       const bundle = await fetchTemplateBundle(templateId);
+      setTemplateDecisionStatus("กำลังจัดภาพให้ตรงกับ Template และเตรียมกรอบ OCR");
       const templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
       setImagesList(templateCanvasImages);
       setPreviewUrl(templateCanvasImages[currentIndex] || templateCanvasImages[0] || "");
@@ -381,6 +398,9 @@ export default function Home() {
     } catch (error) {
       console.warn("Document classification after boundary confirmation failed.", error);
       setClassificationStatus("ตรวจจับ Template ไม่สำเร็จ ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+    } finally {
+      setIsTemplateDecisionOpen(false);
+      setTemplateDecisionStatus("");
     }
   };
 
@@ -947,6 +967,23 @@ export default function Home() {
               </div>
             )}
           </>
+        )}
+
+        {isTemplateDecisionOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm">
+            <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-indigo-50">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+              </div>
+              <h2 className="mt-5 text-base font-black text-slate-950">กำลังค้นหา Template</h2>
+              <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-500">
+                ระบบกำลังวิเคราะห์เอกสารและเลือก Template ที่เหมาะสมที่สุด
+              </p>
+              <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-700">
+                {templateDecisionStatus || "กำลังประมวลผล..."}
+              </div>
+            </section>
+          </div>
         )}
       </div>
     </main>

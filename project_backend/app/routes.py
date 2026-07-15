@@ -27,6 +27,7 @@ from .services import (
     EmbeddingService,
     ExtractionService,
     OCRService,
+    StorageMaintenanceService,
     TemplateDetectionService,
     TemplateRequestService,
 )
@@ -40,6 +41,7 @@ custom_ocr = OCRService()
 template_requests = TemplateRequestService()
 admin_templates = AdminTemplateService()
 embeddings = EmbeddingService()
+storage_maintenance = StorageMaintenanceService()
 
 
 def ok(data: dict) -> ApiResponse:
@@ -206,6 +208,11 @@ def delete_requested_field(request_id: str, field_id: str) -> ApiResponse:
 @router.get("/admin/dashboard", response_model=ApiResponse)
 def admin_dashboard() -> ApiResponse:
     return ok(admin_templates.dashboard())
+
+
+@router.post("/admin/storage/cleanup-generated", response_model=ApiResponse)
+def cleanup_generated_storage(max_age_hours: int = 24, dry_run: bool = True) -> ApiResponse:
+    return ok(storage_maintenance.cleanup_generated_files(max_age_hours=max_age_hours, dry_run=dry_run))
 
 
 @router.get("/admin/template-requests", response_model=ApiResponse)

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .alignment_service import AlignmentService
 from .embedding_service import (
     EmbeddingContextError,
     embedding_result_to_json,
@@ -1248,6 +1249,64 @@ class DocumentService:
         return {"document_id": document_id, "id": page_id, "page_number": None, "status": "stubbed"}
 
 
+class StorageMaintenanceService:
+    GENERATED_DIRS = [
+        Path(__file__).resolve().parents[1] / "cropped_rois",
+        Path(__file__).resolve().parents[1] / "storage" / "detection_queries",
+        _storage_root() / "prepublish_detection_tests",
+        _storage_root() / "template_extraction_test_crops",
+        _storage_root() / "verification_query_anchor_crops",
+        _storage_root() / "prepublish_anchor_crops",
+    ]
+
+    def cleanup_generated_files(self, max_age_hours: int = 24, dry_run: bool = True) -> Dict[str, Any]:
+        max_age_hours = max(1, int(max_age_hours or 24))
+        cutoff = time.time() - (max_age_hours * 3600)
+        candidates: List[Dict[str, Any]] = []
+        deleted_count = 0
+        deleted_bytes = 0
+
+        for directory in self.GENERATED_DIRS:
+            if not directory.exists() or not directory.is_dir():
+                continue
+            for path in directory.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime > cutoff:
+                    continue
+
+                item = {
+                    "path": str(path),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                }
+                candidates.append(item)
+                if dry_run:
+                    continue
+                try:
+                    path.unlink()
+                    deleted_count += 1
+                    deleted_bytes += stat.st_size
+                except OSError as error:
+                    item["error"] = str(error)
+
+        return {
+            "dry_run": dry_run,
+            "max_age_hours": max_age_hours,
+            "candidate_count": len(candidates),
+            "candidate_bytes": sum(int(item["size_bytes"]) for item in candidates),
+            "deleted_count": deleted_count,
+            "deleted_bytes": deleted_bytes,
+            "scanned_directories": [str(path) for path in self.GENERATED_DIRS],
+            "candidates": candidates[:200],
+            "truncated": len(candidates) > 200,
+        }
+
+
 class DecisionService:
     MIN_RETRIEVAL_SCORE = 0.50
     HIGH_RETRIEVAL_SCORE = 0.95
@@ -1774,6 +1833,84 @@ class AdminTemplateService:
             return vector_id[4:]
         return None
 
+    def _align_query_pages_for_candidate(
+        self,
+        candidate_template: Dict[str, Any],
+        query_page_paths: Dict[int, str],
+    ) -> Dict[str, Any]:
+        template_page_paths = self._template_page_image_paths(candidate_template["id"], candidate_template.get("pages") or [])
+        verification_page_paths = dict(query_page_paths)
+        alignments: List[Dict[str, Any]] = []
+
+        for page_number, query_path in query_page_paths.items():
+            template_path = template_page_paths.get(page_number)
+            if not template_path:
+                alignments.append(
+                    {
+                        "page_number": page_number,
+                        "alignment_status": "fallback",
+                        "verification_source_used": "normalized",
+                        "alignment_reason": "template_page_image_missing",
+                    }
+                )
+                continue
+
+            try:
+                precheck = AlignmentService().alignment_precheck(query_path, template_path)
+                if not precheck.get("should_run_orb"):
+                    alignments.append(
+                        {
+                            "page_number": page_number,
+                            "alignment_status": "skipped",
+                            "verification_source_used": "normalized",
+                            "alignment_reason": precheck.get("reason") or "geometry_matches_template",
+                            "alignment": {"precheck": precheck, "orb_executed": False},
+                        }
+                    )
+                    continue
+
+                aligned_path = _storage_root() / "prepublish_detection_tests" / "aligned" / candidate_template["id"] / f"page_{page_number}_{uuid4().hex[:8]}.png"
+                result = AlignmentService().align_to_template(query_path, template_path, str(aligned_path))
+                status = str(result.get("alignment_status") or result.get("status") or "failed")
+                if status == "aligned" and result.get("aligned_image_path"):
+                    verification_page_paths[page_number] = str(result["aligned_image_path"])
+                    verification_source = "aligned"
+                else:
+                    status = "fallback" if status != "failed" else "failed"
+                    verification_source = "normalized"
+                alignments.append(
+                    {
+                        "page_number": page_number,
+                        "alignment_status": status,
+                        "verification_source_used": verification_source,
+                        "alignment_reason": result.get("alignment_reason") or result.get("reason") or status,
+                        "alignment": result,
+                    }
+                )
+            except Exception as error:
+                alignments.append(
+                    {
+                        "page_number": page_number,
+                        "alignment_status": "failed",
+                        "verification_source_used": "normalized",
+                        "alignment_reason": str(error),
+                        "alignment": {"error": str(error), "orb_executed": False},
+                    }
+                )
+
+        primary_alignment = alignments[0] if alignments else {
+            "alignment_status": "skipped",
+            "verification_source_used": "normalized",
+            "alignment_reason": "no_query_pages",
+        }
+        return {
+            "page_paths": verification_page_paths,
+            "alignments": alignments,
+            "alignment_status": primary_alignment.get("alignment_status", "skipped"),
+            "verification_source_used": primary_alignment.get("verification_source_used", "normalized"),
+            "alignment_reason": primary_alignment.get("alignment_reason"),
+        }
+
     def _build_simulation_candidate(
         self,
         candidate_template: Dict[str, Any],
@@ -1781,9 +1918,10 @@ class AdminTemplateService:
         query_page_paths: Dict[int, str],
         is_current_draft: bool = False,
     ) -> Dict[str, Any]:
-        verification = VerificationService().verify_template(candidate_template["id"], query_page_paths)
+        alignment_context = self._align_query_pages_for_candidate(candidate_template, query_page_paths)
+        verification = VerificationService().verify_template(candidate_template["id"], alignment_context["page_paths"])
         if is_current_draft:
-            verification = self._apply_temporary_draft_image_anchor_scores(candidate_template, verification, query_page_paths)
+            verification = self._apply_temporary_draft_image_anchor_scores(candidate_template, verification, alignment_context["page_paths"])
         threshold = DecisionService().final_confidence_threshold(candidate_template, {})
         decision = DecisionService().decide_candidate(global_score, verification, threshold)
         return {
@@ -1797,7 +1935,10 @@ class AdminTemplateService:
             "anchor_score": decision.get("anchor_score"),
             "verification_score": decision["verification_score"],
             "final_score": decision["final_score"],
-            "alignment_status": "skipped",
+            "alignment_status": alignment_context["alignment_status"],
+            "alignment_reason": alignment_context.get("alignment_reason"),
+            "alignment_details": alignment_context["alignments"],
+            "verification_source_used": alignment_context["verification_source_used"],
             "decision": decision["decision_reason"],
             "final_passed": decision["final_passed"],
             "required_passed": decision.get("required_passed"),

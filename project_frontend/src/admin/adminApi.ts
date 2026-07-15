@@ -255,6 +255,9 @@ export interface PrepublishCandidate {
   verificationScore: number;
   finalScore: number;
   alignmentStatus: string;
+  alignmentReason?: string | null;
+  alignmentDetails?: Record<string, unknown>[];
+  verificationSourceUsed?: string | null;
   decision: string;
   finalPassed: boolean;
   requiredPassed?: boolean | null;
@@ -945,6 +948,11 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
   verificationScore: Number(candidate.verification_score || 0),
   finalScore: Number(candidate.final_score || 0),
   alignmentStatus: String(candidate.alignment_status || "skipped"),
+  alignmentReason: (candidate.alignment_reason as string | null | undefined) ?? null,
+  alignmentDetails: Array.isArray(candidate.alignment_details)
+    ? (candidate.alignment_details as Record<string, unknown>[])
+    : [],
+  verificationSourceUsed: (candidate.verification_source_used as string | null | undefined) ?? null,
   decision: String(candidate.decision || ""),
   finalPassed: Boolean(candidate.final_passed),
   requiredPassed: typeof candidate.required_passed === "boolean" ? candidate.required_passed : null,
