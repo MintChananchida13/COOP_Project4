@@ -11,3 +11,16 @@ project_backend/qdrant_local_db/
 
 # Git warning files
 .DS_Store
+
+# Local database
+project_frontend/prisma/dev.db
+project_frontend/prisma/dev.db-journal
+
+# Generated files
+project_backend/storage/detection_queries/
+project_backend/storage/prepublish_anchor_crops/
+project_backend/storage/prepublish_detection_tests/
+project_backend/storage/verification_query_anchor_crops/
+project_backend/storage/verification_anchor_crops/
+project_backend/storage/embedding_previews/
+project_backend/storage/prepublish_template_pages/

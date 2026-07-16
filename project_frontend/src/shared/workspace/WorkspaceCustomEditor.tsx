@@ -662,10 +662,19 @@ export default function WorkspaceCustomEditor({
         return;
       }
 
-      setRois((prev) => [...prev, ...detectedRois]);
+      const removedCount = currentPageRois.length;
+      setRois((prev) => {
+        const otherPageRois = prev.filter((roi) => {
+          const roiPage = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
+          return roiPage !== Number(currentIndex);
+        });
+        return [...otherPageRois, ...detectedRois];
+      });
       setSelectedId(detectedRois[0].id);
       setActiveTool("box");
-      setAutoDetectMessage(`Created ${detectedRois.length} ROI field${detectedRois.length === 1 ? "" : "s"} on this page.`);
+      setAutoDetectMessage(
+        `Replaced ${removedCount} existing ROI field${removedCount === 1 ? "" : "s"} with ${detectedRois.length} detected ROI field${detectedRois.length === 1 ? "" : "s"} on this page.`
+      );
     } catch (error) {
       console.error("Auto ROI detection failed.", error);
       setAutoDetectMessage(error instanceof Error ? error.message : "Auto ROI detection failed.");

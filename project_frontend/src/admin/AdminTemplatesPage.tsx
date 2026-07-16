@@ -9,10 +9,10 @@ import { useAdminState } from "./AdminState";
 import { ActionButton, EmptyState, InlineState, LoadingState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 const statusFilterOptions: { value: AdminStatusFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "draft", label: "Draft" },
-  { value: "active", label: "Active" },
-  { value: "nonactive", label: "Nonactive" },
+  { value: "all", label: "ทั้งหมด" },
+  { value: "draft", label: "ฉบับร่าง" },
+  { value: "active", label: "ใช้งานอยู่" },
+  { value: "nonactive", label: "ไม่ใช้งาน" },
 ];
 
 export default function AdminTemplatesPage() {
@@ -65,11 +65,11 @@ export default function AdminTemplatesPage() {
 
   const handleDeleteTemplate = async (template: Template) => {
     if (loadStatus !== "loaded") {
-      setDeleteError("Demo fallback templates cannot be deleted from the database.");
+      setDeleteError("ไม่สามารถลบ Template ตัวอย่างได้ เพราะไม่ได้มาจากฐานข้อมูลจริง");
       return;
     }
     const confirmed = window.confirm(
-      `Delete template "${template.name}"?\n\nThis will permanently delete the template, pages, fields, ignore regions, and embedding jobs from the database. This action cannot be undone.`
+      `ลบ Template "${template.name}"?\n\nระบบจะลบ Template, หน้าเอกสาร, Field, Ignore Region และประวัติ Embedding ออกจากฐานข้อมูลถาวร การดำเนินการนี้ย้อนกลับไม่ได้`
     );
     if (!confirmed) return;
 
@@ -79,10 +79,10 @@ export default function AdminTemplatesPage() {
     try {
       await deleteTemplateApi(template.id);
       setTemplates((current) => current.filter((item) => item.id !== template.id));
-      setDeleteMessage(`Deleted template "${template.name}".`);
+      setDeleteMessage(`ลบ Template "${template.name}" เรียบร้อยแล้ว`);
     } catch (error) {
       console.warn("Template delete failed.", error);
-      setDeleteError(error instanceof Error ? error.message : "Template delete failed.");
+      setDeleteError(error instanceof Error ? error.message : "ลบ Template ไม่สำเร็จ");
     } finally {
       setDeletingTemplateId(null);
     }
@@ -91,16 +91,16 @@ export default function AdminTemplatesPage() {
   return (
     <section className="space-y-4">
       <PageHeader
-        eyebrow="Template Registry"
-        title="Templates"
-        description="Manage draft, active, and nonactive document templates. Destructive actions require confirmation and only affect persisted backend templates."
+        eyebrow="คลัง Template"
+        title="รายการ Template เอกสาร"
+        description="จัดการ Template ฉบับร่าง Template ที่ใช้งานจริง และ Template ที่ยังไม่พร้อมใช้งาน การลบข้อมูลจะมีผลกับฐานข้อมูลจริงเท่านั้น"
       />
 
       <div className={`${cardClassName} p-4 space-y-4`}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">Template Status</h2>
-          <p className="mt-1 text-xs font-medium text-slate-500">Filter templates without changing their lifecycle state.</p>
+          <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">สถานะ Template</h2>
+          <p className="mt-1 text-xs font-medium text-slate-500">เลือกดู Template ตามสถานะโดยไม่เปลี่ยนข้อมูลจริง</p>
         </div>
         <div className="grid w-full gap-2 sm:grid-cols-4 lg:w-auto lg:min-w-[520px]">
           {statusFilterOptions.map((status) => (
@@ -125,9 +125,9 @@ export default function AdminTemplatesPage() {
         </div>
       </div>
 
-      {loadStatus === "loading" && <LoadingState message="Loading persisted templates..." />}
+      {loadStatus === "loading" && <LoadingState message="กำลังโหลด Template จากฐานข้อมูล..." />}
       {loadStatus === "fallback" && (
-        <InlineState tone="warning" message="Backend unavailable. Showing clearly labeled demo fallback templates only." />
+        <InlineState tone="warning" message="เชื่อมต่อ Backend ไม่ได้ กำลังแสดง Template ตัวอย่างสำหรับทดสอบเท่านั้น" />
       )}
       {deleteMessage && (
         <InlineState tone="success" message={deleteMessage} />
@@ -149,11 +149,11 @@ export default function AdminTemplatesPage() {
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
                   <FileImage size={30} strokeWidth={1.8} />
-                  <span className="ui-caption font-semibold">No preview image</span>
+                  <span className="ui-caption font-semibold">ไม่มีภาพตัวอย่าง</span>
                 </div>
               )}
               <div className="absolute bottom-3 right-3 rounded-full border border-slate-200 bg-white/95 px-2.5 py-1 text-[11px] font-bold tabular-nums text-slate-600 shadow-sm">
-                {template.pageCount} page{template.pageCount === 1 ? "" : "s"}
+                {template.pageCount} หน้า
               </div>
             </div>
             <div className="space-y-3 p-4">
@@ -170,15 +170,15 @@ export default function AdminTemplatesPage() {
               {template.documentType || "No document type"} · Template preview
             </div>
             <div className="flex flex-wrap gap-2">
-              <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">Edit</ActionButton>
-              <ActionButton href={`/admin/templates/${template.id}/test`}>Test</ActionButton>
+              <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
+              <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
               <button
                 type="button"
                 onClick={() => handleDeleteTemplate(template)}
                 disabled={loadStatus !== "loaded" || deletingTemplateId === template.id}
                 className="ui-stable-action-sm rounded-xl border border-red-200 bg-white px-4 py-2.5 text-xs font-black text-red-600 transition-colors hover:bg-red-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
-                {deletingTemplateId === template.id ? "Deleting..." : "Delete"}
+                {deletingTemplateId === template.id ? "กำลังลบ..." : "ลบ"}
               </button>
             </div>
             </div>
@@ -186,7 +186,7 @@ export default function AdminTemplatesPage() {
         ))}
         {loadStatus === "loaded" && filteredTemplates.length === 0 && (
           <div className="md:col-span-2 xl:col-span-3">
-            <EmptyState title="No templates found" message="No persisted templates match the selected status filter." />
+            <EmptyState title="ไม่พบ Template" message="ไม่มี Template ที่ตรงกับสถานะที่เลือก" />
           </div>
         )}
       </div>

@@ -733,22 +733,22 @@ export default function Home() {
         <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="ui-caption font-semibold text-blue-600">Document AI Workspace</p>
-              <h1 className="ui-page-title mt-1 text-slate-950">Intelligent OCR Studio</h1>
+              <p className="ui-caption font-semibold text-blue-600">พื้นที่ทำงานเอกสารอัจฉริยะ</p>
+              <h1 className="ui-page-title mt-1 text-slate-950">ระบบอ่านเอกสารด้วย OCR</h1>
               <p className="ui-body mt-1 text-slate-500">
-                Upload, confirm document boundary, detect template, select fields, and review OCR results.
-                {imagesList.length > 0 && ` Active page ${currentIndex + 1}/${imagesList.length}`}
+                อัปโหลดเอกสาร ตรวจขอบเขต ค้นหา Template เลือก Field ที่ต้องการอ่าน และตรวจสอบผล OCR ก่อนนำออกใช้งาน
+                {imagesList.length > 0 && ` หน้า ${currentIndex + 1}/${imagesList.length}`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <ActionButton href="/admin">Admin</ActionButton>
+              <ActionButton href="/admin">ผู้ดูแลระบบ</ActionButton>
               {imagesList.length > 0 && (
                 <button
                   type="button"
                   onClick={handleClearAndUploadNew}
                   className="ui-button-text rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-700 transition-colors hover:bg-slate-50"
                 >
-                  New Document
+                  เอกสารใหม่
                 </button>
               )}
             </div>

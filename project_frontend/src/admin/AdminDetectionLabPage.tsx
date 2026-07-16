@@ -245,8 +245,10 @@ export default function AdminDetectionLabPage() {
           ? "ORB alignment produced a warped image and this image was used for verification."
           : currentAlignmentStatus === "skipped"
             ? "Alignment was skipped because geometry already matched the template tolerance."
-            : currentAlignmentStatus === "fallback"
-              ? "Alignment was attempted but the normalized image was safer, so fallback was used."
+          : currentAlignmentStatus === "fallback"
+              ? alignmentReason === "aligned_verification_worse_than_normalized"
+                ? "Alignment produced a warped image, but OCR verification was better on the normalized image. The aligned image was not used."
+                : "Alignment was attempted but the normalized image was safer, so fallback was used."
               : "Alignment failed or was unavailable, so the normalized image was used.",
       src: alignedImagePreviewUrl || normalizedImagePreviewUrl,
       status: alignmentLabel(alignmentCandidate),
@@ -619,7 +621,9 @@ export default function AdminDetectionLabPage() {
                         )}
                         {currentAlignmentStatus === "fallback" && (
                           <p className="rounded-lg bg-amber-50 p-2 font-bold text-amber-700 sm:col-span-2">
-                            Fallback: alignment was attempted, but it could not produce a usable transformed image. OCR verification used the normalized image.
+                            {alignmentReason === "aligned_verification_worse_than_normalized"
+                              ? "Fallback: alignment completed, but normalized OCR verification was better. The warped image was not used."
+                              : "Fallback: alignment was attempted, but it could not produce a usable transformed image. OCR verification used the normalized image."}
                           </p>
                         )}
                         {currentAlignmentStatus === "failed" && (

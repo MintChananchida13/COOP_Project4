@@ -9,7 +9,7 @@ import { useAdminState } from "./AdminState";
 type RequestFilter = "pending" | "converted" | "rejected" | "all";
 
 const formatDate = (value?: string) => {
-  if (!value) return "Not submitted";
+  if (!value) return "ยังไม่มีวันที่ส่ง";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
@@ -60,10 +60,10 @@ export default function AdminRequestsPage() {
   });
 
   const filterTabs: { value: RequestFilter; label: string; count: number }[] = [
-    { value: "pending", label: "Pending", count: counts.pending },
-    { value: "converted", label: "Converted", count: counts.converted },
-    { value: "rejected", label: "Rejected", count: counts.rejected },
-    { value: "all", label: "All", count: counts.all },
+    { value: "pending", label: "รอตรวจสอบ", count: counts.pending },
+    { value: "converted", label: "สร้าง Template แล้ว", count: counts.converted },
+    { value: "rejected", label: "ปฏิเสธ", count: counts.rejected },
+    { value: "all", label: "ทั้งหมด", count: counts.all },
   ];
 
   return (
@@ -72,10 +72,10 @@ export default function AdminRequestsPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
-              Template Requests
+              คำขอสร้าง Template
             </h2>
             <p className="mt-1 text-xs font-semibold text-slate-400">
-              Review submitted template requests from the OCR Studio.
+              ตรวจคำขอที่ผู้ใช้ส่งมาจากหน้า OCR และแปลงเป็น Template เมื่อตรวจสอบแล้วพร้อมใช้งาน
             </p>
           </div>
 
@@ -105,22 +105,22 @@ export default function AdminRequestsPage() {
 
       {loadStatus === "loading" && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500 shadow-sm">
-          Loading persisted template requests...
+          กำลังโหลดคำขอจากฐานข้อมูล...
         </div>
       )}
       {loadStatus === "fallback" && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-700 shadow-sm">
-          Backend unavailable. Showing demo fallback requests only.
+          เชื่อมต่อ Backend ไม่ได้ กำลังแสดงคำขอตัวอย่างสำหรับทดสอบเท่านั้น
         </div>
       )}
 
       {requests.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
-          No template requests found.
+          ยังไม่มีคำขอสร้าง Template
         </div>
       ) : filteredRequests.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
-          No {filter === "pending" ? "pending" : filter} template requests.
+          ไม่พบคำขอในสถานะนี้
         </div>
       ) : (
         <div className="grid gap-3">
@@ -142,11 +142,11 @@ export default function AdminRequestsPage() {
                       {request.status}
                     </span>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-                      {request.documentType || "No type"}
+                      {request.documentType || "ยังไม่ระบุประเภท"}
                     </span>
                   </div>
                   <p className="mt-2 text-xs font-semibold text-slate-500">
-                    {request.pageCount} page{request.pageCount === 1 ? "" : "s"} | Submitted: {formatDate(request.createdAt)}
+                    {request.pageCount} หน้า | ส่งเมื่อ: {formatDate(request.createdAt)}
                   </p>
                 </div>
 
@@ -156,14 +156,14 @@ export default function AdminRequestsPage() {
                       href={`/admin/templates/${request.convertedTemplateId}/edit`}
                       className="inline-flex w-fit rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
                     >
-                      Open Template
+                      เปิด Template
                     </Link>
                   )}
                   <Link
                     href={`/admin/requests/${request.id}`}
                     className="inline-flex w-fit rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white hover:bg-indigo-700"
                   >
-                    View Request
+                    ตรวจคำขอ
                   </Link>
                 </div>
               </div>

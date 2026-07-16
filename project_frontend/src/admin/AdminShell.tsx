@@ -6,11 +6,11 @@ import { ReactNode } from "react";
 import { StatusBadge } from "../shared/ui";
 
 const navItems = [
-  { href: "/admin", label: "Dashboard" },
-  { href: "/admin/requests", label: "Requests" },
-  { href: "/admin/templates", label: "Templates" },
-  { href: "/admin/detection-lab", label: "Detection Lab", badge: "DEV" },
-  { href: "/", label: "OCR Studio" },
+  { href: "/admin", label: "ภาพรวม" },
+  { href: "/admin/requests", label: "คำขอ Template" },
+  { href: "/admin/templates", label: "คลัง Template" },
+  { href: "/admin/detection-lab", label: "ทดสอบการค้นหา", badge: "DEV" },
+  { href: "/", label: "หน้า OCR" },
 ];
 
 export default function AdminShell({ children }: { children: ReactNode }) {
@@ -20,9 +20,9 @@ export default function AdminShell({ children }: { children: ReactNode }) {
       <div className="border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="ui-caption font-semibold text-blue-600">Admin Portal</p>
-            <h1 className="ui-page-title mt-1 text-slate-950">Template Management</h1>
-            <p className="ui-body mt-1 text-slate-500">Review requests, configure templates, validate embeddings, and test detection.</p>
+            <p className="ui-caption font-semibold text-blue-600">ระบบผู้ดูแล</p>
+            <h1 className="ui-page-title mt-1 text-slate-950">จัดการ Template เอกสาร</h1>
+            <p className="ui-body mt-1 text-slate-500">ตรวจคำขอ สร้าง Template ตรวจความพร้อม และทดสอบการค้นหาเอกสารก่อนนำไปใช้งานจริง</p>
           </div>
           <nav className="flex flex-wrap gap-2">
             {navItems.map((item) => (

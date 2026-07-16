@@ -506,9 +506,20 @@ def _candidate_from_result(
             )
             aligned_score = float(aligned_verification.get("score") or 0.0)
 
-            # 3) Use the template-canvas aligned image for extraction/verification.
-            verification = aligned_verification
-            verification_source_used = "aligned"
+            # 3) Alignment is optional refinement. Never use a warped image if it
+            # hurts OCR verification; fallback to the normalized image instead.
+            if aligned_score >= normalized_score:
+                verification = aligned_verification
+                verification_source_used = "aligned"
+            else:
+                alignment["alignment_status"] = "fallback"
+                alignment_debug = alignment.get("alignment_debug") or {}
+                alignment_debug["reason"] = "aligned_verification_worse_than_normalized"
+                alignment_debug["alignment_status"] = "fallback"
+                alignment_debug["verification_source_used"] = "normalized"
+                alignment["alignment_debug"] = alignment_debug
+                verification = normalized_verification
+                verification_source_used = "normalized"
 
     alignment_debug = alignment.get("alignment_debug") or {}
     alignment_score = float(alignment.get("alignment_score") or alignment_debug.get("alignment_score") or 0.0)

@@ -43,7 +43,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
       script.onload = () => {
         const pdfjs = window.pdfjsLib;
         if (!pdfjs) {
-          reject(new Error("PDF.js failed to load."));
+          reject(new Error("ไม่สามารถโหลด PDF.js ได้"));
           return;
         }
         pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -104,7 +104,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
         onUploadSuccess(accumulatedImages);
       }
     } catch (error) {
-      alert("เกิดข้อผิดพลาดในการเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");
+      alert("เกิดข้อผิดพลาดระหว่างเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");
       console.error(error);
     } finally {
       setIsProcessing(false);
@@ -115,10 +115,10 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
       <div className="mb-5 text-center">
-        <p className="ui-caption font-semibold text-blue-600">Document Intake</p>
-        <h2 className="ui-section-title mt-1 text-slate-950">นำเข้าเอกสารสำหรับ OCR</h2>
+        <p className="ui-caption font-semibold text-blue-600">นำเข้าเอกสาร</p>
+        <h2 className="ui-section-title mt-1 text-slate-950">อัปโหลดเอกสารสำหรับ OCR</h2>
         <p className="ui-body mx-auto mt-2 max-w-2xl text-slate-500">
-          รองรับไฟล์ภาพและ PDF หลายหน้า หลังอัปโหลดระบบจะพาไปตรวจขอบเขตเอกสารก่อนเริ่มตรวจจับ Template
+          รองรับไฟล์ภาพและ PDF หลายหน้า หลังอัปโหลดระบบจะให้ตรวจสอบขอบเขตเอกสารก่อนเริ่มค้นหา Template และอ่านข้อมูล
         </p>
       </div>
 
@@ -149,7 +149,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
               accept="image/*,application/pdf"
               multiple
               className="absolute inset-0 z-10 cursor-pointer opacity-0"
-              aria-label="Upload document files"
+              aria-label="เลือกไฟล์เอกสาร"
               onChange={handleFileChange}
             />
 
@@ -162,7 +162,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
                 วางไฟล์เอกสารที่นี่ หรือคลิกเพื่อเลือกไฟล์
               </h3>
               <p className="ui-body mx-auto max-w-md text-slate-500">
-                เลือกไฟล์ภาพหรือ PDF หลายหน้าได้พร้อมกัน ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
+                เลือกไฟล์ภาพหรือ PDF ได้หลายหน้า ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
               </p>
             </div>
 
