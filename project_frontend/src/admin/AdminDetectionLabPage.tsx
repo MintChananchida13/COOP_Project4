@@ -301,7 +301,7 @@ export default function AdminDetectionLabPage() {
       setResult(await detectTemplateDev(file));
     } catch (err) {
       console.warn("Detection lab failed.", err);
-      setError(err instanceof Error ? err.message : "Detection failed.");
+      setError(err instanceof Error ? err.message : "ค้นหา Template ไม่สำเร็จ");
     } finally {
       setIsRunning(false);
     }
@@ -313,12 +313,12 @@ export default function AdminDetectionLabPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-black text-slate-900">Detection Lab</h2>
+              <h2 className="text-xl font-black text-slate-900">ห้องทดสอบการค้นหา Template</h2>
               <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">DEV</span>
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">Real Detection Pipeline</span>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">Pipeline จริง</span>
             </div>
             <p className="mt-2 text-sm font-semibold text-slate-500">
-              Upload an image or multi-page PDF. PDFs are converted into page images before template matching.
+              อัปโหลดภาพหรือ PDF หลายหน้าเพื่อทดสอบการค้นหา Template ที่เผยแพร่แล้ว ระบบจะแปลง PDF เป็นภาพก่อนเริ่มตรวจจับ
             </p>
           </div>
         </div>
@@ -326,14 +326,14 @@ export default function AdminDetectionLabPage() {
 
       <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Test Document</h3>
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">เอกสารสำหรับทดสอบ</h3>
           <label className="mt-3 flex cursor-pointer flex-col rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-xs font-bold text-slate-600 hover:bg-white">
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={handleFileChange} className="sr-only" />
-            <span className="text-sm font-black text-slate-800">Choose PNG, JPEG, WebP, or multi-page PDF</span>
-            <span className="mt-1">{file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "No file selected"}</span>
+            <span className="text-sm font-black text-slate-800">เลือกไฟล์ PNG, JPEG, WebP หรือ PDF หลายหน้า</span>
+            <span className="mt-1">{file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "ยังไม่ได้เลือกไฟล์"}</span>
             {file && (
               <span className="mt-2 rounded-lg bg-white px-2 py-1 text-[10px] font-black uppercase text-slate-500">
-                {isPdf ? "PDF will be converted to images" : "Single image input"}
+                {isPdf ? "PDF จะถูกแปลงเป็นภาพ" : "ไฟล์ภาพเดี่ยว"}
               </span>
             )}
           </label>
@@ -344,7 +344,7 @@ export default function AdminDetectionLabPage() {
             disabled={!file || isRunning}
             className="ui-stable-action-lg mt-4 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
           >
-            {isRunning ? "Running Detection..." : "Run Detection"}
+            {isRunning ? "กำลังค้นหา Template..." : "เริ่มค้นหา Template"}
           </button>
           {error && <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
 
@@ -355,72 +355,72 @@ export default function AdminDetectionLabPage() {
               </div>
             ) : file?.type === "application/pdf" ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">
-                PDF selected. Each page will be rendered as an image after detection runs.
+                เลือกไฟล์ PDF แล้ว ระบบจะแสดงภาพแต่ละหน้าหลังเริ่มค้นหา Template
               </div>
             ) : (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">No preview yet.</div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-500">ยังไม่มีภาพตัวอย่าง</div>
             )}
           </div>
         </section>
 
         <section className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Detection Result</h3>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ผลการค้นหา Template</h3>
             {!result ? (
-              <p className="mt-3 rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">Run detection to see matching candidates.</p>
+              <p className="mt-3 rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">กดเริ่มค้นหาเพื่อดู Template ที่ใกล้เคียงที่สุด</p>
             ) : (
               <div className="mt-3 space-y-3 text-xs font-semibold text-slate-700">
                 <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase">
                   <span className={`rounded-full px-2.5 py-1 ${result.matched ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                    Matched {result.matched ? "YES" : "NO"}
+                    {result.matched ? "พบ Template" : "ไม่พบ Template ที่ผ่านเกณฑ์"}
                   </span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Threshold {result.threshold}</span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Pages {inputPageCount || result.pages.length || 1}</span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{sourceType === "pdf" ? "PDF converted to images" : "Image input"}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">เกณฑ์ {result.threshold}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{inputPageCount || result.pages.length || 1} หน้า</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{sourceType === "pdf" ? "แปลง PDF เป็นภาพแล้ว" : "ไฟล์ภาพ"}</span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{result.version}</span>
                 </div>
                 {sourceType === "pdf" && (
                   <p className="rounded-xl bg-sky-50 p-3 font-bold text-sky-700">
-                    Converted {convertedPageCount || pages.length} PDF page{(convertedPageCount || pages.length) === 1 ? "" : "s"} into PNG previews for detection.
+                    แปลง PDF จำนวน {convertedPageCount || pages.length} หน้าเป็นภาพสำหรับใช้ค้นหา Template แล้ว
                   </p>
                 )}
 
                 {bestCandidate ? (
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-indigo-900">
-                    <div className="text-[10px] font-black uppercase tracking-wider text-indigo-700">Best Candidate</div>
+                    <div className="text-[10px] font-black uppercase tracking-wider text-indigo-700">Template ที่เหมาะสมที่สุด</div>
                     <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                      <p>Template: {bestCandidate.templateName || "N/A"}</p>
+                      <p>ชื่อ Template: {bestCandidate.templateName || "N/A"}</p>
                       <p>Template ID: {bestCandidate.templateId || "N/A"}</p>
-                      <p>Final Score: {formatScore(bestCandidate.finalScore ?? bestCandidate.score)}</p>
-                      <p>Retrieval Score: {formatScore(bestCandidate.retrievalScore)}</p>
-                      <p>Verification Score: {formatScore(bestCandidate.verificationScore)}</p>
-                      <p>Text Anchor Score: {formatScore(bestCandidate.textAnchorScore)}</p>
-                      <p>Image Anchor Score: {formatScore(bestCandidate.imageAnchorScore)}</p>
-                      <p>Matched Pages: {bestCandidate.matchedPages ?? "N/A"}</p>
-                      <p>Decision: {bestCandidate.decisionReason || "N/A"}</p>
-                      <p>Status: {bestCandidate.templateStatus || "N/A"}</p>
+                      <p>คะแนนรวม: {formatScore(bestCandidate.finalScore ?? bestCandidate.score)}</p>
+                      <p>คะแนนภาพรวม: {formatScore(bestCandidate.retrievalScore)}</p>
+                      <p>คะแนน Anchor: {formatScore(bestCandidate.verificationScore)}</p>
+                      <p>คะแนน Text Anchor: {formatScore(bestCandidate.textAnchorScore)}</p>
+                      <p>คะแนน Image Anchor: {formatScore(bestCandidate.imageAnchorScore)}</p>
+                      <p>หน้าที่ตรงกัน: {bestCandidate.matchedPages ?? "N/A"}</p>
+                      <p>เหตุผลการตัดสินใจ: {bestCandidate.decisionReason || "N/A"}</p>
+                      <p>สถานะ: {bestCandidate.templateStatus || "N/A"}</p>
                       <p>Vector ID: {bestCandidate.vectorId || "N/A"}</p>
-                      <p>Pages: {bestCandidate.pageCount ?? "N/A"}</p>
-                      <p>Fields: {bestCandidate.fieldCount ?? "N/A"}</p>
+                      <p>จำนวนหน้า: {bestCandidate.pageCount ?? "N/A"}</p>
+                      <p>จำนวน Field: {bestCandidate.fieldCount ?? "N/A"}</p>
                       <p>Model: {bestCandidate.modelName || "N/A"}</p>
                       <p>Vector Store: {bestCandidate.vectorStoreEngine || "N/A"}</p>
-                      <p>Threshold: {formatScore(bestCandidate.finalConfidenceThreshold)}</p>
-                      <p>Alignment Status: {alignmentLabel(bestCandidate)}</p>
-                      <p>Alignment Score: {formatScore(bestCandidate.alignmentScore)}</p>
+                      <p>เกณฑ์คะแนนรวม: {formatScore(bestCandidate.finalConfidenceThreshold)}</p>
+                      <p>สถานะ Alignment: {alignmentLabel(bestCandidate)}</p>
+                      <p>คะแนน Alignment: {formatScore(bestCandidate.alignmentScore)}</p>
                     </div>
                   </div>
                 ) : result.message ? (
                   <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">{result.message}</p>
                 ) : (
-                  <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">No template matched the threshold.</p>
+                  <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">ไม่มี Template ที่ผ่านเกณฑ์คะแนน</p>
                 )}
 
                 {!result.matched && result.candidates.length > 0 && (
-                  <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">No template matched the threshold.</p>
+                  <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">ไม่มี Template ที่ผ่านเกณฑ์คะแนน</p>
                 )}
                 {result.candidates.length === 0 && (
                   <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">
-                    No embedded active templates found. Please validate and run embedding for at least one template first.
+                    ยังไม่มี Template ที่ Active และมี Embedding กรุณาตรวจสอบและเผยแพร่ Template อย่างน้อย 1 รายการก่อน
                   </p>
                 )}
               </div>

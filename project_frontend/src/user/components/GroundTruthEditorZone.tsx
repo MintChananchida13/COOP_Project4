@@ -228,15 +228,15 @@ export default function GroundTruthEditorZone({
         <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
           <div className="flex items-center gap-2.5 bg-white pr-4 z-10">
             <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
-            <p className="text-xs font-semibold text-slate-400">Pre-processing</p>
+            <p className="text-xs font-semibold text-slate-400">เตรียมภาพ</p>
           </div>
           <div className="flex items-center gap-2.5 bg-white px-4 z-10">
             <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
-            <p className="text-xs font-semibold text-slate-400">ROI Studio</p>
+            <p className="text-xs font-semibold text-slate-400">กำหนด ROI</p>
           </div>
           <div className="flex items-center gap-2.5 bg-white pl-4 z-10">
             <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center ring-4 ring-indigo-100">3</div>
-            <p className="text-xs font-bold text-slate-800">Ground Truth Editor</p>
+            <p className="text-xs font-bold text-slate-800">ตรวจและแก้ไขผล OCR</p>
           </div>
         </div>
       </div>
@@ -248,7 +248,7 @@ export default function GroundTruthEditorZone({
         <div className="xl:col-span-5 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-hidden flex flex-col min-h-[620px] xl:min-h-0 xl:h-full relative shadow-md">
           {/* Header controls for left canvas */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200">
-            <span className="text-xs font-black text-slate-600 uppercase tracking-wider">Document Preview</span>
+            <span className="text-xs font-black text-slate-600 uppercase tracking-wider">ภาพเอกสาร</span>
             <button
               type="button"
               onClick={() => setShowLabels(prev => !prev)}
@@ -257,10 +257,10 @@ export default function GroundTruthEditorZone({
                   ? 'bg-amber-50 text-amber-600 border-amber-250 shadow-sm' 
                   : 'bg-slate-50 text-slate-500 hover:bg-slate-100 border-slate-200'
               }`}
-              title={showLabels ? "Hide field labels" : "Show field labels"}
+              title={showLabels ? "ซ่อนชื่อ Field" : "แสดงชื่อ Field"}
             >
               {showLabels ? <Eye size={12} /> : <EyeOff size={12} />}
-              <span>{showLabels ? "Hide Labels" : "Show Labels"}</span>
+              <span>{showLabels ? "ซ่อนชื่อ" : "แสดงชื่อ"}</span>
             </button>
           </div>
 
@@ -352,7 +352,7 @@ export default function GroundTruthEditorZone({
             <div className="flex items-center justify-between px-1">
               <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Documents ({imageList.length} files)</span>
               <span className="text-[10px] font-mono bg-white text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded font-bold">
-                Page {currentImageIndex + 1} / {imageList.length}
+                หน้า {currentImageIndex + 1} / {imageList.length}
               </span>
             </div>
             
@@ -411,16 +411,16 @@ export default function GroundTruthEditorZone({
               onClick={onBackToStudio}
               className="py-1.5 px-3 hover:bg-slate-200/70 text-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
             >
-              <ArrowLeft size={14} /> Back to ROI Studio
+              <ArrowLeft size={14} /> กลับไปหน้า ROI
             </button>
             <h3 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <CheckCircle size={15} className="text-indigo-600" /> Review and edit OCR results
+              <CheckCircle size={15} className="text-indigo-600" /> ตรวจสอบและแก้ไขผล OCR
             </h3>
             </div>
 
             <div className="flex items-center justify-between gap-3">
               <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                Page Results
+                ผลลัพธ์ของหน้านี้
               </span>
               <div className="flex items-center gap-1.5">
                 <button
@@ -466,9 +466,9 @@ export default function GroundTruthEditorZone({
             <table className="min-w-full text-xs text-left text-slate-600 table-fixed border-collapse">
               <thead className="bg-slate-50 font-sans text-slate-500 font-semibold border-b border-slate-100 sticky top-0 z-10">
                 <tr>
-                  <th className="px-4 py-3 w-[22%]">Field Channel</th>
-                  <th className="px-4 py-3 w-[39%]">OCR Text</th>
-                  <th className="px-4 py-3 w-[39%]">Editable Text</th>
+                  <th className="px-4 py-3 w-[22%]">ชื่อข้อมูล</th>
+                  <th className="px-4 py-3 w-[39%]">ข้อความจาก OCR</th>
+                  <th className="px-4 py-3 w-[39%]">ข้อความที่แก้ไขได้</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -495,14 +495,14 @@ export default function GroundTruthEditorZone({
                               onFocus={() => setActiveFieldId(res.id)}
                               onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
                               className="w-full bg-transparent font-bold text-slate-700 focus:outline-none py-1 text-xs truncate"
-                              placeholder="Field name..."
+                              placeholder="ชื่อข้อมูล..."
                             />
                             <Edit3 size={12} className="text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
                           </div>
                           {matchedRoi && (
                             <div className="flex items-center gap-1.5 px-1 text-[9px] font-bold text-slate-400 uppercase select-none">
                               {renderTypeIcon(matchedRoi.type, 10)}
-                              <span>Type: {matchedRoi.type || 'text'}</span>
+                              <span>ประเภท: {matchedRoi.type || 'text'}</span>
                             </div>
                           )}
                         </div>
@@ -514,7 +514,7 @@ export default function GroundTruthEditorZone({
                           {matchedRoi?.type === 'image' ? (
                             <div className="flex flex-col gap-1 bg-white border border-slate-200 p-1.5 rounded-xl w-fit shadow-xs">
                               <CroppedRoiPreview previewUrl={previewUrl} roi={matchedRoi} />
-                              <span className="text-[9px] font-bold text-slate-400">ROI crop preview</span>
+                              <span className="text-[9px] font-bold text-slate-400">ภาพตัวอย่างจาก ROI</span>
                             </div>
                           ) : (
                             <div
@@ -522,11 +522,11 @@ export default function GroundTruthEditorZone({
                               style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
                               translate="no"
                             >
-                              {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(No text)</span>}
+                              {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(ไม่พบข้อความ)</span>}
                             </div>
                           )}
                           <span className={`w-fit px-1.5 py-0.5 rounded text-[10px] font-mono font-bold mt-1 ${res.confidence >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                            Confidence: {(res.confidence * 100).toFixed(1)}%
+                            ความมั่นใจ: {(res.confidence * 100).toFixed(1)}%
                           </span>
                         </div>
                       </td>
@@ -536,7 +536,7 @@ export default function GroundTruthEditorZone({
                         <div className="flex flex-col gap-1.5 h-full justify-between">
                           {matchedRoi?.type === 'image' ? (
                             <div className="w-full bg-slate-50/50 border border-dashed border-slate-200 rounded-xl px-3 py-3 text-slate-400 font-bold text-center text-xs">
-                              Image reference (No text)
+                              Field รูปภาพ ไม่มีข้อความ OCR
                             </div>
                           ) : (
                             <textarea 
@@ -560,7 +560,7 @@ export default function GroundTruthEditorZone({
                               onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))} 
                               className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner normal-case" 
                               style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
-                              placeholder="Edit OCR text..."
+                              placeholder="แก้ไขข้อความ OCR..."
                               rows={1}
                             />
                           )}
@@ -577,8 +577,8 @@ export default function GroundTruthEditorZone({
                 {currentPageOcrResults.length === 0 && (
                   <tr>
                     <td colSpan={3} className="text-center py-20 text-slate-400 font-medium bg-slate-50/50">
-                      No OCR results on this page <br />
-                      <span className="text-[11px] font-normal text-slate-400">Go back to ROI Studio and run OCR first.</span>
+                      ยังไม่มีผล OCR ในหน้านี้ <br />
+                      <span className="text-[11px] font-normal text-slate-400">กลับไปหน้า ROI แล้วเริ่มอ่านข้อมูลก่อน</span>
                     </td>
                   </tr>
                 )}
@@ -592,7 +592,7 @@ export default function GroundTruthEditorZone({
               onClick={onApproveAndSave} 
               className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2"
             >
-              <Save size={15} /> Save
+              <Save size={15} /> บันทึกผลลัพธ์
             </button>
           </div>
         </div>

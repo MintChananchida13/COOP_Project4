@@ -24,9 +24,9 @@ interface MatchedTemplateWorkspaceZoneProps extends WorkspaceCustomEditorProps {
 }
 
 const typeLabel = (roi: ROI) => {
-  if (roi.type === "table" || roi.extractionMethod === "ocr_table") return "Table";
-  if (roi.type === "image" || roi.extractionMethod === "extract_image") return "Image";
-  return "Text";
+  if (roi.type === "table" || roi.extractionMethod === "ocr_table") return "ตาราง";
+  if (roi.type === "image" || roi.extractionMethod === "extract_image") return "รูปภาพ";
+  return "ข้อความ";
 };
 
 const typeIcon = (roi: ROI) => {
@@ -94,7 +94,7 @@ export default function MatchedTemplateWorkspaceZone({
                 onClick={onSwitchToCustom}
                 className="ui-button-text rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
               >
-                Custom OCR
+                ไปหน้า OCR แบบกำหนดเอง
               </button>
             </div>
 
@@ -104,23 +104,23 @@ export default function MatchedTemplateWorkspaceZone({
                   <CheckCircle2 size={18} />
                 </div>
                 <div className="min-w-0">
-                  <h3 className="ui-label text-emerald-800">Template Matched</h3>
+                  <h3 className="ui-label text-emerald-800">พบ Template ที่ตรงกัน</h3>
                   <p className="ui-card-title mt-1 truncate text-emerald-950">{matchedTemplate.name}</p>
                   <p className="ui-caption ui-tabular mt-1 text-emerald-700">
                     {matchedTemplate.confidence !== undefined && matchedTemplate.confidence !== null
-                      ? `Confidence ${(matchedTemplate.confidence * 100).toFixed(1)}%`
-                      : "Confidence N/A"}
+                      ? `ความมั่นใจ ${(matchedTemplate.confidence * 100).toFixed(1)}%`
+                      : "ยังไม่มีค่าความมั่นใจ"}
                     {matchedTemplate.decisionReason ? ` · ${matchedTemplate.decisionReason}` : ""}
                   </p>
                   {matchedTemplate.projectionStatus && (
                     <div className="mt-3 rounded-xl border border-emerald-100 bg-white/75 px-3 py-2">
                       <p className="ui-caption font-semibold text-emerald-800">
                         {matchedTemplate.projectionStatus === "success" || matchedTemplate.projectionStatus === "partial"
-                          ? "ROI adjusted automatically"
-                          : "ROI fallback used"}
+                          ? "ระบบปรับตำแหน่ง ROI ให้อัตโนมัติ"
+                          : "ใช้ตำแหน่ง ROI เดิมของ Template"}
                       </p>
                       <p className="ui-caption ui-tabular mt-0.5 text-emerald-700">
-                        Projection {matchedTemplate.projectionStatus}
+                        สถานะการปรับตำแหน่ง {matchedTemplate.projectionStatus}
                         {matchedTemplate.projectionConfidence !== undefined && matchedTemplate.projectionConfidence !== null
                           ? ` · confidence ${(matchedTemplate.projectionConfidence * 100).toFixed(1)}%`
                           : ""}
@@ -134,14 +134,14 @@ export default function MatchedTemplateWorkspaceZone({
                             title="Adaptive ROI refined text fields using OCR word boxes inside the projected search region."
                             className="ui-caption ui-tabular rounded-full bg-emerald-100 px-2 py-1 font-bold text-emerald-700"
                           >
-                            Adaptive ROI Ready {matchedTemplate.adaptiveRefinedCount ?? 0}
+                            ROI ปรับละเอียดแล้ว {matchedTemplate.adaptiveRefinedCount ?? 0}
                           </span>
                           {(matchedTemplate.adaptiveFallbackCount ?? 0) > 0 && (
                             <span
                               title="Some fields used projected ROI because OCR word boxes were not reliable enough."
                               className="ui-caption ui-tabular rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-700"
                             >
-                              Adaptive ROI Fallback {matchedTemplate.adaptiveFallbackCount ?? 0}
+                              ใช้ ROI สำรอง {matchedTemplate.adaptiveFallbackCount ?? 0}
                             </span>
                           )}
                         </div>
@@ -155,7 +155,7 @@ export default function MatchedTemplateWorkspaceZone({
             <section className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="ui-card-title text-slate-800">เลือก Field สำหรับ OCR</h3>
+                  <h3 className="ui-card-title text-slate-800">เลือกข้อมูลที่ต้องการอ่าน</h3>
                   <p className="ui-body mt-1 text-slate-500">
                     เลือกรายการข้อมูลที่ต้องการอ่านจาก Template นี้ สามารถปรับตำแหน่งและขนาดกรอบได้ แต่ไม่สามารถเปลี่ยนชื่อหรือประเภท Field
                   </p>
@@ -171,14 +171,14 @@ export default function MatchedTemplateWorkspaceZone({
                   onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: true }))}
                   className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
-                  Select All
+                  เลือกทั้งหมด
                 </button>
                 <button
                   type="button"
                   onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: false }))}
                   className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
-                  Clear
+                  ยกเลิกทั้งหมด
                 </button>
               </div>
 
@@ -187,7 +187,7 @@ export default function MatchedTemplateWorkspaceZone({
                   type="search"
                   value={fieldQuery}
                   onChange={(event) => setFieldQuery(event.target.value)}
-                  placeholder="ค้นหา Field..."
+                  placeholder="ค้นหาชื่อข้อมูล..."
                   className="ui-label w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none"
                   aria-label="Search template fields"
                 />
@@ -237,7 +237,7 @@ export default function MatchedTemplateWorkspaceZone({
 
             {selectedRoi && (
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <h3 className="ui-label text-slate-700">Selected Field</h3>
+                <h3 className="ui-label text-slate-700">ข้อมูลที่เลือก</h3>
                 <p className="ui-card-title mt-2 text-slate-900">{selectedRoi.fieldName}</p>
                 <p className="ui-caption mt-1 text-slate-500">
                   {typeLabel(selectedRoi)} · Page {(selectedRoi.pageIndex ?? 0) + 1}
@@ -252,7 +252,7 @@ export default function MatchedTemplateWorkspaceZone({
               className="ui-button-text ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500"
             >
               <Cpu size={14} className={props.isLoading ? "animate-spin" : ""} />
-              {props.isLoading ? "กำลัง OCR..." : `OCR Selected Fields (${enabledCount})`}
+              {props.isLoading ? "กำลังอ่านข้อมูล..." : `อ่านข้อมูลที่เลือก (${enabledCount})`}
             </button>
             {enabledCount === 0 && <InlineState tone="warning" message="เลือก Field อย่างน้อย 1 รายการก่อนเริ่ม OCR" />}
           </>

@@ -133,14 +133,14 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     });
 
     if (!createResponse.ok) {
-      throw new Error(`Template request create failed with ${createResponse.status}`);
+      throw new Error(`สร้างคำขอ Template ไม่สำเร็จ (${createResponse.status})`);
     }
 
     const createJson = await createResponse.json();
     const createdRequest = createJson?.data as TemplateRequestCreateResponse | undefined;
     const requestId = createdRequest?.id;
     if (!requestId) {
-      throw new Error("Template request response did not include an id");
+      throw new Error("Backend ไม่ได้ส่งรหัสคำขอกลับมา");
     }
 
     if (requestMode === "image_with_roi") {
@@ -180,7 +180,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     });
 
     if (!submitResponse.ok) {
-      throw new Error(`Template request submit failed with ${submitResponse.status}`);
+      throw new Error(`ส่งคำขอ Template ไม่สำเร็จ (${submitResponse.status})`);
     }
 
     return requestId;
@@ -196,11 +196,11 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
       const requestId = await submitWithBackend(requestedFields);
       setSubmittedRequestId(requestId);
       setStatus("submitted");
-      setStatusMessage(`Template request submitted: ${requestId}`);
+      setStatusMessage(`ส่งคำขอเรียบร้อยแล้ว: ${requestId}`);
     } catch (error) {
       console.error("Template request submission failed.", error);
       setStatus("error");
-      setStatusMessage(error instanceof Error ? error.message : "Template request submission failed.");
+      setStatusMessage(error instanceof Error ? error.message : "ส่งคำขอ Template ไม่สำเร็จ");
     }
   };
 
@@ -229,9 +229,9 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
         <div className="flex h-full flex-col">
           <div className="border-b border-slate-200 px-5 py-4 flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Template Request</h2>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">ส่งคำขอสร้าง Template</h2>
               <p className="text-xs font-semibold text-slate-500">
-                Send this OCR session to admin review.
+                ส่งภาพเอกสารและ ROI ให้ผู้ดูแลตรวจสอบและสร้าง Template กลาง
               </p>
             </div>
             <button
@@ -240,18 +240,18 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
               disabled={status === "submitting"}
               className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-black text-slate-500 hover:bg-slate-50"
             >
-              Close
+              ปิด
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500">
-              {imagesList.length} page{imagesList.length === 1 ? "" : "s"}
-              {requestMode === "image_with_roi" && `, ${enabledRois.length} requested ROI`}
+              {imagesList.length} หน้า
+              {requestMode === "image_with_roi" && `, ROI ที่ส่ง ${enabledRois.length} รายการ`}
             </div>
 
             <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Request Mode</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">รูปแบบการส่งคำขอ</span>
               <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
                 <button
                   type="button"
@@ -260,7 +260,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                     requestMode === "image_only" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
                   }`}
                 >
-                  Image Only
+                  ส่งภาพเท่านั้น
                 </button>
                 <button
                   type="button"
@@ -269,54 +269,54 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                     requestMode === "image_with_roi" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
                   }`}
                 >
-                  Image + ROI
+                  ส่งภาพพร้อม ROI
                 </button>
               </div>
             </div>
 
             <label className="block space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Request Title</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">ชื่อคำขอ</span>
               <input
                 type="text"
                 value={requestTitle}
                 onChange={(event) => setRequestTitle(event.target.value)}
-                placeholder="e.g. New invoice template"
+                placeholder="เช่น Template ใบกำกับภาษีรูปแบบใหม่"
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
               />
             </label>
 
             <label className="block space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Document Type</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">ประเภทเอกสาร</span>
               <input
                 type="text"
                 value={documentType}
                 onChange={(event) => setDocumentType(event.target.value)}
-                placeholder="Optional"
+                placeholder="ไม่บังคับ"
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
               />
             </label>
 
             <label className="block space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">User Note</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">หมายเหตุถึงผู้ดูแล</span>
               <textarea
                 value={userNote}
                 onChange={(event) => setUserNote(event.target.value)}
                 rows={4}
-                placeholder="Optional note for admin review"
+                placeholder="ระบุรายละเอียดเพิ่มเติมให้ผู้ดูแลตรวจสอบ (ไม่บังคับ)"
                 className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
               />
             </label>
 
             {requestMode === "image_with_roi" && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Requested fields by page</div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">ROI ที่ส่งตามหน้าเอกสาร</div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {Object.keys(fieldsByPage).length === 0 ? (
-                    <span className="text-xs font-semibold text-slate-500">No ROI has been drawn yet.</span>
+                    <span className="text-xs font-semibold text-slate-500">ยังไม่มี ROI สำหรับส่งให้ผู้ดูแล</span>
                   ) : (
                     Object.entries(fieldsByPage).map(([pageNumber, count]) => (
                       <span key={pageNumber} className="rounded-lg bg-white border border-slate-200 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        Page {pageNumber}: {count} ROI
+                        หน้า {pageNumber}: {count} ROI
                       </span>
                     ))
                   )}
@@ -327,7 +327,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
             <div className={`text-xs font-bold ${
               status === "error" ? "text-red-600" : status === "submitted" || status === "mock_submitted" ? "text-emerald-600" : "text-slate-500"
             }`}>
-              {statusMessage || "Request status: not submitted"}
+              {statusMessage || "สถานะคำขอ: ยังไม่ได้ส่ง"}
             </div>
           </div>
 
@@ -338,7 +338,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
               onClick={handleSubmit}
               className="ui-stable-action w-full px-5 py-3 rounded-xl bg-indigo-600 text-white text-xs font-black uppercase tracking-wider shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
             >
-              {status === "submitting" ? "Submitting..." : "Submit"}
+              {status === "submitting" ? "กำลังส่ง..." : "ส่งคำขอ"}
             </button>
           </div>
         </div>

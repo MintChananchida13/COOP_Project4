@@ -980,7 +980,7 @@ export default function WorkspaceCustomEditor({
                           onMouseDown={(e) => e.stopPropagation()}
                         >
                           <div className="flex flex-col gap-1">
-                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-left">Field Name</label>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-left">ชื่อ Field</label>
                             <input
                               type="text"
                               value={roi.fieldName || ""}
@@ -991,7 +991,7 @@ export default function WorkspaceCustomEditor({
                           </div>
                           
                           <div className="flex flex-col gap-1">
-                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-left">ROI Type</label>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-left">ประเภท ROI</label>
                             <div className="grid grid-cols-3 gap-1">
                               <button
                                 type="button"
@@ -1002,7 +1002,7 @@ export default function WorkspaceCustomEditor({
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
                                 }`}
                               >
-                                <FileText size={10} /> Text
+                                <FileText size={10} /> ข้อความ
                               </button>
                               <button
                                 type="button"
@@ -1013,7 +1013,7 @@ export default function WorkspaceCustomEditor({
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
                                 }`}
                               >
-                                <Table size={10} /> Table
+                                <Table size={10} /> ตาราง
                               </button>
                               <button
                                 type="button"
@@ -1024,7 +1024,7 @@ export default function WorkspaceCustomEditor({
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
                                 }`}
                               >
-                                <ImageIcon size={10} /> Image
+                                <ImageIcon size={10} /> รูปภาพ
                               </button>
                             </div>
                           </div>
@@ -1039,7 +1039,7 @@ export default function WorkspaceCustomEditor({
                               }}
                               className="px-2.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-650 rounded text-[9px] font-bold transition-colors border border-slate-200"
                             >
-                              Done
+                              ตกลง
                             </button>
                           </div>
                         </div>
@@ -1069,7 +1069,7 @@ export default function WorkspaceCustomEditor({
 
               {!hideOcrActions && (
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Auto ROI</h3>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ตีกรอบ ROI อัตโนมัติ</h3>
                   <button
                     type="button"
                     disabled={isLoading || isAutoDetectingRoi || !previewUrl}
@@ -1077,14 +1077,14 @@ export default function WorkspaceCustomEditor({
                     className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     {isAutoDetectingRoi ? <Loader2 size={13} className="animate-spin" /> : <ScanSearch size={13} />}
-                    {isAutoDetectingRoi ? "Detecting ROI..." : "ตีกรอบ ROI อัตโนมัติ"}
+                    {isAutoDetectingRoi ? "กำลังตรวจหา ROI..." : "ตีกรอบ ROI อัตโนมัติ"}
                   </button>
                   <p className="text-[10px] font-semibold leading-relaxed text-slate-500">
-                    สแกนหน้าปัจจุบันแล้วสร้าง ROI ตามกรอบที่ OCR อ่านได้ จากนั้นเลือก field เพื่อแก้ชื่อหรือ Type ต่อได้
+                    สแกนหน้าปัจจุบันและสร้าง ROI จากบริเวณที่ OCR อ่านได้ โดยจะลบ ROI เดิมของหน้านี้ก่อนสร้างชุดใหม่
                   </p>
                   {autoDetectMessage && (
                     <p className={`rounded-lg px-2.5 py-2 text-[10px] font-bold ${
-                      autoDetectMessage.startsWith("Created") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                      autoDetectMessage.startsWith("Replaced") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
                     }`}>
                       {autoDetectMessage}
                     </p>
@@ -1093,7 +1093,7 @@ export default function WorkspaceCustomEditor({
               )}
 
               <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
-                <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ฟิลด์ที่เลือก ({currentPageRois.length})</h3>
+                <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase">ROI ของหน้านี้ ({currentPageRois.length})</h3>
                 <div className="space-y-1.5 max-h-[440px] overflow-y-auto pr-1">
                   {currentPageRois.map((roi, idx) => (
                     <div 
@@ -1128,9 +1128,9 @@ export default function WorkspaceCustomEditor({
                           onClick={(e) => e.stopPropagation()}
                           className="text-[9.5px] font-bold bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shrink-0 select-none"
                         >
-                          <option value="text">Text</option>
-                          <option value="table">Table</option>
-                          <option value="image">Image</option>
+                          <option value="text">ข้อความ</option>
+                          <option value="table">ตาราง</option>
+                          <option value="image">รูปภาพ</option>
                         </select>
                       </div>
                       <button 
@@ -1211,7 +1211,7 @@ export default function WorkspaceCustomEditor({
                 className="ui-stable-action-lg w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
               >
                 <Cpu size={14} className={isLoading ? "animate-spin text-blue-300" : "text-white"} />
-                {isLoading ? "OCR Selected ROI..." : "OCR Selected ROI"}
+                {isLoading ? "กำลังอ่าน ROI ที่เลือก..." : "อ่าน ROI ที่เลือก"}
               </button>
             </div>
           </div>
@@ -1224,7 +1224,7 @@ export default function WorkspaceCustomEditor({
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600">
               <Loader2 size={28} className="animate-spin" />
             </div>
-            <h3 className="mt-4 text-sm font-black uppercase tracking-wide text-slate-800">Processing OCR</h3>
+            <h3 className="mt-4 text-sm font-black uppercase tracking-wide text-slate-800">กำลังอ่านข้อมูล</h3>
             <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">
               ระบบกำลังอ่านข้อมูลจาก ROI ที่เลือก กรุณารอสักครู่
             </p>
