@@ -34,6 +34,35 @@ interface PageConfig {
   croppedLocalUrl: string | null;
 }
 
+interface TemplateDetectionNotice {
+  title: string;
+  message: string;
+  detail?: string;
+}
+
+const NoTemplateDetectionCard = ({ notice }: { notice: TemplateDetectionNotice }) => (
+  <section className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+    <div className="flex items-start gap-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-amber-600 shadow-sm ring-1 ring-amber-100">
+        <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        </svg>
+      </div>
+      <div className="min-w-0">
+        <h3 className="ui-label text-amber-800">ไม่พบ Template ที่ตรงกัน</h3>
+        <p className="ui-card-title mt-1 text-amber-950">{notice.title}</p>
+        <p className="ui-caption mt-1 break-words text-amber-700">{notice.message}</p>
+        {notice.detail && (
+          <div className="mt-3 rounded-xl border border-amber-100 bg-white/75 px-3 py-2">
+            <p className="ui-caption break-words font-semibold text-amber-800">{notice.detail}</p>
+            <p className="ui-caption mt-0.5 text-amber-700">ระบบเปิด Custom OCR ให้ใช้งานต่อ สามารถตีกรอบ ROI เองหรือใช้ Auto ROI ได้</p>
+          </div>
+        )}
+      </div>
+    </div>
+  </section>
+);
+
 const UploadZone = dynamic(() => import("../user/components/UploadZone"), {
   ssr: false,
   loading: () => (
@@ -233,6 +262,7 @@ export default function Home() {
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
   const [classificationStatus, setClassificationStatus] = useState<string>("");
+  const [templateDetectionNotice, setTemplateDetectionNotice] = useState<TemplateDetectionNotice | null>(null);
   const [isTemplateDecisionOpen, setIsTemplateDecisionOpen] = useState<boolean>(false);
   const [templateDecisionStatus, setTemplateDecisionStatus] = useState<string>("");
   const [exportJson, setExportJson] = useState<string>("");
@@ -255,6 +285,7 @@ export default function Home() {
     setSelectedId(null);
     setOcrResults([]);
     setClassificationStatus("");
+    setTemplateDetectionNotice(null);
     setIsTemplateDecisionOpen(false);
     setTemplateDecisionStatus("");
     setMatchedTemplate(null);
@@ -289,9 +320,11 @@ export default function Home() {
     setSelectedId(null);
     setOcrResults([]);
     setClassificationStatus("");
+    setTemplateDetectionNotice(null);
     setIsTemplateDecisionOpen(false);
     setTemplateDecisionStatus("");
     setMatchedTemplate(null);
+    setTemplateDetectionNotice(null);
     setCurrentStep("upload");
   };
 
@@ -312,6 +345,11 @@ export default function Home() {
       const firstImage = finalProcessedImages[0];
       if (!firstImage) {
         setClassificationStatus("ไม่พบภาพสำหรับแยกประเภทเอกสาร ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+        setTemplateDetectionNotice({
+          title: "ไม่พบภาพสำหรับแยกประเภทเอกสาร",
+          message: "ระบบไม่สามารถเริ่มค้นหา Template ได้เพราะไม่มีภาพที่ยืนยันขอบเขตแล้ว",
+          detail: "โปรดกลับไปตรวจสอบภาพ หรือใช้งาน Custom OCR ต่อ",
+        });
         return;
       }
 
@@ -322,10 +360,16 @@ export default function Home() {
 
       if (!detection.matched || !templateId) {
         setClassificationStatus("ไม่พบ Template ที่มั่นใจพอ ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+        setTemplateDetectionNotice({
+          title: "ไม่พบ Template ที่มั่นใจพอ",
+          message: detection.message || "คะแนนการจับคู่ยังไม่ผ่านเกณฑ์ที่กำหนด",
+          detail: "ไม่โหลด ROI จาก Template ใด ๆ",
+        });
         return;
       }
 
       setTemplateDecisionStatus("พบ Template แล้ว กำลังโหลดโครงสร้าง ROI");
+      setTemplateDetectionNotice(null);
       const bundle = await fetchTemplateBundle(templateId);
       setTemplateDecisionStatus("กำลังจัดภาพให้ตรงกับ Template และเตรียมกรอบ OCR");
       const templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
@@ -353,6 +397,11 @@ export default function Home() {
     } catch (error) {
       console.warn("Document classification after boundary confirmation failed.", error);
       setClassificationStatus("ตรวจจับ Template ไม่สำเร็จ ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+      setTemplateDetectionNotice({
+        title: "ตรวจจับ Template ไม่สำเร็จ",
+        message: error instanceof Error ? error.message : "ระบบค้นหา Template ไม่สำเร็จ",
+        detail: "ระบบเปิด Custom OCR ให้ใช้งานต่อ",
+      });
     } finally {
       setIsTemplateDecisionOpen(false);
       setTemplateDecisionStatus("");
@@ -766,7 +815,7 @@ export default function Home() {
 
         {currentStep === "studio" && (
           <>
-            {classificationStatus && <InlineState tone={matchedTemplate ? "success" : "info"} message={classificationStatus} />}
+            {classificationStatus && !templateDetectionNotice && <InlineState tone={matchedTemplate ? "success" : "info"} message={classificationStatus} />}
 
             {matchedTemplate ? (
               <MatchedTemplateWorkspaceZone
@@ -790,6 +839,7 @@ export default function Home() {
                 imagesList={imagesList}
                 onSwitchToCustom={() => {
                   setMatchedTemplate(null);
+                  setTemplateDetectionNotice(null);
                   setClassificationStatus("เปิด Custom OCR ต่อจาก ROI ของ Template ที่ตรวจพบ สามารถเพิ่มหรือแก้ไขกรอบได้ตามต้องการ");
                 }}
                 onIndexChange={(nextIdx) => {
@@ -814,6 +864,7 @@ export default function Home() {
                 onRunOCR={handleRunOCR}
                 onRunFullPageOCR={handleRunFullPageOCR}
                 ocrProgress={ocrProgress}
+                rightPanelTopContent={templateDetectionNotice ? <NoTemplateDetectionCard notice={templateDetectionNotice} /> : null}
                 currentIndex={currentIndex}
                 imagesList={imagesList}
                 onIndexChange={(nextIdx) => {

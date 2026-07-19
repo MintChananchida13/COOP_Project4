@@ -86,6 +86,7 @@ export interface WorkspaceCustomEditorProps {
   imageFrameClassName?: string;
   layoutVariant?: "default" | "user";
   rightPanelClassName?: string;
+  rightPanelTopContent?: React.ReactNode;
   rightPanelRenderer?: (api: {
     currentPageRois: (ROI & { pageIndex?: number })[];
     selectedId: number | null;
@@ -136,6 +137,7 @@ export default function WorkspaceCustomEditor({
   imageFrameClassName = "w-[750px]",
   layoutVariant = "default",
   rightPanelClassName,
+  rightPanelTopContent,
   rightPanelRenderer,
   toolbarExtra,
   canvasActionRenderer,
@@ -823,10 +825,10 @@ export default function WorkspaceCustomEditor({
 
 
       {/* Main canvas row */}
-      <div className={`relative grid ${workspaceHeightClassName} ${isUserLayout ? (hideRightPanel ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-12") : (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]")} gap-5 items-stretch`}>
+      <div className={`relative grid min-h-0 ${workspaceHeightClassName} ${isUserLayout ? (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px] xl:grid-cols-[64px_minmax(0,1fr)_minmax(320px,360px)]") : (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]")} gap-5 items-stretch overflow-hidden`}>
         
         {/* Left toolbar */}
-                <div className={isUserLayout ? "absolute left-3 top-3 bottom-3 z-40 flex w-14 flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white/95 py-4 shadow-lg shadow-slate-900/10 select-none overflow-y-auto backdrop-blur" : "flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto"}>
+                <div className="flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto">
           <button 
             type="button"
             onClick={() => { setActiveTool('pan'); setSelectedId(null); setActiveDrawPoints([]); }}
@@ -954,7 +956,7 @@ export default function WorkspaceCustomEditor({
         </div>
 
         {/* Center document canvas */}
-        <div className={`relative min-w-0 h-full ${isUserLayout ? "flex flex-col" : ""} ${isUserLayout && !hideRightPanel ? "xl:col-span-8" : ""}`}>
+        <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
           {canvasActionRenderer && (
             <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex w-fit max-w-[calc(100%-2rem)] justify-end">
               <div className="pointer-events-auto">
@@ -964,7 +966,7 @@ export default function WorkspaceCustomEditor({
           )}
           <div 
             ref={viewportRef} 
-            className={`min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner ${isUserLayout ? "min-h-0 flex-1" : "h-full"} relative`}
+            className={`min-h-0 min-w-0 flex-1 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner relative`}
           >
             <div 
               ref={containerRef}
@@ -1176,12 +1178,13 @@ export default function WorkspaceCustomEditor({
         </div>
 
         {/* Right properties panel */}
-        {!hideRightPanel && <div className={rightPanelClassName || (isUserLayout ? "min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col xl:col-span-4" : "min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4")}>
+        {!hideRightPanel && <div className={rightPanelClassName || (isUserLayout ? "min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col" : "min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4")}>
           {rightPanelRenderer ? (
             rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI, triggerOCRProcessing })
           ) : (
             <>
               <div className={isUserLayout ? "min-h-0 flex-1 space-y-4 overflow-y-auto p-4" : "contents"}>
+              {rightPanelTopContent}
               <button
                 type="button"
                 onClick={onBackToAdjust}

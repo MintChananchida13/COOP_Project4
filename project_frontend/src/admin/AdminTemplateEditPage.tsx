@@ -19,11 +19,9 @@ import {
   updateTemplateFieldApi,
   updateTemplatePageApi,
 } from "./adminApi";
-import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage, TemplateStatus } from "../types/ocr";
+import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage } from "../types/ocr";
 
 type LoadStatus = "loading" | "loaded" | "fallback" | "error";
-
-const editableTemplateStatuses: TemplateStatus[] = ["draft","validated","active", "nonactive"];
 
 interface AutoDetectedTemplateField {
   roi: RoiRatio;
@@ -110,6 +108,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
   const safeCurrentPage = Math.min(currentPage, Math.max(selectedTemplatePages.length - 1, 0));
   const currentTemplatePage = selectedTemplatePages[safeCurrentPage];
+  const extractionFieldCount = selectedTemplateFields.filter((field) => !field.useForVerification).length;
+  const verificationAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification).length;
 
   const setSaved = (message: string) => setSaveStatus(message);
   const setLocalOnly = (message: string) => setSaveStatus(`${message} Backend unavailable; kept local edit.`);
@@ -498,10 +498,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               Define page-aware ROI fields from the submitted template images.
             </p>
           </div>
-
-          <Link href={`/admin/templates/${templateId}/test`} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700">
-            Test Mode
-          </Link>
         </div>
 
         {loadStatus === "fallback" && (
@@ -511,7 +507,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
         )}
         {saveStatus && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{saveStatus}</p>}
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <label className="space-y-1">
             <span className="text-[10px] font-black uppercase text-slate-400">Template name</span>
             <input
@@ -522,66 +518,20 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Status</span>
-            <select
-              value={selectedTemplate.status}
-              onChange={(event) => persistTemplatePatch({ status: event.target.value as TemplateStatus })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            >
-              {editableTemplateStatuses.map((status) => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Document type</span>
-            <input
-              value={selectedTemplate.documentType || ""}
-              onChange={(event) => setSelectedTemplate({ ...selectedTemplate, documentType: event.target.value })}
-              onBlur={() => persistTemplatePatch({ documentType: selectedTemplate.documentType })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Category</span>
-            <input
-              value={selectedTemplate.category || ""}
-              onChange={(event) => setSelectedTemplate({ ...selectedTemplate, category: event.target.value })}
-              onBlur={() => persistTemplatePatch({ category: selectedTemplate.category })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Similarity threshold</span>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              value={selectedTemplate.similarityThreshold}
-              onChange={(event) => setSelectedTemplate({ ...selectedTemplate, similarityThreshold: Number(event.target.value) })}
-              onBlur={() => persistTemplatePatch({ similarityThreshold: selectedTemplate.similarityThreshold })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Final confidence threshold</span>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              value={selectedTemplate.finalConfidenceThreshold}
-              onChange={(event) => setSelectedTemplate({ ...selectedTemplate, finalConfidenceThreshold: Number(event.target.value) })}
-              onBlur={() => persistTemplatePatch({ finalConfidenceThreshold: selectedTemplate.finalConfidenceThreshold })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            />
-          </label>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-full bg-slate-100 px-3 py-2 text-[11px] font-black text-slate-600">
+              Status: {selectedTemplate.status}
+            </span>
+            <span className="rounded-full bg-sky-50 px-3 py-2 text-[11px] font-black text-sky-700">
+              Pages: {selectedTemplatePages.length}
+            </span>
+            <span className="rounded-full bg-indigo-50 px-3 py-2 text-[11px] font-black text-indigo-700">
+              Fields: {extractionFieldCount}
+            </span>
+            <span className="rounded-full bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-700">
+              Anchors: {verificationAnchorCount}
+            </span>
+          </div>
         </div>
       </div>
 

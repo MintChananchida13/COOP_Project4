@@ -69,7 +69,7 @@ export default function MatchedTemplateWorkspaceZone({
               : "bg-white border-emerald-200 text-emerald-700 font-bold"
         }`
       }
-      rightPanelClassName="min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col xl:col-span-4"
+      rightPanelClassName="min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col"
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
         const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
         const selectedRoi = currentPageRois.find((roi) => roi.id === selectedId);
