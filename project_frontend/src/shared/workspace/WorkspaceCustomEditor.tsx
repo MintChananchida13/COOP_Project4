@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2, Loader2, ScanSearch } from 'lucide-react';
@@ -15,17 +15,38 @@ const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
 const roiTypePatch = (type: 'text' | 'table' | 'image'): Partial<ROI> => ({
   type,
   dataType: type,
-  extractionMethod: type === 'table' ? 'ocr_table' : type === 'image' ? 'extract_image' : 'ocr_text',
+  extractionMethod: type === 'image' ? 'extract_image' : 'paddle_thai_ocr',
 });
 
-interface OcrDetectedLine {
-  fieldName?: string;
-  text?: string;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  bbox?: [number, number][];
+interface LayoutDetectedRegion {
+  field_name?: string;
+  type?: "text" | "table" | "image";
+  data_type?: "text" | "table" | "image";
+  extraction_method?: "paddle_thai_ocr" | "extract_image" | "ocr_text" | "ocr_table";
+  confidence?: number;
+  roi?: {
+    page_number?: number;
+    x_ratio?: number;
+    y_ratio?: number;
+    width_ratio?: number;
+    height_ratio?: number;
+  };
+}
+
+interface LayoutDetectedPage {
+  page_index: number;
+  page_number: number;
+  image_width: number;
+  image_height: number;
+  regions: LayoutDetectedRegion[];
+  message?: string | null;
+}
+
+interface LayoutAnalysisResponse {
+  success?: boolean;
+  pages?: LayoutDetectedPage[];
+  detail?: string;
+  error?: string;
 }
 
 export interface WorkspaceCustomEditorProps {
@@ -310,7 +331,7 @@ export default function WorkspaceCustomEditor({
         pageIndex: currentIndex,
         type: 'text' as const,
         dataType: 'text' as const,
-        extractionMethod: 'ocr_text' as const,
+        extractionMethod: 'paddle_thai_ocr' as const,
         points: activeDrawPoints
       };
       setRois(prev => [...prev, newBox]);
@@ -361,7 +382,7 @@ export default function WorkspaceCustomEditor({
             pageIndex: currentIndex,
             type: 'text' as const,
             dataType: 'text' as const,
-            extractionMethod: 'ocr_text' as const,
+            extractionMethod: 'paddle_thai_ocr' as const,
             points: updatedPoints
           };
           setRois(prev => [...prev, newBox]);
@@ -388,7 +409,7 @@ export default function WorkspaceCustomEditor({
               pageIndex: currentIndex,
               type: 'text' as const,
               dataType: 'text' as const,
-              extractionMethod: 'ocr_text' as const,
+              extractionMethod: 'paddle_thai_ocr' as const,
               points: finalPoints
             };
             setRois(prev => [...prev, newBox]);
@@ -576,47 +597,43 @@ export default function WorkspaceCustomEditor({
     onRunOCR(scaleX, scaleY);
   };
 
-  const ocrLineToWorkspaceRoi = (line: OcrDetectedLine, index: number): (ROI & { pageIndex?: number }) | null => {
-    if (!imageRef.current) return null;
+  const layoutRegionToWorkspaceRoi = (
+    region: LayoutDetectedRegion,
+    page: LayoutDetectedPage,
+    index: number,
+    fieldNumber: number
+  ): (ROI & { pageIndex?: number }) | null => {
+    const roi = region.roi;
+    if (!roi) return null;
 
-    let x = Number(line.x);
-    let y = Number(line.y);
-    let width = Number(line.width);
-    let height = Number(line.height);
+    const xRatio = Number(roi.x_ratio);
+    const yRatio = Number(roi.y_ratio);
+    const widthRatio = Number(roi.width_ratio);
+    const heightRatio = Number(roi.height_ratio);
+    if (![xRatio, yRatio, widthRatio, heightRatio].every(Number.isFinite)) return null;
 
-    if ((!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) && line.bbox?.length) {
-      const xs = line.bbox.map((point) => Number(point[0])).filter(Number.isFinite);
-      const ys = line.bbox.map((point) => Number(point[1])).filter(Number.isFinite);
-      if (xs.length && ys.length) {
-        x = Math.min(...xs);
-        y = Math.min(...ys);
-        width = Math.max(...xs) - x;
-        height = Math.max(...ys) - y;
-      }
-    }
+    const pageIndex = Number.isFinite(Number(page.page_index)) ? Number(page.page_index) : Math.max(0, Number(page.page_number || 1) - 1);
+    const displayWidth = 750;
+    const displayHeight = page.image_width > 0 ? (page.image_height / page.image_width) * displayWidth : 1000;
+    const type = region.type === "table" || region.type === "image" ? region.type : "text";
+    const extractionMethod = type === "image" ? "extract_image" : "paddle_thai_ocr";
 
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
-
-    const scaleX = imageRef.current.clientWidth / Math.max(imageRef.current.naturalWidth, 1);
-    const scaleY = imageRef.current.clientHeight / Math.max(imageRef.current.naturalHeight, 1);
-    const displayWidth = width * scaleX;
-    const displayHeight = height * scaleY;
-
-    if (displayWidth < 4 || displayHeight < 4) return null;
-
-    const fieldNumber = rois.length + index + 1;
+    const width = widthRatio * displayWidth;
+    const height = heightRatio * displayHeight;
+    if (width < 4 || height < 4) return null;
 
     return {
-      id: Date.now() + currentIndex * 100000 + index + Math.floor(Math.random() * 1000000),
+      id: Date.now() + pageIndex * 1000000 + index + Math.floor(Math.random() * 1000000),
       fieldName: `field_${fieldNumber}`,
-      x: x * scaleX,
-      y: y * scaleY,
-      width: displayWidth,
-      height: displayHeight,
-      pageIndex: currentIndex,
-      type: "text",
-      dataType: "text",
-      extractionMethod: "ocr_text",
+      x: xRatio * displayWidth,
+      y: yRatio * displayHeight,
+      width,
+      height,
+      pageIndex,
+      type,
+      dataType: type,
+      extractionMethod,
+      confidence: typeof region.confidence === "number" ? region.confidence : undefined,
       role: "data_extraction",
       enabled: true,
     };
@@ -629,55 +646,78 @@ export default function WorkspaceCustomEditor({
     setAutoDetectMessage("");
 
     try {
-      if (!imageRef.current?.complete) {
-        await new Promise<void>((resolve, reject) => {
-          const image = new Image();
-          image.onload = () => resolve();
-          image.onerror = () => reject(new Error("Cannot load current page image."));
-          image.src = previewUrl;
-        });
-      }
-
-      const response = await fetch("http://localhost:8000/api/ai/process", {
+      const pagesToAnalyze = imagesList.length > 0 ? imagesList : [previewUrl];
+      const response = await fetch("http://localhost:8000/api/layout/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image: previewUrl,
-          rois: [],
+          images: pagesToAnalyze.map((imageSrc, pageIndex) => ({
+            page_index: pageIndex,
+            image: imageSrc,
+          })),
         }),
       });
-      const result = await response.json();
-
-      if (!response.ok || !result?.success) {
-        throw new Error(result?.detail || result?.error || "Auto ROI detection failed.");
+      const responseText = await response.text();
+      let result: LayoutAnalysisResponse = {};
+      try {
+        result = responseText ? JSON.parse(responseText) as LayoutAnalysisResponse : {};
+      } catch {
+        result = { error: responseText || response.statusText };
       }
 
-      const detectedLines = (result.extracted_data || []) as OcrDetectedLine[];
-      const detectedRois = detectedLines
-        .map((line, index) => ocrLineToWorkspaceRoi(line, index))
-        .filter((roi): roi is ROI & { pageIndex?: number } => roi !== null);
+      if (!response.ok || !result?.success) {
+        if (response.status === 404) {
+          throw new Error("ไม่พบ endpoint /api/layout/analyze กรุณา restart backend และตรวจสอบ PaddleOCR Layout Analysis service");
+        }
+        throw new Error(result?.detail || result?.error || "วิเคราะห์ Layout เพื่อสร้าง ROI ไม่สำเร็จ");
+      }
+
+      let fieldNumber = 1;
+      const detectedRois = (result.pages || []).flatMap((page) =>
+        (page.regions || [])
+          .map((region, index) => {
+            const nextRoi = layoutRegionToWorkspaceRoi(region, page, index, fieldNumber);
+            if (nextRoi) fieldNumber += 1;
+            return nextRoi;
+          })
+          .filter((roi): roi is ROI & { pageIndex?: number } => roi !== null)
+      );
+      const processedPages = new Set((result.pages || []).map((page) => Number(page.page_index)));
+      const emptyPages = (result.pages || [])
+        .filter((page) => (page.regions || []).length === 0)
+        .map((page) => Number(page.page_index) + 1);
 
       if (detectedRois.length === 0) {
-        setAutoDetectMessage("OCR did not find usable regions on this page.");
+        setRois((prev) =>
+          prev.filter((roi) => {
+            const roiPage = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
+            return !processedPages.has(roiPage);
+          })
+        );
+        setSelectedId(null);
+        setAutoDetectMessage("PaddleOCR ไม่พบ Text, Table หรือ Image Region ที่สามารถสร้าง ROI ได้");
         return;
       }
 
-      const removedCount = currentPageRois.length;
+      const removedCount = rois.filter((roi) => {
+        const roiPage = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
+        return processedPages.has(roiPage);
+      }).length;
       setRois((prev) => {
         const otherPageRois = prev.filter((roi) => {
           const roiPage = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
-          return roiPage !== Number(currentIndex);
+          return !processedPages.has(roiPage);
         });
         return [...otherPageRois, ...detectedRois];
       });
       setSelectedId(detectedRois[0].id);
       setActiveTool("box");
       setAutoDetectMessage(
-        `Replaced ${removedCount} existing ROI field${removedCount === 1 ? "" : "s"} with ${detectedRois.length} detected ROI field${detectedRois.length === 1 ? "" : "s"} on this page.`
+        `สร้าง ROI อัตโนมัติ ${detectedRois.length} รายการจาก ${processedPages.size} หน้า และลบ ROI เดิม ${removedCount} รายการ${emptyPages.length ? ` (ไม่พบ Region ในหน้า ${emptyPages.join(", ")})` : ""}`
       );
     } catch (error) {
       console.error("Auto ROI detection failed.", error);
-      setAutoDetectMessage(error instanceof Error ? error.message : "Auto ROI detection failed.");
+      setAutoDetectMessage(error instanceof Error ? error.message : "วิเคราะห์ Layout เพื่อสร้าง ROI ไม่สำเร็จ");
     } finally {
       setIsAutoDetectingRoi(false);
     }
@@ -789,7 +829,7 @@ export default function WorkspaceCustomEditor({
             type="button"
             onClick={() => setShowLabels(prev => !prev)}
             className={`p-2.5 rounded-lg transition-all ${!showLabels ? 'bg-amber-100 text-amber-600 border border-amber-250 shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-            title={showLabels ? "ซ่อนชื่อฟิลด์บนเอกสาร" : "แสดงชื่อฟิลด์บนเอกสาร"}
+            title={showLabels ? "ซ่อนชื่อ Field บนกรอบ ROI" : "แสดงชื่อ Field บนกรอบ ROI"}
           >
             {showLabels ? <Eye size={20} /> : <EyeOff size={20} />}
           </button>
@@ -837,7 +877,7 @@ export default function WorkspaceCustomEditor({
               setSelectedId(null); 
             }}
             className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-            title="ล้างกล่องทั้งหมดในหน้านี้"
+            title="ลบ ROI ทั้งหมดในหน้านี้"
           >
             <Trash2 size={20} />
           </button>}
@@ -1039,7 +1079,7 @@ export default function WorkspaceCustomEditor({
                               }}
                               className="px-2.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-650 rounded text-[9px] font-bold transition-colors border border-slate-200"
                             >
-                              ตกลง
+                              ปิด
                             </button>
                           </div>
                         </div>
@@ -1084,7 +1124,7 @@ export default function WorkspaceCustomEditor({
                   </p>
                   {autoDetectMessage && (
                     <p className={`rounded-lg px-2.5 py-2 text-[10px] font-bold ${
-                      autoDetectMessage.startsWith("Replaced") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                      autoDetectMessage.startsWith("สร้าง ROI") ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
                     }`}>
                       {autoDetectMessage}
                     </p>
@@ -1137,7 +1177,7 @@ export default function WorkspaceCustomEditor({
                         type="button"
                         onClick={(e) => { e.stopPropagation(); deleteROI(roi.id); }} 
                         className="text-slate-400 hover:text-red-500 transition-colors p-1 ml-1 shrink-0"
-                        title="ลบกล่อง"
+                        title="ลบรายการ"
                       >
                         <X size={14} />
                       </button>
@@ -1154,7 +1194,7 @@ export default function WorkspaceCustomEditor({
       {!hideFooter && <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
         <div className="flex items-center gap-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-            เอกสารในคิว: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
+            หน้าปัจจุบัน: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
           </div>
           
           <div className="flex items-center gap-2.5">
@@ -1211,7 +1251,7 @@ export default function WorkspaceCustomEditor({
                 className="ui-stable-action-lg w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-400 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-900/10 active:scale-98"
               >
                 <Cpu size={14} className={isLoading ? "animate-spin text-blue-300" : "text-white"} />
-                {isLoading ? "กำลังอ่าน ROI ที่เลือก..." : "อ่าน ROI ที่เลือก"}
+                {isLoading ? "กำลังประมวลผล ROI..." : "ตรวจ ROI ที่เลือก"}
               </button>
             </div>
           </div>
@@ -1224,9 +1264,9 @@ export default function WorkspaceCustomEditor({
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600">
               <Loader2 size={28} className="animate-spin" />
             </div>
-            <h3 className="mt-4 text-sm font-black uppercase tracking-wide text-slate-800">กำลังอ่านข้อมูล</h3>
+            <h3 className="mt-4 text-sm font-black uppercase tracking-wide text-slate-800">กำลังประมวลผล</h3>
             <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">
-              ระบบกำลังอ่านข้อมูลจาก ROI ที่เลือก กรุณารอสักครู่
+              ระบบกำลังอ่านข้อความจาก ROI ที่เลือก กรุณารอสักครู่
             </p>
           </div>
         </div>

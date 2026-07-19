@@ -199,9 +199,9 @@ const templateFieldsToWorkspaceRois = async (
         type,
         dataType: field.dataType || type,
         extractionMethod:
-          field.extractionMethod === "ocr_table" || field.extractionMethod === "extract_image"
+          field.extractionMethod === "ocr_table" || field.extractionMethod === "paddle_thai_ocr" || field.extractionMethod === "extract_image"
             ? field.extractionMethod
-            : "ocr_text",
+            : "paddle_thai_ocr",
         role: "data_extraction",
         enabled: field.defaultSelected !== false,
       } satisfies ROI & { pageIndex?: number };
@@ -455,6 +455,8 @@ export default function Home() {
                     y: 0,
                     width: roi.width * scaleX,
                     height: roi.height * scaleY,
+                    type: roi.type || "text",
+                    extractionMethod: roi.extractionMethod || (roi.type === "image" ? "extract_image" : "paddle_thai_ocr"),
                   },
                 ],
               }),
@@ -473,7 +475,7 @@ export default function Home() {
                 confidence: resItem.confidence,
                 saved_path: resItem.saved_path || "",
                 pageIndex: pageIdx,
-                type: roi.type || "text",
+                type: (resItem.type as "text" | "table" | "image" | undefined) || roi.type || "text",
                 dataType: roi.dataType || "string",
                 role: roi.role || "data_extraction",
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
@@ -666,7 +668,7 @@ export default function Home() {
         page_number: (result.pageIndex ?? matchedRoi?.pageIndex ?? 0) + 1,
         type: result.type || matchedRoi?.type || "text",
         data_type: result.dataType || matchedRoi?.dataType || "string",
-        extraction_method: matchedRoi?.extractionMethod || "ocr_text",
+        extraction_method: matchedRoi?.extractionMethod || "paddle_thai_ocr",
         roi: matchedRoi
           ? {
               x: matchedRoi.x,

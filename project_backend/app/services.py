@@ -16,14 +16,12 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .alignment_service import AlignmentService
-from .embedding_service import (
-    EmbeddingContextError,
-    embedding_result_to_json,
-    generate_template_embedding,
-)
+from .embedding_service import EmbeddingContextError
 from .image_normalization import ImageNormalizationService
+from .layout_analysis_service import analyze_layout
+from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_to_json
+from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi
-from .vector_store_adapter import search_similar_templates
 from .vision_embedding_adapter import encode_images
 from .schemas import (
     CustomOcrRequest,
@@ -54,7 +52,9 @@ def _stub_id(prefix: str) -> str:
 
 
 def _normalize_extraction_method(value: Optional[str]) -> str:
-    if value in {"ocr_text", "ocr_table", "extract_image"}:
+    if value == "typhoon_ocr":
+        return "paddle_thai_ocr"
+    if value in {"ocr_text", "ocr_table", "paddle_thai_ocr", "extract_image"}:
         return value
     return "ocr_text"
 
@@ -84,6 +84,7 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_requested_field_metadata_columns(conn)
+    _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
     _ensure_embedding_jobs_table(conn)
     _ensure_verification_anchor_embeddings_table(conn)
@@ -132,6 +133,16 @@ def _ensure_template_field_verification_columns(conn: sqlite3.Connection) -> Non
     }
     if columns and "verification_weight" not in columns:
         conn.execute("ALTER TABLE template_fields ADD COLUMN verification_weight REAL DEFAULT 1.0")
+    conn.commit()
+
+
+def _ensure_template_page_layout_signature_column(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(template_pages)").fetchall()
+    }
+    if columns and "layout_signature_json" not in columns:
+        conn.execute("ALTER TABLE template_pages ADD COLUMN layout_signature_json TEXT")
     conn.commit()
 
 
@@ -236,6 +247,7 @@ def _template_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
 
 def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     item = _row_to_dict(row)
+    layout_signature_json = item.get("layout_signature_json") if "layout_signature_json" in item else None
     return {
         "id": item["id"],
         "template_id": item["template_id"],
@@ -244,6 +256,7 @@ def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "sample_image_url": item["sample_image_url"],
         "normalized_image_url": item["normalized_image_url"],
         "qdrant_point_id": item["qdrant_point_id"],
+        "layout_signature_json": layout_signature_json,
         "similarity_threshold": item["similarity_threshold"],
         "final_confidence_threshold": item["final_confidence_threshold"],
         "created_at": item["created_at"],
@@ -357,6 +370,75 @@ def _load_image_source(source: Optional[str]):
         return Image.open(path).convert("RGB")
     except Exception:
         return None
+
+
+def _image_to_bgr_array(image: Any):
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        rgb = np.array(image.convert("RGB"))
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dict[str, Any]]:
+    image = _load_image_source(source)
+    if image is None:
+        return None
+    opencv_img = _image_to_bgr_array(image)
+    if opencv_img is None:
+        return None
+    analysis = analyze_layout(opencv_img)
+    return build_layout_signature(analysis)
+
+
+def _refresh_template_layout_signatures(conn: sqlite3.Connection, template_id: str) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, page_number, normalized_image_url, sample_image_url
+        FROM template_pages
+        WHERE template_id = ?
+        ORDER BY page_number ASC
+        """,
+        (template_id,),
+    ).fetchall()
+    refreshed: List[Dict[str, Any]] = []
+    for row in rows:
+        source = row["normalized_image_url"] or row["sample_image_url"]
+        signature = _generate_layout_signature_for_source(source)
+        if signature is None:
+            refreshed.append(
+                {
+                    "template_page_id": row["id"],
+                    "page_number": row["page_number"],
+                    "status": "failed",
+                    "reason": "page_image_unavailable_or_invalid",
+                }
+            )
+            continue
+        signature_json = signature_to_json(signature)
+        conn.execute(
+            """
+            UPDATE template_pages
+            SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (signature_json, row["id"]),
+        )
+        refreshed.append(
+            {
+                "template_page_id": row["id"],
+                "page_number": row["page_number"],
+                "status": "generated",
+                "region_count": signature.get("region_count", 0),
+                "model": signature.get("model"),
+            }
+        )
+    return refreshed
 
 
 def _crop_anchor_roi(image_path_or_source: str, roi: Dict[str, Any], output_path: Path, padding: float = 0) -> Optional[str]:
@@ -591,7 +673,7 @@ class EmbeddingService:
                 )
                 VALUES (?, ?, 'queued', CURRENT_TIMESTAMP, ?)
                 """,
-                (job_id, template_id, '{"source":"admin_template_test","mode":"stub"}'),
+                (job_id, template_id, '{"source":"admin_template_test","mode":"layout_signature"}'),
             )
             conn.execute(
                 """
@@ -626,16 +708,35 @@ class EmbeddingService:
 
             template_id = job_row["template_id"]
             self._fetch_template_or_404(conn, template_id)
+            generated_pages = _refresh_template_layout_signatures(conn, template_id)
+            if not generated_pages or any(item.get("status") != "generated" for item in generated_pages):
+                failed_pages = [item for item in generated_pages if item.get("status") != "generated"]
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Layout signature generation failed: {failed_pages or 'no template pages'}",
+                )
+            metadata = {
+                "engine": "layout_signature",
+                "version": "layout-signature-v1",
+                "template_id": template_id,
+                "page_count": len(generated_pages),
+                "layout_signature_pages": generated_pages,
+                "global_vector_store": "disabled",
+                "qdrant_used_for_global_retrieval": False,
+                "image_anchor_embeddings": "dinov2_optional",
+                "completed_by": "complete-dev",
+            }
             conn.execute(
                 """
                 UPDATE embedding_jobs
                 SET status = 'completed',
                     completed_at = CURRENT_TIMESTAMP,
                     error_message = NULL,
-                    vector_id = ?
+                    vector_id = ?,
+                    metadata_json = ?
                 WHERE id = ?
                 """,
-                (f"vec_{template_id}", job_id),
+                (f"layout_{template_id}", json.dumps(metadata, ensure_ascii=False, sort_keys=True), job_id),
             )
             conn.execute(
                 """
@@ -673,7 +774,23 @@ class EmbeddingService:
         time.sleep(1)
 
         try:
-            result = generate_template_embedding(template_id)
+            with _connect() as conn:
+                generated_pages = _refresh_template_layout_signatures(conn, template_id)
+                if not generated_pages or any(item.get("status") != "generated" for item in generated_pages):
+                    failed_pages = [item for item in generated_pages if item.get("status") != "generated"]
+                    raise RuntimeError(f"Layout signature generation failed: {failed_pages or 'no template pages'}")
+                conn.commit()
+            metadata = {
+                "engine": "layout_signature",
+                "version": "layout-signature-v1",
+                "template_id": template_id,
+                "page_count": len(generated_pages),
+                "layout_signature_pages": generated_pages,
+                "global_vector_store": "disabled",
+                "qdrant_used_for_global_retrieval": False,
+                "image_anchor_embeddings": "dinov2_optional",
+            }
+            vector_id = f"layout_{template_id}"
         except (EmbeddingContextError, ValueError, RuntimeError) as error:
             error_message = str(error)
             with _connect() as conn:
@@ -709,7 +826,7 @@ class EmbeddingService:
                     metadata_json = ?
                 WHERE id = ?
                 """,
-                (result.vector_id, embedding_result_to_json(result), job_id),
+                (vector_id, json.dumps(metadata, ensure_ascii=False, sort_keys=True), job_id),
             )
             conn.execute(
                 """
@@ -754,11 +871,15 @@ class EmbeddingService:
             return self._job_with_template(conn, job_id)
 
     def generate_for_template(self, template_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            self._fetch_template_or_404(conn, template_id)
+            pages = _refresh_template_layout_signatures(conn, template_id)
+            conn.commit()
         return {
             "template_id": template_id,
-            "status": "embedding_generation_stubbed",
+            "status": "layout_signature_generated",
             "scope": "template",
-            "pages": [],
+            "pages": pages,
         }
 
     def generate_for_template_page(self, template_id: str, page_id: str) -> Dict[str, Any]:
@@ -873,7 +994,13 @@ class VerificationService:
             if expected in actual:
                 text_similarity_score = 1.0
             elif actual in expected:
-                text_similarity_score = max(base_similarity, 0.90)
+                length_ratio = len(actual_for_similarity) / max(len(expected_for_similarity), 1)
+                if length_ratio >= 0.75:
+                    text_similarity_score = max(base_similarity, 0.90)
+                elif length_ratio >= 0.50:
+                    text_similarity_score = max(base_similarity, 0.70)
+                else:
+                    text_similarity_score = base_similarity
             elif base_similarity >= 0.70:
                 text_similarity_score = max(base_similarity, 0.75)
             else:
@@ -1125,7 +1252,12 @@ class VerificationService:
         image_score = sum(field["score"] * max(0.0, float(field.get("weight") or 1.0)) for field in image_fields) / image_weight if image_fields else 1.0
         passed = required_passed
         ocr_unavailable = any(
-            field.get("error") and ("EasyOCR" in field["error"] or "OCR verification requires" in field["error"])
+            field.get("error")
+            and (
+                "OCR verification requires" in field["error"]
+                or "Paddle" in field["error"]
+                or "paddleocr" in field["error"].lower()
+            )
             for field in checked_fields
         )
         return {
@@ -1833,6 +1965,17 @@ class AdminTemplateService:
             return vector_id[4:]
         return None
 
+    def _layout_signature_for_page_paths(self, page_paths: Dict[int, str], page_number: int = 1) -> Dict[str, Any]:
+        image_path = page_paths.get(page_number) or next(iter(page_paths.values()), None)
+        signature = _generate_layout_signature_for_source(image_path)
+        if signature is None:
+            raise HTTPException(status_code=409, detail="Unable to generate layout signature for template matching")
+        return signature
+
+    def _layout_signature_for_template_pages(self, template: Dict[str, Any], page_number: int = 1) -> Dict[str, Any]:
+        page_paths = self._template_page_image_paths(template["id"], template.get("pages") or [])
+        return self._layout_signature_for_page_paths(page_paths, page_number)
+
     def _align_query_pages_for_candidate(
         self,
         candidate_template: Dict[str, Any],
@@ -1930,6 +2073,8 @@ class AdminTemplateService:
             "template_status": candidate_template.get("status"),
             "vector_id": f"temp_vec_{candidate_template['id']}" if is_current_draft else f"vec_{candidate_template['id']}",
             "global_score": round(float(global_score), 4),
+            "layout_score": round(float(global_score), 4),
+            "retrieval_engine": "layout_signature",
             "text_anchor_score": decision["text_anchor_score"],
             "image_anchor_score": decision["image_anchor_score"],
             "anchor_score": decision.get("anchor_score"),
@@ -2059,12 +2204,11 @@ class AdminTemplateService:
         query_page_paths = self._template_page_image_paths(template_id, pages)
         if not query_page_paths:
             raise HTTPException(status_code=409, detail="Unable to prepare template page images for verification simulation")
-        preview_paths = [query_page_paths[key] for key in sorted(query_page_paths)]
-        vision_result = encode_images(preview_paths)
+        query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
 
         active_candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
-        for result in search_similar_templates(vision_result.vector, limit=10):
+        for result in search_layout_candidates(query_signature, page_number=1, limit=10, include_template_id=template_id):
             candidate_template_id = self._template_id_from_vector_candidate(result)
             if not candidate_template_id or candidate_template_id in seen_template_ids:
                 continue
@@ -2124,14 +2268,14 @@ class AdminTemplateService:
             },
             "temporary_embedding": {
                 "status": "generated",
-                "engine": vision_result.engine,
-                "version": vision_result.version,
-                "model_name": vision_result.model_name,
-                "embedding_dimension": vision_result.dimension,
-                "input_count": vision_result.input_count,
+                "engine": "layout_signature",
+                "version": query_signature.get("version"),
+                "model_name": query_signature.get("model"),
+                "embedding_dimension": 0,
+                "input_count": len(query_page_paths),
                 "generated_at": _now(),
                 "persisted": False,
-                "note": "Temporary embedding was used only for this pre-publish simulation.",
+                "note": "Temporary layout signature was used only for this pre-publish simulation.",
             },
             "candidates": candidates,
             "verification_anchor_results": draft_candidate.get("verification_details", []),
@@ -2166,13 +2310,13 @@ class AdminTemplateService:
         query_paths = [query_page_paths[key] for key in sorted(query_page_paths)]
         draft_paths = [draft_page_paths[key] for key in sorted(draft_page_paths)]
 
-        query_embedding = encode_images(query_paths)
-        draft_embedding = encode_images(draft_paths)
-        draft_global_score = max(0.0, min(1.0, _cosine_similarity(query_embedding.vector, draft_embedding.vector)))
+        query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
+        draft_signature = self._layout_signature_for_page_paths(draft_page_paths, 1)
+        draft_global_score = compare_layout_signatures(query_signature, draft_signature)["score"]
 
         candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
-        for result in search_similar_templates(query_embedding.vector, limit=10):
+        for result in search_layout_candidates(query_signature, page_number=1, limit=10, include_template_id=template_id):
             candidate_template_id = self._template_id_from_vector_candidate(result)
             if not candidate_template_id or candidate_template_id in seen_template_ids:
                 continue
@@ -2187,14 +2331,14 @@ class AdminTemplateService:
                 is_current_draft=False,
             )
             candidate["source"] = "published"
-            candidate["source_label"] = "Published / Qdrant Embedding"
+            candidate["source_label"] = "Published / Layout Signature"
             candidates.append(candidate)
             if len(candidates) >= 4:
                 break
 
         draft_candidate = self._build_simulation_candidate(draft, draft_global_score, query_page_paths, is_current_draft=True)
         draft_candidate["source"] = "draft"
-        draft_candidate["source_label"] = "Draft / Temporary Embedding"
+        draft_candidate["source_label"] = "Draft / Temporary Layout Signature"
 
         candidates = sorted([draft_candidate, *candidates], key=lambda item: item["final_score"], reverse=True)[:5]
         for index, candidate in enumerate(candidates, start=1):
@@ -2242,9 +2386,10 @@ class AdminTemplateService:
             },
             "debug": {
                 "temporary_embedding_persisted": False,
-                "query_engine": query_embedding.engine,
-                "query_model_name": query_embedding.model_name,
-                "query_vector_dimension": query_embedding.dimension,
+                "query_engine": query_signature.get("engine"),
+                "query_model_name": query_signature.get("model"),
+                "query_vector_dimension": 0,
+                "retrieval_engine": "layout_signature",
                 "input_page_count": len(uploaded_page_paths),
                 "query_page_paths": [str(path) for path in uploaded_page_paths],
                 "normalized_query_page_paths": query_paths,
@@ -2477,10 +2622,10 @@ class AdminTemplateService:
                 """
                 INSERT INTO template_pages (
                     id, template_id, page_number, page_name, sample_image_url,
-                    normalized_image_url, similarity_threshold, final_confidence_threshold,
+                    normalized_image_url, layout_signature_json, similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     page_id,
@@ -2489,6 +2634,7 @@ class AdminTemplateService:
                     payload.page_name,
                     payload.sample_image_url,
                     payload.normalized_image_url,
+                    payload.layout_signature_json,
                     similarity_threshold,
                     final_confidence_threshold,
                 ),
@@ -2513,6 +2659,7 @@ class AdminTemplateService:
             "page_name": "page_name",
             "sample_image_url": "sample_image_url",
             "normalized_image_url": "normalized_image_url",
+            "layout_signature_json": "layout_signature_json",
             "similarity_threshold": "similarity_threshold",
             "final_confidence_threshold": "final_confidence_threshold",
         }

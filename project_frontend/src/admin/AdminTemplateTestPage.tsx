@@ -103,9 +103,8 @@ const isValidRoi = (roi?: TemplateField["roi"] | IgnoreRegion["roi"]) =>
   );
 
 const expectedMethodForDataType = (dataType?: string) => {
-  if (dataType === "table") return "ocr_table";
   if (dataType === "image") return "extract_image";
-  return "ocr_text";
+  return "paddle_thai_ocr";
 };
 
 const normalizeDataType = (dataType?: string) => (dataType === "string" ? "text" : dataType || "");
@@ -607,8 +606,8 @@ function ProgressBar({ value, tone = "indigo" }: { value: number; tone?: "indigo
 }
 
 const prepublishSimulationSteps = [
-  "Generate Global Embedding",
-  "Searching Templates",
+  "Generate Layout Signature",
+  "Searching Layout Candidates",
   "Top 5 Retrieved",
   "Running Image Anchors",
   "Running Text Anchors",
@@ -694,7 +693,7 @@ function DraftCandidateCard({
             <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "REVIEW")} />
           </div>
           <div className="mt-2 grid gap-2 text-[10px] font-bold text-slate-500 sm:grid-cols-3 xl:grid-cols-6">
-            <span>Global {formatPrepublishScore(candidate.globalScore)}</span>
+            <span>Layout {formatPrepublishScore(candidate.globalScore)}</span>
             <span>Image {formatPrepublishScore(candidate.imageAnchorScore)}</span>
             <span>Text {formatPrepublishScore(candidate.textAnchorScore)}</span>
             <span>Verify {formatPrepublishScore(candidate.verificationScore)}</span>
@@ -1006,7 +1005,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       setSimulation(result);
       setTemplate(result.template);
       setSimulationStep(prepublishSimulationSteps.length - 1);
-      setStatusMessage("Temporary embedding simulation completed. Review candidate ranking and readiness before publishing.");
+      setStatusMessage("Temporary layout signature simulation completed. Review candidate ranking and readiness before publishing.");
     } catch (error) {
       console.warn("Pre-publish simulation failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
@@ -1052,7 +1051,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       const result = await confirmTemplatePublish(templateId);
       setTemplate(result.template);
       setPublishConfirmed(true);
-      setStatusMessage("Real embedding generated, stored, and template published as Active.");
+      setStatusMessage("Layout signature generated, image anchors stored, and template published as Active.");
     } catch (error) {
       console.warn("Template publish failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
@@ -1096,7 +1095,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {[
             [1, "Review ROI & OCR"],
-            [2, "Embedding Simulation"],
+            [2, "Layout Simulation"],
             [3, "New Document Test"],
             [4, "Publish Review"],
           ].map(([step, label]) => (
@@ -1121,7 +1120,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <>
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <DraftSectionHeader title="1. Draft Template Summary" subtitle="This page validates the draft before any production embedding is saved." />
+          <DraftSectionHeader title="1. Draft Template Summary" subtitle="This page validates the draft before any production layout signature is saved." />
           <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700">
             {template.status}
           </span>
@@ -1134,15 +1133,15 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             <DraftOverviewMetric label="Extraction Fields" value={simulation?.draftSummary.extractionFieldCount ?? extractionFields.length} tone="indigo" />
             <DraftOverviewMetric label="Text Anchors" value={simulation?.draftSummary.textAnchorCount ?? textAnchors.length} tone="orange" />
             <DraftOverviewMetric label="Image Anchors" value={simulation?.draftSummary.imageAnchorCount ?? imageAnchors.length} tone="orange" />
-            <DraftOverviewMetric label="DINOv2 Model" value={simulation?.temporaryEmbedding.modelName || "Not simulated"} />
-            <DraftOverviewMetric label="Embedding Dimension" value={simulation?.temporaryEmbedding.embeddingDimension || "Not simulated"} />
+            <DraftOverviewMetric label="Layout Model" value={simulation?.temporaryEmbedding.modelName || "Not simulated"} />
+            <DraftOverviewMetric label="Signature Dimension" value={simulation?.temporaryEmbedding.embeddingDimension || "Not simulated"} />
           </div>
         </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <DraftSectionHeader title="2. ROI & OCR Preview" subtitle="Review extraction ROI and test OCR before creating a temporary embedding." />
+          <DraftSectionHeader title="2. ROI & OCR Preview" subtitle="Review extraction ROI and test OCR before creating a temporary layout signature." />
           <button
             type="button"
             onClick={runPreviewOcr}
@@ -1279,8 +1278,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
-            title="3. Temporary Embedding Simulation"
-            subtitle="Run this after reviewing ROI and OCR preview. The temporary embedding is used only for this pre-publish test."
+            title="3. Temporary Layout Signature Simulation"
+            subtitle="Run this after reviewing ROI and OCR preview. The temporary layout signature is used only for this pre-publish test."
           />
           <button
             type="button"
@@ -1295,7 +1294,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Simulation Pipeline</h4>
-              <p className="mt-1 text-[10px] font-semibold text-slate-500">Temporary only. Nothing is saved to Qdrant or production storage.</p>
+              <p className="mt-1 text-[10px] font-semibold text-slate-500">Temporary only. Nothing is saved to production layout storage.</p>
             </div>
             <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${
               simulationAction === "run"
@@ -1350,7 +1349,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
             title="Test with a New Document"
-            subtitle="Upload a different image or multi-page PDF to compare this draft temporary embedding against published templates."
+            subtitle="Upload a different image or multi-page PDF to compare this draft temporary layout signature against published templates."
           />
           <button
             type="button"
@@ -1386,7 +1385,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             )}
             {!simulation?.temporaryEmbedding && (
               <p className="mt-3 rounded-lg bg-amber-50 p-2.5 text-[11px] font-bold text-amber-700">
-                Run Temporary Embedding Simulation before testing a new document.
+                Run Temporary Layout Signature Simulation before testing a new document.
               </p>
             )}
           </div>
@@ -1426,7 +1425,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 <th className="px-3 py-2 text-left">Template Name</th>
                 <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-left">Final</th>
-                <th className="px-3 py-2 text-left">Retrieval</th>
+                <th className="px-3 py-2 text-left">Layout</th>
                 <th className="px-3 py-2 text-left">Verification</th>
                 <th className="px-3 py-2 text-left">Text Anchor</th>
                 <th className="px-3 py-2 text-left">Image Anchor</th>
@@ -1446,7 +1445,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <td className="px-3 py-2 font-black text-slate-900">#{candidate.rank}</td>
                     <td className="px-3 py-2 font-bold text-slate-800">{candidate.templateName || candidate.templateId}</td>
                     <td className="px-3 py-2 font-semibold text-slate-600">
-                      {candidate.isCurrentDraft ? "Draft / Temporary Embedding" : candidate.sourceLabel || "Published / Qdrant Embedding"}
+                      {candidate.isCurrentDraft ? "Draft / Temporary Layout Signature" : candidate.sourceLabel || "Published / Layout Signature"}
                     </td>
                     <td className="px-3 py-2 font-black text-slate-900">{formatPrepublishScore(candidate.finalScore)}</td>
                     <td className="px-3 py-2">{formatPrepublishScore(candidate.globalScore)}</td>
@@ -1593,8 +1592,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           {[
             ["Extraction Fields", extractionFields.length > 0 && (ocrResults.length === 0 || ocrResults.every((result) => Boolean(result.passed)))],
             ["Verification Anchors", verificationAnchors.length > 0],
-            ["Global Retrieval", topCandidates.length > 0],
-            ["Temporary Embedding", Boolean(simulation?.temporaryEmbedding && !simulation.temporaryEmbedding.persisted)],
+            ["Layout Retrieval", topCandidates.length > 0],
+            ["Temporary Layout Signature", Boolean(simulation?.temporaryEmbedding && !simulation.temporaryEmbedding.persisted)],
             ["New Document Test", detectionTestPassed],
             ["Template Separation", simulationPassed],
             ["Overall", overallReady],
@@ -1612,7 +1611,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 {overallReady ? "READY TO PUBLISH" : "NOT READY"}
               </h4>
               <p className="mt-2 text-xs font-semibold text-slate-500">
-                Confirm generates the real global embedding, permanent image-anchor embeddings, vector-store entry, and publishes only after every operation succeeds.
+                Confirm generates the real layout signature, permanent image-anchor embeddings, and publishes only after every operation succeeds.
               </p>
               {!simulationPassed && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">Run Simulation must pass before publishing.</p>}
               {simulationPassed && !detectionTest && (
@@ -1905,7 +1904,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
       const result = await runPrepublishSimulation(templateId);
       setSimulation(result);
       setTemplate(result.template);
-      setStatusMessage("Pre-publish simulation completed. Review the ranking before publishing.");
+      setStatusMessage("Pre-publish layout simulation completed. Review the ranking before publishing.");
     } catch (error) {
       console.warn("Pre-publish simulation failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
@@ -1924,7 +1923,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
       setLatestEmbeddingJob(result.job);
       setTemplate(result.template);
       setPublishConfirmed(true);
-      setStatusMessage("Real embedding generated and template published as Active.");
+      setStatusMessage("Layout signature generated and template published as Active.");
     } catch (error) {
       console.warn("Template publish failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
@@ -2388,16 +2387,16 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
           </p>
         </div>
         <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-xs font-semibold text-amber-800">
-          This step is disabled for Draft templates. Use the separate Detection Lab after publishing, when the template is Active and stored in the production vector store.
+          This step is disabled for Draft templates. Use the separate Detection Lab after publishing, when the template is Active and has a production layout signature.
         </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Temporary Embedding Simulation</h3>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Temporary Layout Signature Simulation</h3>
             <p className="mt-1 text-[11px] font-semibold text-slate-500">
-              Run this after ROI and OCR preview. The temporary embedding is used only for this pre-publish test.
+              Run this after ROI and OCR preview. The temporary layout signature is used only for this pre-publish test.
             </p>
             {simulation?.temporaryEmbedding ? (
               <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
@@ -2429,7 +2428,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
           <div>
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Publish Confirmation</h3>
             <p className="mt-2 text-xs font-semibold text-slate-500">
-              Publish is enabled only after the simulation passes. Confirmation creates the real embedding, stores it in the production vector store, and marks the template Active.
+              Publish is enabled only after the simulation passes. Confirmation creates the real layout signature, stores image anchor embeddings, and marks the template Active.
             </p>
             {!simulation?.separationAnalysis.simulationPassed && (
               <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
@@ -2445,7 +2444,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
               disabled={!canConfirmPrepublish}
               className="ui-stable-action-lg rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
-              {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Real Embedding"}
+              {simulationAction === "confirm" ? "Publishing..." : "Confirm and Generate Layout Signature"}
             </button>
             <button type="button" disabled className="rounded-xl bg-slate-300 px-4 py-2 text-xs font-black text-slate-500">
               Publish {template.status === "active" ? "Complete" : "Locked"}

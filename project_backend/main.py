@@ -2,12 +2,13 @@ import base64
 import io
 import os
 import sys
+import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import cv2
-import easyocr
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,8 @@ from PIL import Image
 from pydantic import BaseModel
 
 from app.routes import router as blueprint_router
+from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
+from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr
 
 # Force UTF-8 console output on Windows.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -31,11 +34,22 @@ class ROIModel(BaseModel):
     y: float
     width: float
     height: float
+    type: str | None = None
+    extractionMethod: str | None = None
 
 
 class DocumentPayload(BaseModel):
     image: str
     rois: List[ROIModel]
+
+
+class LayoutImagePayload(BaseModel):
+    page_index: int
+    image: str
+
+
+class LayoutAnalysisPayload(BaseModel):
+    images: List[LayoutImagePayload]
 
 
 app = FastAPI(title="OCR AI Engine")
@@ -58,9 +72,58 @@ app.mount(
 
 app.include_router(blueprint_router)
 
-print("Loading EasyOCR (TH/EN) engine...")
-ocr_engine = easyocr.Reader(["th", "en"], gpu=False)
-print("EasyOCR engine ready.")
+
+def _env_flag(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def warmup_paddle_models() -> Dict[str, Any]:
+    started = time.perf_counter()
+    sample = np.full((420, 720, 3), 255, dtype=np.uint8)
+    cv2.putText(sample, "Thai National ID Card", (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(sample, "Name 1234567890", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.rectangle(sample, (40, 210), (680, 350), (0, 0, 0), 2)
+    for x in (200, 360, 520):
+        cv2.line(sample, (x, 210), (x, 350), (0, 0, 0), 1)
+    for y in (255, 300):
+        cv2.line(sample, (40, y), (680, y), (0, 0, 0), 1)
+
+    layout = analyze_layout(sample)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+        temp_path = temp_file.name
+    try:
+        cv2.imwrite(temp_path, sample)
+        text_boxes = detect_text_boxes(temp_path)
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+    recognition = run_paddle_thai_ocr(sample[45:170, 30:500])
+    elapsed = round(time.perf_counter() - started, 2)
+    return {
+        "layout_regions": len(layout.get("regions") or []),
+        "text_boxes": len(text_boxes.get("regions") or []),
+        "ocr_model": recognition.get("model"),
+        "elapsed_seconds": elapsed,
+    }
+
+
+@app.on_event("startup")
+async def startup_warmup() -> None:
+    if not _env_flag("OCR_MODEL_WARMUP", "true"):
+        print("Paddle model warm-up skipped (OCR_MODEL_WARMUP=false).")
+        return
+    print("Warming up Paddle OCR/Layout models...")
+    try:
+        summary = warmup_paddle_models()
+        print(
+            "Paddle model warm-up complete "
+            f"in {summary['elapsed_seconds']}s "
+            f"(layout_regions={summary['layout_regions']}, text_boxes={summary['text_boxes']}, "
+            f"ocr_model={summary['ocr_model']})."
+        )
+    except Exception as error:
+        print(f"Paddle model warm-up failed: {error}")
+        if _env_flag("OCR_MODEL_WARMUP_STRICT", "false"):
+            raise
 
 
 def decode_base64_image(image_str: str) -> Tuple[Image.Image, np.ndarray]:
@@ -82,102 +145,24 @@ def crop_opencv_region(opencv_img: np.ndarray, x: int, y: int, w: int, h: int) -
     return opencv_img[y:y_end, x:x_end]
 
 
-def preprocess_ocr_variants(opencv_img: np.ndarray) -> List[Tuple[str, np.ndarray]]:
-    padded = cv2.copyMakeBorder(
-        opencv_img,
-        15,
-        15,
-        15,
-        15,
-        cv2.BORDER_CONSTANT,
-        value=[255, 255, 255],
-    )
-    variants: List[Tuple[str, np.ndarray]] = [("original_padded", padded)]
+def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, Any]:
+    field_type = (roi.type or "text").lower()
+    extraction_method = (roi.extractionMethod or "paddle_thai_ocr").lower()
+    if extraction_method == "typhoon_ocr":
+        extraction_method = "paddle_thai_ocr"
 
-    height, width = padded.shape[:2]
-    if max(height, width) < 900:
-        variants.append(("upscaled_2x", cv2.resize(padded, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)))
+    if extraction_method == "extract_image" or field_type == "image":
+        return {
+            "text": "",
+            "confidence": 1.0,
+            "segments": [],
+            "attempts": [],
+            "preprocessing": "image_crop_only",
+            "engine": "extract_image",
+            "model": None,
+        }
 
-    gray = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
-    variants.append(("grayscale", cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)))
-
-    sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    sharpened = cv2.filter2D(gray, -1, sharpen_kernel)
-    variants.append(("sharpened", cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)))
-
-    try:
-        thresholded = cv2.adaptiveThreshold(
-            gray,
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            31,
-            7,
-        )
-        variants.append(("adaptive_threshold", cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR)))
-    except cv2.error:
-        pass
-
-    return variants
-
-
-def _segments_from_easyocr(ocr_result: list) -> List[Dict[str, Any]]:
-    segments = []
-    for line in ocr_result:
-        bbox, text, conf = line
-        segments.append(
-            {
-                "text": str(text),
-                "confidence": float(conf),
-                "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
-            }
-        )
-    return segments
-
-
-def _summarize_ocr_segments(segments: List[Dict[str, Any]]) -> Tuple[str, float]:
-    if not segments:
-        return "", 0.0
-    texts = [str(segment["text"]) for segment in segments]
-    confs = [float(segment["confidence"]) for segment in segments]
-    confidence = sum(confs) / len(confs) if confs else 0.0
-    return " ".join(texts).strip(), confidence
-
-
-def ocr_crop(opencv_img: np.ndarray) -> Dict[str, Any]:
-    best_result: Dict[str, Any] = {
-        "text": "",
-        "confidence": 0.0,
-        "segments": [],
-        "preprocessing": "none",
-        "attempts": [],
-    }
-    try:
-        for variant_name, variant_image in preprocess_ocr_variants(opencv_img):
-            ocr_result = ocr_engine.readtext(variant_image)
-            segments = _segments_from_easyocr(ocr_result)
-            text, confidence = _summarize_ocr_segments(segments)
-            attempt = {
-                "preprocessing": variant_name,
-                "text": text,
-                "confidence": float(confidence),
-                "segment_count": len(segments),
-                "segments": segments,
-            }
-            best_result["attempts"].append(attempt)
-            if text and (confidence > float(best_result["confidence"]) or not best_result["text"]):
-                best_result.update(
-                    {
-                        "text": text,
-                        "confidence": float(confidence),
-                        "segments": segments,
-                        "preprocessing": variant_name,
-                    }
-                )
-        return best_result
-    except Exception as err:
-        print(f"OCR crop error: {err}")
-        return best_result
+    return run_paddle_thai_ocr(crop_img)
 
 
 @app.get("/")
@@ -196,19 +181,27 @@ async def process_document(payload: DocumentPayload):
         results = []
 
         if not payload.rois:
-            ocr_result = ocr_engine.readtext(opencv_img)
-            for idx, line in enumerate(ocr_result):
-                bbox, text, conf = line
-                xs = [pt[0] for pt in bbox]
-                ys = [pt[1] for pt in bbox]
-                x = max(0, int(min(xs)))
-                y = max(0, int(min(ys)))
-                w = max(1, int(max(xs) - x))
-                h = max(1, int(max(ys) - y))
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                temp_path = temp_file.name
+            try:
+                cv2.imwrite(temp_path, opencv_img)
+                text_detection = detect_text_boxes(temp_path)
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+            for idx, region in enumerate(text_detection.get("regions", [])):
+                bbox = region.get("bbox") or {}
+                x = max(0, int(float(bbox.get("x") or 0)))
+                y = max(0, int(float(bbox.get("y") or 0)))
+                w = max(1, int(float(bbox.get("width") or 1)))
+                h = max(1, int(float(bbox.get("height") or 1)))
                 w = min(w, w_img - x)
                 h = min(h, h_img - y)
 
                 crop_img = opencv_img[y : y + h, x : x + w]
+                ocr_result = run_paddle_thai_ocr(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": []}
+                text = str(ocr_result.get("text") or "")
+                conf = float(ocr_result.get("confidence") or 0.0)
                 filepath = ""
                 if crop_img.size > 0:
                     filename = f"line_{idx + 1}_{uuid.uuid4().hex[:6]}.png"
@@ -225,16 +218,17 @@ async def process_document(payload: DocumentPayload):
                         "y": float(y),
                         "width": float(w),
                         "height": float(h),
-                        "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
-                        "raw_segments": [
-                            {
-                                "text": str(text),
-                                "confidence": float(conf),
-                                "bbox": [[float(pt[0]), float(pt[1])] for pt in bbox],
-                            }
+                        "bbox": [
+                            [float(x), float(y)],
+                            [float(x + w), float(y)],
+                            [float(x + w), float(y + h)],
+                            [float(x), float(y + h)],
                         ],
+                        "raw_segments": ocr_result.get("segments", []),
                         "ocr_attempts": [],
-                        "ocr_preprocessing": "full_page",
+                        "ocr_preprocessing": ocr_result.get("preprocessing", "paddle_text_detection_crop"),
+                        "ocr_engine": ocr_result.get("engine", "paddle_thai_ocr"),
+                        "ocr_model": ocr_result.get("model"),
                     }
                 )
         else:
@@ -253,10 +247,10 @@ async def process_document(payload: DocumentPayload):
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 cv2.imwrite(filepath, crop_img)
 
-                ocr_result = ocr_crop(crop_img)
+                ocr_result = process_roi_with_engine(crop_img, roi)
                 extracted_text = str(ocr_result.get("text") or "")
                 confidence_score = float(ocr_result.get("confidence") or 0.0)
-                if not extracted_text:
+                if not extracted_text and (roi.type or "").lower() != "image":
                     extracted_text = "(no text found in ROI)"
                     confidence_score = 0.0
 
@@ -266,9 +260,13 @@ async def process_document(payload: DocumentPayload):
                         "text": extracted_text,
                         "confidence": confidence_score,
                         "saved_path": filepath,
+                        "type": roi.type,
+                        "extraction_method": roi.extractionMethod,
                         "raw_segments": ocr_result.get("segments", []),
                         "ocr_attempts": ocr_result.get("attempts", []),
                         "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
+                        "ocr_engine": ocr_result.get("engine", "unknown"),
+                        "ocr_model": ocr_result.get("model"),
                     }
                 )
 
@@ -276,8 +274,77 @@ async def process_document(payload: DocumentPayload):
             "success": True,
             "extracted_data": results,
         }
+    except PaddleThaiOcrUnavailableError as err:
+        print("Paddle Thai OCR processing error:")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=503, detail=str(err))
+    except LayoutAnalysisUnavailableError as err:
+        print("Paddle text detection error:")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=503, detail=str(err))
     except Exception as err:
         print("OCR processing error:")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(err))
+
+
+@app.post("/api/layout/analyze")
+async def analyze_document_layout(payload: LayoutAnalysisPayload):
+    if not payload.images:
+        raise HTTPException(status_code=400, detail="At least one page image is required.")
+
+    pages: List[Dict[str, Any]] = []
+    try:
+        for page in payload.images:
+            _, opencv_img = decode_base64_image(page.image)
+            analysis = analyze_layout(opencv_img)
+            regions = []
+            for index, region in enumerate(analysis["regions"], start=1):
+                region_type = region["type"]
+                extraction_method = "extract_image" if region_type == "image" else "paddle_thai_ocr"
+                regions.append(
+                    {
+                        "field_name": f"{region_type}_{index}",
+                        "type": region_type,
+                        "data_type": region_type,
+                        "extraction_method": extraction_method,
+                        "confidence": region.get("confidence", 0.0),
+                        "roi": {
+                            "page_number": int(page.page_index) + 1,
+                            **region["roi"],
+                        },
+                    }
+                )
+
+            pages.append(
+                {
+                    "page_index": page.page_index,
+                    "page_number": int(page.page_index) + 1,
+                    "image_width": analysis["image_width"],
+                    "image_height": analysis["image_height"],
+                    "engine": analysis["engine"],
+                    "model": analysis["model"],
+                    "regions": regions,
+                    "message": None if regions else "No layout regions found on this page.",
+                }
+            )
+
+        return {
+            "success": True,
+            "engine": "paddleocr",
+            "model": "PP-DocLayoutV3+PP-OCRv5",
+            "pages": pages,
+        }
+    except LayoutAnalysisUnavailableError as err:
+        raise HTTPException(status_code=503, detail=str(err))
+    except Exception as err:
+        print("Layout analysis error:")
         import traceback
 
         traceback.print_exc()

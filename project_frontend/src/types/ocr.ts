@@ -12,7 +12,7 @@ export interface ROI {
   pageIndex?: number;
   type?: 'text' | 'table' | 'image';
   dataType?: RoiDataType;
-  extractionMethod?: 'ocr_text' | 'ocr_table' | 'extract_image';
+  extractionMethod?: 'ocr_text' | 'ocr_table' | 'paddle_thai_ocr' | 'extract_image';
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
@@ -99,6 +99,7 @@ export interface TemplatePage {
   sampleImageUrl?: string;
   normalizedImageUrl?: string;
   qdrantPointId?: string;
+  layoutSignatureJson?: string;
   similarityThreshold: number;
   finalConfidenceThreshold: number;
 }

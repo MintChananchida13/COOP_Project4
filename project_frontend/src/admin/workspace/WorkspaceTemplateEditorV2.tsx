@@ -206,7 +206,7 @@ export default function WorkspaceTemplateEditorV2({
             defaultSelected: true,
             useForVerification: false,
             requiredForVerification: false,
-            extractionMethod: "ocr_text",
+            extractionMethod: "paddle_thai_ocr",
             roiPadding: 0,
           });
         }

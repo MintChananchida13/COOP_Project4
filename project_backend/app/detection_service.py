@@ -2,6 +2,8 @@ import io
 import os
 import sqlite3
 import base64
+import cv2
+import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -11,18 +13,21 @@ from fastapi import HTTPException
 from .alignment_service import AlignmentService
 from .anchor_projection_service import AnchorProjectionService
 from .image_normalization import ImageNormalizationService
+from .layout_analysis_service import analyze_layout
+from .layout_alignment_service import LayoutAlignmentService
+from .layout_signature_service import build_layout_signature
+from .layout_template_matcher import search_layout_candidates
 from .services import DecisionService, VerificationService
-from .vector_store_adapter import search_similar_templates
-from .vision_embedding_adapter import encode_images
 
 
 DETECTION_THRESHOLD = 0.75
-DETECTION_VERSION = "phase7.0"
+DETECTION_VERSION = "layout-signature-v1"
 PDF_RENDER_SCALE = 2.0
 verification_service = VerificationService()
 decision_service = DecisionService()
 normalization_service = ImageNormalizationService()
 alignment_service = AlignmentService()
+layout_alignment_service = LayoutAlignmentService()
 projection_service = AnchorProjectionService()
 
 
@@ -136,6 +141,18 @@ def _fetch_template_fields(template_id: str) -> List[Dict[str, Any]]:
 def _image_to_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _layout_signature_for_image_path(image_path: str) -> Dict[str, Any]:
+    Image = _load_pillow()
+    if Image is None:
+        raise HTTPException(status_code=500, detail="Layout signature generation requires Pillow")
+    try:
+        image = Image.open(image_path).convert("RGB")
+        opencv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Unable to read image for layout signature") from error
+    return build_layout_signature(analyze_layout(opencv_img))
 
 
 def _detection_debug_url(path_value: Optional[str]) -> Optional[str]:
@@ -286,23 +303,28 @@ def _alignment_reason(
     alignment_debug: Dict[str, Any],
 ) -> str:
     if alignment_status == "skipped":
-        return str(alignment_debug.get("reason") or "ORB skipped because normalized geometry matches template")
+        return str(alignment_debug.get("reason") or "alignment_skipped_geometry_already_matches_template")
     if alignment_status == "aligned":
-        return str(alignment_debug.get("reason") or "ORB alignment succeeded")
+        return str(alignment_debug.get("reason") or "alignment_succeeded_and_aligned_image_used")
     if alignment_status == "fallback":
-        return str(alignment_debug.get("reason") or alignment.get("error") or "normalized image used")
-    return str(alignment.get("error") or alignment_debug.get("reason") or "alignment process failed")
+        return str(alignment_debug.get("reason") or alignment.get("error") or "alignment_attempted_but_normalized_image_used")
+    return str(alignment.get("error") or alignment_debug.get("reason") or "alignment_failed_unexpectedly_normalized_image_used")
 
 
 def _template_canvas_projection(
     template_id: str,
     fields: List[Dict[str, Any]],
+    page_number: int,
     alignment_status: str,
     alignment_reason: str,
     extraction_image_path: str,
     extraction_image_preview_url: Optional[str],
 ) -> Dict[str, Any]:
-    extraction_fields = [field for field in fields if not field.get("use_for_verification")]
+    extraction_fields = [
+        field
+        for field in fields
+        if not field.get("use_for_verification") and int(field.get("page_number") or 1) == int(page_number)
+    ]
     projected_fields = []
     for field in extraction_fields:
         roi = field.get("roi") or {}
@@ -330,7 +352,7 @@ def _template_canvas_projection(
                 "adaptive_validation_result": {
                     "passed": True,
                     "errors": [],
-                    "warnings": ["adaptive_roi_not_required_template_canvas"],
+                    "warnings": ["adaptive_roi_pending"],
                 },
                 "adaptive_fallback_reason": None,
                 "projection_method": "template_canvas",
@@ -345,6 +367,12 @@ def _template_canvas_projection(
             }
         )
 
+    projected_fields, adaptive_debug = projection_service.refine_projected_fields(
+        projected_fields,
+        extraction_fields,
+        {int(page_number): extraction_image_path},
+    )
+
     return {
         "template_id": template_id,
         "status": "success",
@@ -357,14 +385,8 @@ def _template_canvas_projection(
         "fallback_reason": None,
         "matched_anchors": [],
         "adaptive_refinement": {
-            "enabled": False,
-            "reason": "template_canvas_alignment_used",
-            "text_fields_refined": 0,
-            "text_fields_fallback": 0,
-            "average_adaptive_confidence": 0.0,
-            "average_coverage": 0.0,
-            "average_ocr_confidence": 0.0,
-            "search_padding_ratio": 0.0,
+            **adaptive_debug,
+            "reason": adaptive_debug.get("reason") or "template_canvas_alignment_refined",
         },
         "projected_fields": projected_fields,
         "roi_coordinate_space": "template_canvas",
@@ -395,8 +417,25 @@ def _align_candidate_page(
     output_path = output_dir / f"{_safe_file_token(template_id)}_page_{page_number}_aligned.png"
 
     try:
+        layout_alignment = layout_alignment_service.align_to_template(
+            query_image_path,
+            template_image_source,
+            str(output_path),
+        )
+        layout_status = str(layout_alignment.get("alignment_status") or "")
+        layout_alignment["aligned_image_preview_url"] = _detection_debug_url(layout_alignment.get("aligned_image_path"))
+        layout_alignment["alignment_match_image_preview_url"] = _detection_debug_url(layout_alignment.get("alignment_match_image_path"))
+        layout_debug = layout_alignment.get("alignment_debug") or {}
+        layout_debug["layout_alignment_executed"] = layout_status != "skipped"
+        layout_debug["orb_executed"] = False
+        layout_debug["verification_source_used"] = "aligned" if layout_status == "aligned" else "normalized"
+        layout_alignment["alignment_debug"] = layout_debug
+        if layout_status in {"aligned", "skipped"}:
+            return layout_alignment
+
         precheck = alignment_service.alignment_precheck(query_image_path, template_image_source, normalization_info)
         if not precheck.get("should_run_orb"):
+            precheck["layout_alignment"] = layout_debug
             if precheck.get("reason") == "normalized_geometry_matches_template":
                 return _alignment_result("skipped", str(precheck["reason"]), precheck=precheck)
             return _alignment_result("fallback", str(precheck.get("reason") or "alignment_precheck_unavailable"), precheck=precheck)
@@ -410,6 +449,8 @@ def _align_candidate_page(
         alignment_debug = alignment.get("alignment_debug") or {}
         alignment_debug["orb_executed"] = True
         alignment_debug["precheck"] = precheck
+        alignment_debug["layout_alignment"] = layout_debug
+        alignment_debug["layout_alignment_status"] = layout_status
         if alignment_status == "fallback" and alignment_debug.get("reason") == "aligned":
             alignment_debug["reason"] = "alignment_output_unavailable"
         alignment["alignment_debug"] = alignment_debug
@@ -555,6 +596,14 @@ def _candidate_from_result(
         verification,
         final_confidence_threshold,
     )
+    layout_threshold = float((template or {}).get("similarity_threshold") or metadata.get("similarity_threshold") or DETECTION_THRESHOLD)
+    if retrieval_score < layout_threshold:
+        decision = {
+            **decision,
+            "final_passed": False,
+            "decision_reason": "layout_score_below_threshold",
+            "decision_path": "layout_score_below_threshold",
+        }
     extraction_image_path = str(alignment.get("aligned_image_path") or query_image_path) if verification_source_used == "aligned" else query_image_path
     extraction_image_preview_url = _detection_debug_url(extraction_image_path)
     roi_coordinate_space = "template_canvas" if alignment_status in {"aligned", "skipped"} else "projected"
@@ -581,6 +630,7 @@ def _candidate_from_result(
             projection = _template_canvas_projection(
                 template_id,
                 template_fields,
+                page_index,
                 alignment_status,
                 alignment_reason,
                 extraction_image_path,
@@ -621,14 +671,17 @@ def _candidate_from_result(
         "vector_id": vector_id,
         "score": decision["final_score"],
         "retrieval_score": decision["retrieval_score"],
+        "layout_score": decision["retrieval_score"],
+        "layout_debug": metadata.get("layout_debug") or result.get("layout_debug"),
         "average_score": decision["retrieval_score"],
         "matched_pages": 1 if decision["final_passed"] else 0,
         "template_name": template_name,
         "template_status": template_status,
         "page_count": page_count,
         "field_count": field_count,
-        "model_name": metadata.get("model_name"),
-        "vector_store_engine": metadata.get("vector_store_engine"),
+        "model_name": metadata.get("model_name") or metadata.get("layout_signature_version"),
+        "vector_store_engine": metadata.get("vector_store_engine") or "layout-signature",
+        "retrieval_engine": metadata.get("retrieval_engine") or "layout_signature",
 
         "alignment_status": alignment_status,
         "alignment": alignment,
@@ -668,6 +721,7 @@ def _candidate_from_result(
         "required_passed": decision.get("required_passed"),
         "required_failed_fields": decision.get("required_failed_fields", []),
         "final_confidence_threshold": decision["final_confidence_threshold"],
+        "layout_similarity_threshold": layout_threshold,
         "projection": projection,
         "projected_fields": projection.get("projected_fields", []),
         "metadata": metadata,
@@ -677,8 +731,8 @@ def _candidate_from_result(
 def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) -> Dict[str, Any]:
     page_index = int(page_info["page_index"])
     normalized_image_path = str(page_info["normalized_path"])
-    embedding = encode_images([normalized_image_path])
-    raw_results = search_similar_templates(embedding.vector, limit=5)
+    query_signature = _layout_signature_for_image_path(normalized_image_path)
+    raw_results = search_layout_candidates(query_signature, page_number=page_index, limit=5)
     candidates = [
         candidate
         for candidate in (
@@ -707,11 +761,12 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             "normalized_query_image_path": normalized_image_path,
             "original_image_preview_url": _detection_debug_url(str(page_info["original_path"])),
             "normalized_image_preview_url": _detection_debug_url(normalized_image_path),
-            "query_engine": embedding.engine,
-            "query_version": embedding.version,
-            "query_model_name": embedding.model_name,
-            "query_vector_dimension": embedding.dimension,
-            "query_input_count": embedding.input_count,
+            "query_engine": "layout_signature",
+            "query_version": query_signature.get("version"),
+            "query_model_name": query_signature.get("model"),
+            "query_vector_dimension": 0,
+            "query_input_count": 1,
+            "query_layout_signature": query_signature,
             "raw_candidate_count": len(raw_results),
             "active_candidate_count": len(candidates),
             "aligned_candidate_paths": [
@@ -761,6 +816,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "vector_id": best_page_cand["vector_id"],
             "score": decision["final_score"],
             "retrieval_score": decision["retrieval_score"],
+            "layout_score": decision["retrieval_score"],
+            "layout_debug": best_page_cand.get("layout_debug"),
             "average_score": avg_retrieval_score,
             "matched_pages": matched_pages_count,
             "template_name": best_page_cand["template_name"],
@@ -769,6 +826,7 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "field_count": best_page_cand["field_count"],
             "model_name": best_page_cand["model_name"],
             "vector_store_engine": best_page_cand["vector_store_engine"],
+            "retrieval_engine": best_page_cand.get("retrieval_engine"),
             "alignment_status": best_page_cand.get("alignment_status"),
             "alignment": best_page_cand.get("alignment"),
             "alignment_debug": best_page_cand.get("alignment_debug"),
@@ -804,6 +862,7 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "required_passed": decision.get("required_passed"),
             "required_failed_fields": decision.get("required_failed_fields", []),
             "final_confidence_threshold": decision["final_confidence_threshold"],
+            "layout_similarity_threshold": best_page_cand.get("layout_similarity_threshold"),
             "projection": best_page_cand.get("projection"),
             "projected_fields": best_page_cand.get("projected_fields", []),
             "metadata": best_page_cand.get("metadata", {}),
@@ -813,11 +872,7 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _detection_engine(pages: List[Dict[str, Any]]) -> str:
-    for page in pages:
-        engine = (page.get("debug") or {}).get("query_engine")
-        if engine:
-            return str(engine)
-    return os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower() or "stub"
+    return "layout_signature"
 
 
 def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
@@ -847,8 +902,9 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "pages": pages,
         "message": None if matched else "No candidate passed verification and final confidence." if candidates else "No active embedded templates available.",
         "debug": {
-            "vector_store_mode": os.getenv("VECTOR_STORE_MODE", "stub").strip().lower() or "stub",
-            "vision_embedding_mode": os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower() or "stub",
+            "vector_store_mode": "not_used_for_global_retrieval",
+            "vision_embedding_mode": "not_used_for_global_retrieval",
+            "retrieval_engine": "layout_signature",
             "source_type": source_type,
             "input_page_count": len(page_paths),
             "converted_page_count": len(page_paths) if source_type == "pdf" else 0,

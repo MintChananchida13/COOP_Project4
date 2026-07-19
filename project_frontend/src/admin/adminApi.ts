@@ -45,6 +45,7 @@ interface ApiTemplatePage {
   sample_image_url?: string | null;
   normalized_image_url?: string | null;
   qdrant_point_id?: string | null;
+  layout_signature_json?: string | null;
   similarity_threshold?: number | null;
   final_confidence_threshold?: number | null;
 }
@@ -138,6 +139,8 @@ export interface DetectionCandidate {
   vectorId?: string | null;
   score: number;
   retrievalScore?: number | null;
+  layoutScore?: number | null;
+  layoutDebug?: Record<string, unknown>;
   verificationScore?: number | null;
   textAnchorScore?: number | null;
   imageAnchorScore?: number | null;
@@ -158,6 +161,7 @@ export interface DetectionCandidate {
   fieldCount?: number | null;
   modelName?: string | null;
   vectorStoreEngine?: string | null;
+  retrievalEngine?: string | null;
   pageIndex?: number | null;
   alignmentStatus?: "skipped" | "aligned" | "fallback" | "failed" | null;
   alignment?: Record<string, unknown>;
@@ -412,7 +416,8 @@ const mapTemplateStatus = (status: string): TemplateStatus => {
 };
 
 const normalizeExtractionMethod = (value?: string | null) => {
-  if (value === "ocr_table" || value === "extract_image") return value;
+  if (value === "typhoon_ocr") return "paddle_thai_ocr";
+  if (value === "ocr_table" || value === "paddle_thai_ocr" || value === "extract_image") return value;
   return "ocr_text";
 };
 
@@ -522,6 +527,8 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   vectorId: (candidate.vector_id as string | null | undefined) ?? null,
   score: typeof candidate.score === "number" ? candidate.score : 0,
   retrievalScore: typeof candidate.retrieval_score === "number" ? candidate.retrieval_score : null,
+  layoutScore: typeof candidate.layout_score === "number" ? candidate.layout_score : null,
+  layoutDebug: (candidate.layout_debug as Record<string, unknown> | undefined) || undefined,
   verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
   textAnchorScore: typeof candidate.text_anchor_score === "number" ? candidate.text_anchor_score : null,
   imageAnchorScore: typeof candidate.image_anchor_score === "number" ? candidate.image_anchor_score : null,
@@ -544,6 +551,7 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
   modelName: (candidate.model_name as string | null | undefined) ?? null,
   vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
+  retrievalEngine: (candidate.retrieval_engine as string | null | undefined) ?? null,
   pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
   alignmentStatus:
     candidate.alignment_status === "skipped" ||
@@ -601,6 +609,7 @@ const mapApiTemplatePage = (page: ApiTemplatePage): TemplatePage => ({
   sampleImageUrl: page.sample_image_url || undefined,
   normalizedImageUrl: page.normalized_image_url || undefined,
   qdrantPointId: page.qdrant_point_id || undefined,
+  layoutSignatureJson: page.layout_signature_json || undefined,
   similarityThreshold: page.similarity_threshold ?? 0.75,
   finalConfidenceThreshold: page.final_confidence_threshold ?? 0.8,
 });

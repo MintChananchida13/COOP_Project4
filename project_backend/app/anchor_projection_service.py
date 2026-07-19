@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 
 from .adaptive_roi_service import AdaptiveRoiService
-from .ocr_adapter import OcrUnavailableError, ocr_text_regions
+from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
+from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr
 
 
 Point = Tuple[float, float]
@@ -112,15 +113,41 @@ class AnchorProjectionService:
 
             try:
                 if page_number not in ocr_cache:
-                    ocr_cache[page_number] = ocr_text_regions(image_path)
+                    page_detection = detect_text_boxes(image_path)
+                    image = cv2.imread(image_path)
+                    if image is None:
+                        raise ValueError(f"Unable to read image: {image_path}")
+                    regions = []
+                    for region in page_detection.get("regions", []):
+                        bbox = region.get("bbox") or {}
+                        x = max(0, int(float(bbox.get("x") or 0)))
+                        y = max(0, int(float(bbox.get("y") or 0)))
+                        width = max(1, int(float(bbox.get("width") or 1)))
+                        height = max(1, int(float(bbox.get("height") or 1)))
+                        crop = image[y : min(image.shape[0], y + height), x : min(image.shape[1], x + width)]
+                        if crop.size == 0:
+                            continue
+                        recognized = run_paddle_thai_ocr(crop)
+                        regions.append(
+                            {
+                                **region,
+                                "text": recognized.get("text") or "",
+                                "confidence": recognized.get("confidence") or region.get("confidence") or 0.0,
+                                "center": {
+                                    "x": round(x + width / 2, 4),
+                                    "y": round(y + height / 2, 4),
+                                },
+                            }
+                        )
+                    ocr_cache[page_number] = {**page_detection, "regions": regions}
                 page_ocr = ocr_cache[page_number]
-            except (OcrUnavailableError, ValueError, RuntimeError) as error:
+            except (LayoutAnalysisUnavailableError, PaddleThaiOcrUnavailableError, ValueError, RuntimeError) as error:
                 diagnostics.append(
                     {
                         "anchor_id": anchor.get("id"),
                         "type": "text",
                         "matched": False,
-                        "failure_reason": "ocr_unavailable",
+                        "failure_reason": "paddle_ocr_unavailable",
                         "error": str(error),
                         "page_number": page_number,
                     }
@@ -314,6 +341,23 @@ class AnchorProjectionService:
             "height_ratio": round(max_y - min_y, 6),
         }
 
+    def _safe_template_roi_fallback(self, roi: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        try:
+            x = max(0.0, min(1.0, float(roi.get("x_ratio") or 0.0)))
+            y = max(0.0, min(1.0, float(roi.get("y_ratio") or 0.0)))
+            width = max(0.0, min(1.0 - x, float(roi.get("width_ratio") or 0.0)))
+            height = max(0.0, min(1.0 - y, float(roi.get("height_ratio") or 0.0)))
+        except (TypeError, ValueError):
+            return None
+        if width <= self.MIN_PROJECTED_SIZE_RATIO or height <= self.MIN_PROJECTED_SIZE_RATIO:
+            return None
+        return {
+            "x_ratio": round(x, 6),
+            "y_ratio": round(y, 6),
+            "width_ratio": round(width, 6),
+            "height_ratio": round(height, 6),
+        }
+
     def _validate_projected_polygon(
         self,
         raw_polygon: np.ndarray,
@@ -380,12 +424,29 @@ class AnchorProjectionService:
         validation = self._validate_projected_polygon(raw_projected, clipped_projected)
         clipped_bbox = validation["projected_roi_after_clip"]
         valid = bool(validation["passed"])
+        fallback_roi = None
         if not valid:
             LOGGER.warning(
                 "Projected ROI invalid for field %s: %s",
                 field.get("id"),
                 ",".join(validation.get("errors") or ["unknown"]),
             )
+            fallback_roi = self._safe_template_roi_fallback(template_roi)
+            if fallback_roi:
+                clipped_bbox = fallback_roi
+                validation = {
+                    **validation,
+                    "passed": True,
+                    "original_errors": validation.get("errors", []),
+                    "errors": [],
+                    "warnings": [
+                        *(validation.get("warnings") or []),
+                        "invalid_projection_fallback_to_template_roi",
+                    ],
+                    "fallback_reason": "invalid_projection_fallback_to_template_roi",
+                    "projected_roi_after_clip": clipped_bbox,
+                }
+                valid = True
         return {
             "field_id": field.get("id"),
             "field_name": field.get("field_name"),
@@ -405,7 +466,8 @@ class AnchorProjectionService:
             "projection_method": method,
             "projection_valid": valid,
             "projection_validation_result": validation,
-            "fallback_used": matrix is None,
+            "fallback_used": matrix is None or fallback_roi is not None,
+            "projection_fallback_reason": "invalid_projection_fallback_to_template_roi" if fallback_roi is not None else None,
         }
 
     def _refine_projected_fields(
@@ -414,6 +476,32 @@ class AnchorProjectionService:
         source_fields: List[Dict[str, Any]],
         page_image_paths: Dict[int, str],
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        if not self.adaptive_roi.enabled:
+            for projected in projected_fields:
+                projected_roi = projected.get("projected_roi") or {}
+                projected["adaptive_status"] = "disabled"
+                projected["adaptive_roi"] = projected_roi
+                projected["adaptive_search_region"] = None
+                projected["adaptive_word_boxes"] = []
+                projected["adaptive_word_groups"] = []
+                projected["adaptive_ranked_word_groups"] = []
+                projected["adaptive_fallback_reason"] = "disabled_by_config"
+                projected["adaptive_confidence"] = 0.0
+                projected["adaptive_word_count"] = 0
+                projected["adaptive_coverage"] = 0.0
+                projected["adaptive_ocr_confidence"] = 0.0
+                projected["adaptive_validation_result"] = {"passed": False, "errors": ["disabled_by_config"]}
+            return projected_fields, {
+                "enabled": False,
+                "reason": "disabled_by_config",
+                "text_fields_refined": 0,
+                "text_fields_fallback": 0,
+                "average_adaptive_confidence": 0.0,
+                "average_coverage": 0.0,
+                "average_ocr_confidence": 0.0,
+                "search_padding_ratio": self.adaptive_roi.search_padding_ratio,
+            }
+
         fields_by_id = {field.get("id"): field for field in source_fields}
         ocr_cache: Dict[int, Dict[str, Any]] = {}
         refined_count = 0
@@ -461,16 +549,16 @@ class AnchorProjectionService:
 
             try:
                 if page_number not in ocr_cache:
-                    ocr_cache[page_number] = ocr_text_regions(image_path)
+                    ocr_cache[page_number] = detect_text_boxes(image_path)
                 page_ocr = ocr_cache[page_number]
-            except (OcrUnavailableError, ValueError, RuntimeError) as error:
+            except (LayoutAnalysisUnavailableError, ValueError, RuntimeError) as error:
                 projected["adaptive_status"] = "fallback"
-                projected["adaptive_fallback_reason"] = f"ocr_unavailable: {error}"
+                projected["adaptive_fallback_reason"] = f"text_detection_unavailable: {error}"
                 projected["adaptive_confidence"] = 0.0
                 projected["adaptive_word_count"] = 0
                 projected["adaptive_coverage"] = 0.0
                 projected["adaptive_ocr_confidence"] = 0.0
-                projected["adaptive_validation_result"] = {"passed": False, "errors": ["ocr_unavailable"]}
+                projected["adaptive_validation_result"] = {"passed": False, "errors": ["text_detection_unavailable"]}
                 fallback_count += 1
                 continue
 
@@ -515,8 +603,16 @@ class AnchorProjectionService:
             "average_adaptive_confidence": round(sum(confidence_values) / len(confidence_values), 4) if confidence_values else 0.0,
             "average_coverage": round(sum(coverage_values) / len(coverage_values), 4) if coverage_values else 0.0,
             "average_ocr_confidence": round(sum(ocr_confidence_values) / len(ocr_confidence_values), 4) if ocr_confidence_values else 0.0,
-            "search_padding_ratio": self.adaptive_roi.SEARCH_PADDING_RATIO,
+            "search_padding_ratio": self.adaptive_roi.search_padding_ratio,
         }
+
+    def refine_projected_fields(
+        self,
+        projected_fields: List[Dict[str, Any]],
+        source_fields: List[Dict[str, Any]],
+        page_image_paths: Dict[int, str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        return self._refine_projected_fields(projected_fields, source_fields, page_image_paths)
 
     def project(
         self,

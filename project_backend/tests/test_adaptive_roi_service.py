@@ -70,6 +70,22 @@ class AdaptiveRoiServiceTest(unittest.TestCase):
         self.assertEqual(result["fallback_reason"], "no_word_boxes_in_search_region")
         self.assertEqual(result["adaptive_roi"], projected_roi)
 
+    def test_refine_field_prefers_box_with_better_position_size_and_overlap(self) -> None:
+        projected_roi = {"page_number": 1, "x_ratio": 0.30, "y_ratio": 0.30, "width_ratio": 0.20, "height_ratio": 0.06}
+        words = [
+            {"text": "", "confidence": 0.95, "bbox": {"x_ratio": 0.11, "y_ratio": 0.30, "width_ratio": 0.04, "height_ratio": 0.03}},
+            {"text": "", "confidence": 0.70, "bbox": {"x_ratio": 0.31, "y_ratio": 0.31, "width_ratio": 0.18, "height_ratio": 0.045}},
+        ]
+
+        result = self.service.refine_field(projected_roi, words)
+
+        self.assertEqual(result["status"], "refined")
+        self.assertAlmostEqual(result["adaptive_roi"]["x_ratio"], 0.31)
+        validation = result["validation_result"]
+        self.assertGreater(validation["position_similarity"], 0.8)
+        self.assertGreater(validation["size_similarity"], 0.7)
+        self.assertGreater(validation["overlap_score"], 0.7)
+
 
 if __name__ == "__main__":
     unittest.main()

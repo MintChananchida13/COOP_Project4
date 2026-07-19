@@ -44,6 +44,101 @@ const loadCanvasSafeImage = async (src: string) =>
 const getRawOcrText = (result: OCRResult & { pageIndex?: number }) =>
   result.originalText !== undefined ? result.originalText : result.extractedText;
 
+const parseMarkdownTable = (value: string): string[][] | null => {
+  const rows = value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.includes("|"))
+    .map(line => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map(cell => cell.trim()));
+
+  if (rows.length < 2) return null;
+  const withoutSeparator = rows.filter(row => !row.every(cell => /^:?-{3,}:?$/.test(cell)));
+  return withoutSeparator.length >= 2 ? withoutSeparator : null;
+};
+
+const parsePlainTextTable = (value: string): string[][] | null => {
+  const lines = value
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+
+  if (lines.length === 0) return null;
+
+  const rows = lines.map(line => {
+    const spacedColumns = line.split(/\s{2,}/).map(cell => cell.trim()).filter(Boolean);
+    if (spacedColumns.length > 1) return spacedColumns;
+    return line.split(/\s+/).map(cell => cell.trim()).filter(Boolean);
+  });
+
+  const maxColumns = Math.min(8, Math.max(...rows.map(row => row.length), 1));
+  return rows.map(row => {
+    if (row.length <= maxColumns) return [...row, ...Array(maxColumns - row.length).fill("")];
+    return [...row.slice(0, maxColumns - 1), row.slice(maxColumns - 1).join(" ")];
+  });
+};
+
+const parseJsonTable = (value: string): string[][] | null => {
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every(row => Array.isArray(row))) {
+      return parsed.map(row => row.map(cell => String(cell ?? "")));
+    }
+    if (Array.isArray(parsed) && parsed.every(row => row && typeof row === "object" && !Array.isArray(row))) {
+      const keys = Array.from(new Set(parsed.flatMap(row => Object.keys(row))));
+      return [keys, ...parsed.map(row => keys.map(key => String(row[key] ?? "")))];
+    }
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.rows)) {
+      const rows = parsed.rows;
+      if (rows.every((row: unknown) => Array.isArray(row))) {
+        return rows.map((row: unknown[]) => row.map(cell => String(cell ?? "")));
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const parseTableText = (value: string): string[][] | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return parseJsonTable(trimmed) || parseMarkdownTable(trimmed) || parsePlainTextTable(trimmed);
+};
+
+const TableResultPreview = ({ value }: { value: string }) => {
+  const tableRows = parseTableText(value);
+
+  if (!tableRows) return <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400">(ไม่พบข้อมูลตาราง)</div>;
+
+  const [header, ...bodyRows] = tableRows;
+  return (
+    <div className="max-h-72 overflow-auto rounded-xl border border-slate-300 bg-white shadow-sm">
+      <table className="min-w-full text-[11px] text-left border-collapse">
+        <thead className="sticky top-0 bg-slate-100 text-slate-800">
+          <tr>
+            {header.map((cell, index) => (
+              <th key={index} className="border border-slate-300 px-2.5 py-2 font-bold whitespace-nowrap bg-slate-100">
+                {cell || `Column ${index + 1}`}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {bodyRows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/70">
+              {header.map((_, cellIndex) => (
+                <td key={cellIndex} className="border border-slate-300 px-2.5 py-2 align-top text-slate-700 whitespace-pre-wrap">
+                  {row[cellIndex] || ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 
 const CroppedRoiPreview = ({
   previewUrl,
@@ -475,6 +570,7 @@ export default function GroundTruthEditorZone({
                 {currentPageOcrResults.map((res) => {
                   const isSelected = activeFieldId === res.id;
                   const matchedRoi = getRoiForResult(res);
+                  const fieldType = matchedRoi?.type || res.type || "text";
                   return (
                     <tr 
                       key={res.id} 
@@ -502,7 +598,7 @@ export default function GroundTruthEditorZone({
                           {matchedRoi && (
                             <div className="flex items-center gap-1.5 px-1 text-[9px] font-bold text-slate-400 uppercase select-none">
                               {renderTypeIcon(matchedRoi.type, 10)}
-                              <span>ประเภท: {matchedRoi.type || 'text'}</span>
+                              <span>ประเภท: {fieldType}</span>
                             </div>
                           )}
                         </div>
@@ -511,10 +607,18 @@ export default function GroundTruthEditorZone({
 
                       <td className="px-4 py-4 align-top w-[39%]">
                         <div className="flex flex-col gap-1.5 h-full justify-between">
-                          {matchedRoi?.type === 'image' ? (
+                          {fieldType === 'image' && matchedRoi ? (
                             <div className="flex flex-col gap-1 bg-white border border-slate-200 p-1.5 rounded-xl w-fit shadow-xs">
                               <CroppedRoiPreview previewUrl={previewUrl} roi={matchedRoi} />
                               <span className="text-[9px] font-bold text-slate-400">ภาพตัวอย่างจาก ROI</span>
+                            </div>
+                          ) : fieldType === 'table' ? (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                                <Table size={12} className="text-indigo-500" />
+                                <span>ผลถอดข้อมูลตาราง</span>
+                              </div>
+                              <TableResultPreview value={getRawOcrText(res)} />
                             </div>
                           ) : (
                             <div
@@ -534,11 +638,17 @@ export default function GroundTruthEditorZone({
 
                       <td className="px-4 py-4 align-top w-[39%]" onClick={(e) => e.stopPropagation()}>
                         <div className="flex flex-col gap-1.5 h-full justify-between">
-                          {matchedRoi?.type === 'image' ? (
+                          {fieldType === 'image' ? (
                             <div className="w-full bg-slate-50/50 border border-dashed border-slate-200 rounded-xl px-3 py-3 text-slate-400 font-bold text-center text-xs">
                               Field รูปภาพ ไม่มีข้อความ OCR
                             </div>
                           ) : (
+                            <>
+                            {fieldType === 'table' && (
+                              <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-2 text-[10px] font-semibold text-indigo-700">
+                                แก้ไขข้อมูลตารางในรูปแบบข้อความ/JSON/Markdown ตามที่ OCR ส่งกลับมา
+                              </div>
+                            )}
                             <textarea 
                               value={res.extractedText} 
                               onFocus={() => setActiveFieldId(res.id)} 
@@ -561,8 +671,9 @@ export default function GroundTruthEditorZone({
                               className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner normal-case" 
                               style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
                               placeholder="แก้ไขข้อความ OCR..."
-                              rows={1}
+                              rows={fieldType === 'table' ? 5 : 1}
                             />
+                            </>
                           )}
                           <div className="text-[10px] py-0.5 opacity-0 select-none pointer-events-none mt-1" aria-hidden="true">
                             Spacer

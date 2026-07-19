@@ -225,7 +225,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       expectedText: defaults?.expectedText || "",
       matchType: defaults?.matchType || "",
       requiredForVerification: defaults?.requiredForVerification ?? false,
-      extractionMethod: defaults?.extractionMethod || "ocr_text",
+      extractionMethod: defaults?.extractionMethod || "paddle_thai_ocr",
       roiPadding: defaults?.roiPadding ?? 0,
       verificationWeight: defaults?.verificationWeight ?? 1,
       sortOrder: nextIndex,

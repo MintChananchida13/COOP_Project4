@@ -392,18 +392,18 @@ export default function AdminDetectionLabPage() {
                       <p>ชื่อ Template: {bestCandidate.templateName || "N/A"}</p>
                       <p>Template ID: {bestCandidate.templateId || "N/A"}</p>
                       <p>คะแนนรวม: {formatScore(bestCandidate.finalScore ?? bestCandidate.score)}</p>
-                      <p>คะแนนภาพรวม: {formatScore(bestCandidate.retrievalScore)}</p>
+                      <p>คะแนน Layout: {formatScore(bestCandidate.layoutScore ?? bestCandidate.retrievalScore)}</p>
                       <p>คะแนน Anchor: {formatScore(bestCandidate.verificationScore)}</p>
                       <p>คะแนน Text Anchor: {formatScore(bestCandidate.textAnchorScore)}</p>
                       <p>คะแนน Image Anchor: {formatScore(bestCandidate.imageAnchorScore)}</p>
                       <p>หน้าที่ตรงกัน: {bestCandidate.matchedPages ?? "N/A"}</p>
                       <p>เหตุผลการตัดสินใจ: {bestCandidate.decisionReason || "N/A"}</p>
                       <p>สถานะ: {bestCandidate.templateStatus || "N/A"}</p>
-                      <p>Vector ID: {bestCandidate.vectorId || "N/A"}</p>
+                      <p>Signature ID: {bestCandidate.vectorId || "N/A"}</p>
                       <p>จำนวนหน้า: {bestCandidate.pageCount ?? "N/A"}</p>
                       <p>จำนวน Field: {bestCandidate.fieldCount ?? "N/A"}</p>
                       <p>Model: {bestCandidate.modelName || "N/A"}</p>
-                      <p>Vector Store: {bestCandidate.vectorStoreEngine || "N/A"}</p>
+                      <p>Retrieval: {bestCandidate.retrievalEngine || bestCandidate.vectorStoreEngine || "N/A"}</p>
                       <p>เกณฑ์คะแนนรวม: {formatScore(bestCandidate.finalConfidenceThreshold)}</p>
                       <p>สถานะ Alignment: {alignmentLabel(bestCandidate)}</p>
                       <p>คะแนน Alignment: {formatScore(bestCandidate.alignmentScore)}</p>
@@ -420,7 +420,7 @@ export default function AdminDetectionLabPage() {
                 )}
                 {result.candidates.length === 0 && (
                   <p className="rounded-xl bg-amber-50 p-3 font-bold text-amber-700">
-                    ยังไม่มี Template ที่ Active และมี Embedding กรุณาตรวจสอบและเผยแพร่ Template อย่างน้อย 1 รายการก่อน
+                    ยังไม่มี Template ที่ Active และมี Layout Signature กรุณาตรวจสอบและเผยแพร่ Template อย่างน้อย 1 รายการก่อน
                   </p>
                 )}
               </div>
@@ -878,7 +878,7 @@ export default function AdminDetectionLabPage() {
                     <th className="px-3 py-2">Rank</th>
                     <th className="px-3 py-2">Template Name</th>
                     <th className="px-3 py-2">Final</th>
-                    <th className="px-3 py-2">Retrieval</th>
+                    <th className="px-3 py-2">Layout</th>
                     <th className="px-3 py-2">Verification</th>
                   </tr>
                 </thead>
@@ -895,7 +895,7 @@ export default function AdminDetectionLabPage() {
                         <td className="px-3 py-2">{index + 1}</td>
                         <td className="px-3 py-2">{candidate.templateName || "N/A"}</td>
                         <td className="px-3 py-2">{formatScore(candidate.finalScore ?? candidate.score)}</td>
-                        <td className="px-3 py-2">{formatScore(candidate.retrievalScore)}</td>
+                        <td className="px-3 py-2">{formatScore(candidate.layoutScore ?? candidate.retrievalScore)}</td>
                         <td className="px-3 py-2">
                           {formatScore(candidate.verificationScore)}
                         </td>

@@ -1,3 +1,4 @@
+import os
 from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -11,7 +12,17 @@ class AdaptiveRoiService:
     MIN_CONFIDENCE = 0.20
     MIN_ADAPTIVE_CONFIDENCE = 0.25
 
-    def expand_roi(self, roi: Dict[str, Any], padding_ratio: float = SEARCH_PADDING_RATIO) -> Dict[str, float]:
+    def __init__(self) -> None:
+        enabled_value = os.getenv("ADAPTIVE_ROI_ENABLED", "true").strip().lower()
+        self.enabled = enabled_value not in {"0", "false", "no", "off"}
+        try:
+            padding = float(os.getenv("ADAPTIVE_ROI_SEARCH_PADDING_RATIO", str(self.SEARCH_PADDING_RATIO)))
+        except ValueError:
+            padding = self.SEARCH_PADDING_RATIO
+        self.search_padding_ratio = max(0.0, min(0.50, padding))
+
+    def expand_roi(self, roi: Dict[str, Any], padding_ratio: Optional[float] = None) -> Dict[str, float]:
+        padding_ratio = self.search_padding_ratio if padding_ratio is None else padding_ratio
         x = float(roi.get("x_ratio", 0.0) or 0.0)
         y = float(roi.get("y_ratio", 0.0) or 0.0)
         width = float(roi.get("width_ratio", 0.0) or 0.0)
@@ -143,6 +154,32 @@ class AdaptiveRoiService:
         smaller_area = max(1e-6, min(left["width_ratio"] * left["height_ratio"], right["width_ratio"] * right["height_ratio"]))
         return max(0.0, min(1.0, overlap_area / smaller_area))
 
+    def _iou(self, left: Dict[str, float], right: Dict[str, float]) -> float:
+        left_x2 = left["x_ratio"] + left["width_ratio"]
+        left_y2 = left["y_ratio"] + left["height_ratio"]
+        right_x2 = right["x_ratio"] + right["width_ratio"]
+        right_y2 = right["y_ratio"] + right["height_ratio"]
+        overlap_width = max(0.0, min(left_x2, right_x2) - max(left["x_ratio"], right["x_ratio"]))
+        overlap_height = max(0.0, min(left_y2, right_y2) - max(left["y_ratio"], right["y_ratio"]))
+        overlap_area = overlap_width * overlap_height
+        union_area = max(1e-6, (left["width_ratio"] * left["height_ratio"]) + (right["width_ratio"] * right["height_ratio"]) - overlap_area)
+        return max(0.0, min(1.0, overlap_area / union_area))
+
+    def _size_similarity(self, left: Dict[str, float], right: Dict[str, float]) -> float:
+        width_score = min(left["width_ratio"], right["width_ratio"]) / max(left["width_ratio"], right["width_ratio"], 1e-6)
+        height_score = min(left["height_ratio"], right["height_ratio"]) / max(left["height_ratio"], right["height_ratio"], 1e-6)
+        area_left = left["width_ratio"] * left["height_ratio"]
+        area_right = right["width_ratio"] * right["height_ratio"]
+        area_score = min(area_left, area_right) / max(area_left, area_right, 1e-6)
+        return max(0.0, min(1.0, (width_score * 0.35) + (height_score * 0.35) + (area_score * 0.30)))
+
+    def _line_alignment_score(self, projected_roi: Dict[str, float], adaptive_roi: Dict[str, float]) -> float:
+        _, projected_y = self._center(projected_roi)
+        _, adaptive_y = self._center(adaptive_roi)
+        projected_height = max(projected_roi["height_ratio"], 1e-6)
+        normalized_delta = abs(projected_y - adaptive_y) / projected_height
+        return max(0.0, min(1.0, 1.0 - normalized_delta))
+
     def _coverage(self, adaptive_roi: Dict[str, float], search_region: Dict[str, float]) -> float:
         adaptive_area = adaptive_roi["width_ratio"] * adaptive_roi["height_ratio"]
         search_area = max(1e-6, search_region["width_ratio"] * search_region["height_ratio"])
@@ -182,13 +219,19 @@ class AdaptiveRoiService:
 
         distance_score = self._distance_score(projected_roi, adaptive_roi)
         overlap_score = self._overlap_ratio(projected_roi, adaptive_roi)
+        iou_score = self._iou(projected_roi, adaptive_roi)
+        size_similarity = self._size_similarity(projected_roi, adaptive_roi)
+        line_alignment_score = self._line_alignment_score(projected_roi, adaptive_roi)
         word_count_score = min(1.0, word_count / 3)
         adaptive_confidence = (
-            ocr_confidence * 0.35
-            + min(1.0, coverage / 0.35) * 0.15
-            + word_count_score * 0.15
+            ocr_confidence * 0.20
+            + min(1.0, coverage / 0.35) * 0.08
+            + word_count_score * 0.07
             + distance_score * 0.20
-            + overlap_score * 0.15
+            + overlap_score * 0.20
+            + iou_score * 0.10
+            + size_similarity * 0.10
+            + line_alignment_score * 0.05
         )
         adaptive_confidence = max(0.0, min(1.0, adaptive_confidence))
         if adaptive_confidence < self.MIN_ADAPTIVE_CONFIDENCE:
@@ -201,8 +244,12 @@ class AdaptiveRoiService:
             "word_count": word_count,
             "ocr_confidence": round(ocr_confidence, 4),
             "coverage": round(coverage, 4),
+            "position_similarity": round(distance_score, 4),
             "distance_score": round(distance_score, 4),
             "overlap_score": round(overlap_score, 4),
+            "iou_score": round(iou_score, 4),
+            "size_similarity": round(size_similarity, 4),
+            "line_alignment_score": round(line_alignment_score, 4),
             "adaptive_confidence": round(adaptive_confidence, 4),
         }
 
@@ -215,13 +262,19 @@ class AdaptiveRoiService:
         validation = self.validate_adaptive_roi(projected_roi, search_region, group["bbox"], group)
         distance_score = float(validation.get("distance_score") or 0.0)
         overlap_score = float(validation.get("overlap_score") or 0.0)
+        iou_score = float(validation.get("iou_score") or 0.0)
+        size_similarity = float(validation.get("size_similarity") or 0.0)
+        line_alignment_score = float(validation.get("line_alignment_score") or 0.0)
         ocr_confidence = float(validation.get("ocr_confidence") or 0.0)
         word_count_score = min(1.0, float(validation.get("word_count") or 0) / 3)
         rank_score = (
-            distance_score * 0.30
-            + overlap_score * 0.30
-            + ocr_confidence * 0.25
-            + word_count_score * 0.15
+            distance_score * 0.25
+            + overlap_score * 0.25
+            + iou_score * 0.15
+            + size_similarity * 0.15
+            + line_alignment_score * 0.10
+            + ocr_confidence * 0.05
+            + word_count_score * 0.05
         )
         return {
             "group": group,

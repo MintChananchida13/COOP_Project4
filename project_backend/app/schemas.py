@@ -117,6 +117,7 @@ class TemplatePageCreate(BaseModel):
     page_name: Optional[str] = None
     sample_image_url: Optional[str] = None
     normalized_image_url: Optional[str] = None
+    layout_signature_json: Optional[str] = None
 
 
 class TemplatePageUpdate(BaseModel):
@@ -124,6 +125,7 @@ class TemplatePageUpdate(BaseModel):
     page_name: Optional[str] = None
     sample_image_url: Optional[str] = None
     normalized_image_url: Optional[str] = None
+    layout_signature_json: Optional[str] = None
     similarity_threshold: Optional[float] = Field(default=None, ge=0, le=1)
     final_confidence_threshold: Optional[float] = Field(default=None, ge=0, le=1)
 
