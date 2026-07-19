@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize_image, remote_recognize_images
+
 
 class PaddleThaiOcrUnavailableError(RuntimeError):
     pass
@@ -29,6 +31,10 @@ os.environ.setdefault("TEMP", str(PADDLE_TEMP_DIR))
 
 
 _TEXT_RECOGNIZER: Any = None
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -119,12 +125,44 @@ def _extract_text_confidence(value: Any) -> Tuple[str, float]:
     return text, confidence
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
 def _opencv_to_temp_png(opencv_img: np.ndarray) -> str:
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
     if not cv2.imwrite(temp.name, opencv_img):
         raise PaddleThaiOcrUnavailableError("Failed to prepare ROI image for Paddle Thai OCR.")
     return temp.name
+
+
+def _result_from_output(output: Any) -> Dict[str, Any]:
+    text, confidence = _extract_text_confidence(output)
+    result = {
+        "text": text,
+        "confidence": float(confidence),
+        "engine": "paddle_thai_ocr",
+        "model": PADDLE_THAI_OCR_MODEL_NAME,
+        "segments": [],
+        "attempts": [],
+        "preprocessing": "paddle_text_recognition",
+    }
+    if _env_flag("PADDLE_OCR_INCLUDE_RAW_OUTPUT", "false"):
+        result["raw_output"] = _json_safe([_as_dict(output) or str(output)])
+    return result
 
 
 def run_paddle_thai_ocr(opencv_img: np.ndarray) -> Dict[str, Any]:
@@ -137,23 +175,20 @@ def run_paddle_thai_ocr(opencv_img: np.ndarray) -> Dict[str, Any]:
             "error": "empty_image",
         }
 
+    try:
+        remote_result = remote_recognize_image(opencv_img)
+        if remote_result is not None:
+            return remote_result
+    except ModelRuntimeUnavailableError as error:
+        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise PaddleThaiOcrUnavailableError(str(error)) from error
+
     image_path = _opencv_to_temp_png(opencv_img)
     try:
         model = _load_text_recognizer()
         predict = getattr(model, "predict", None)
         output = predict(input=image_path, batch_size=1) if callable(predict) else model(image_path)
-        text, confidence = _extract_text_confidence(output)
-
-        return {
-            "text": text,
-            "confidence": float(confidence),
-            "engine": "paddle_thai_ocr",
-            "model": PADDLE_THAI_OCR_MODEL_NAME,
-            "segments": [],
-            "attempts": [],
-            "preprocessing": "paddle_text_recognition",
-            "raw_output": [_as_dict(item) or str(item) for item in output] if isinstance(output, (list, tuple)) else [_as_dict(output) or str(output)],
-        }
+        return _result_from_output(output)
     except PaddleThaiOcrUnavailableError:
         raise
     except Exception as error:
@@ -163,3 +198,82 @@ def run_paddle_thai_ocr(opencv_img: np.ndarray) -> Dict[str, Any]:
             os.unlink(image_path)
         except OSError:
             pass
+
+
+def run_paddle_thai_ocr_batch(opencv_images: List[np.ndarray]) -> List[Dict[str, Any]]:
+    if not opencv_images:
+        return []
+
+    try:
+        remote_result = remote_recognize_images(opencv_images)
+        if remote_result is not None:
+            results = remote_result.get("results")
+            if isinstance(results, list):
+                return [item if isinstance(item, dict) else {"text": "", "confidence": 0.0, "error": "invalid_batch_item"} for item in results]
+    except ModelRuntimeUnavailableError as error:
+        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise PaddleThaiOcrUnavailableError(str(error)) from error
+
+    temp_paths: List[str] = []
+    try:
+        for image in opencv_images:
+            if image is None or image.size == 0:
+                temp_paths.append("")
+            else:
+                temp_paths.append(_opencv_to_temp_png(image))
+
+        model = _load_text_recognizer()
+        predict = getattr(model, "predict", None)
+        valid_paths = [path for path in temp_paths if path]
+        if not valid_paths:
+            return [
+                {
+                    "text": "",
+                    "confidence": 0.0,
+                    "engine": "paddle_thai_ocr",
+                    "model": PADDLE_THAI_OCR_MODEL_NAME,
+                    "error": "empty_image",
+                }
+                for _ in opencv_images
+            ]
+
+        try:
+            output = predict(input=valid_paths, batch_size=max(1, min(len(valid_paths), int(os.getenv("PADDLE_OCR_BATCH_SIZE", "8"))))) if callable(predict) else [model(path) for path in valid_paths]
+            output_items = output if isinstance(output, (list, tuple)) else [output]
+            if len(output_items) != len(valid_paths):
+                raise PaddleThaiOcrUnavailableError("Batch OCR output length mismatch.")
+            valid_results = [_result_from_output(item) for item in output_items]
+        except Exception:
+            valid_results = []
+            for path in valid_paths:
+                output = predict(input=path, batch_size=1) if callable(predict) else model(path)
+                valid_results.append(_result_from_output(output))
+
+        results: List[Dict[str, Any]] = []
+        result_index = 0
+        for path in temp_paths:
+            if not path:
+                results.append(
+                    {
+                        "text": "",
+                        "confidence": 0.0,
+                        "engine": "paddle_thai_ocr",
+                        "model": PADDLE_THAI_OCR_MODEL_NAME,
+                        "error": "empty_image",
+                    }
+                )
+            else:
+                results.append(valid_results[result_index])
+                result_index += 1
+        return results
+    except PaddleThaiOcrUnavailableError:
+        raise
+    except Exception as error:
+        raise PaddleThaiOcrUnavailableError(f"Paddle Thai OCR batch inference failed: {error}") from error
+    finally:
+        for image_path in temp_paths:
+            if image_path:
+                try:
+                    os.unlink(image_path)
+                except OSError:
+                    pass

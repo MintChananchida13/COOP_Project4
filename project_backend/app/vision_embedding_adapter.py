@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from .model_runtime_client import ModelRuntimeUnavailableError, remote_encode_images
+
 
 @dataclass
 class VisionEmbeddingResult:
@@ -17,6 +19,9 @@ class VisionEmbeddingResult:
 
 
 DINOV2_MODEL_NAME = "facebook/dinov2-small"
+_DINOV2_PROCESSOR = None
+_DINOV2_MODEL = None
+_DINOV2_DEVICE: Optional[str] = None
 
 
 def _hash_inputs(image_paths: List[str]) -> bytes:
@@ -67,17 +72,7 @@ def _encode_images_dinov2(image_paths: List[str]) -> VisionEmbeddingResult:
     if not image_paths:
         raise ValueError("No embedding input images were provided")
 
-    try:
-        import torch
-        from PIL import Image
-        from transformers import AutoImageProcessor, AutoModel
-    except ImportError as error:
-        raise RuntimeError("DINOv2 mode requires torch and transformers.") from error
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    processor = AutoImageProcessor.from_pretrained(DINOV2_MODEL_NAME)
-    model = AutoModel.from_pretrained(DINOV2_MODEL_NAME).to(device)
-    model.eval()
+    processor, model, device, torch, Image = _load_dinov2_runtime()
 
     page_vectors = []
     with torch.no_grad():
@@ -108,7 +103,42 @@ def _encode_images_dinov2(image_paths: List[str]) -> VisionEmbeddingResult:
     )
 
 
+def _load_dinov2_runtime():
+    global _DINOV2_PROCESSOR, _DINOV2_MODEL, _DINOV2_DEVICE
+
+    try:
+        import torch
+        from PIL import Image
+        from transformers import AutoImageProcessor, AutoModel
+    except ImportError as error:
+        raise RuntimeError("DINOv2 mode requires torch and transformers.") from error
+
+    if _DINOV2_PROCESSOR is None or _DINOV2_MODEL is None or _DINOV2_DEVICE is None:
+        _DINOV2_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        _DINOV2_PROCESSOR = AutoImageProcessor.from_pretrained(DINOV2_MODEL_NAME)
+        _DINOV2_MODEL = AutoModel.from_pretrained(DINOV2_MODEL_NAME).to(_DINOV2_DEVICE)
+        _DINOV2_MODEL.eval()
+
+    return _DINOV2_PROCESSOR, _DINOV2_MODEL, _DINOV2_DEVICE, torch, Image
+
+
 def encode_images(image_paths: List[str]) -> VisionEmbeddingResult:
+    try:
+        remote_result = remote_encode_images(image_paths)
+        if remote_result is not None:
+            return VisionEmbeddingResult(
+                vector=[float(value) for value in remote_result.get("vector", [])],
+                dimension=int(remote_result.get("dimension") or 0),
+                engine=str(remote_result.get("engine") or "remote"),
+                version=str(remote_result.get("version") or ""),
+                model_name=str(remote_result.get("model_name") or ""),
+                input_count=int(remote_result.get("input_count") or len(image_paths)),
+                device=remote_result.get("device"),
+            )
+    except ModelRuntimeUnavailableError as error:
+        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise RuntimeError(str(error)) from error
+
     mode = os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower()
     if mode == "dinov2":
         return _encode_images_dinov2(image_paths)

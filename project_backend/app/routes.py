@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
+from .db import connect as connect_db
+from .db import is_postgres_enabled, sqlite_db_path
 from .schemas import (
     ApiResponse,
     CustomOcrRequest,
@@ -46,6 +48,35 @@ storage_maintenance = StorageMaintenanceService()
 
 def ok(data: dict) -> ApiResponse:
     return ApiResponse(data=data)
+
+
+@router.get("/health", response_model=ApiResponse)
+def health() -> ApiResponse:
+    return ok({"status": "ok"})
+
+
+@router.get("/health/db", response_model=ApiResponse)
+def database_health() -> ApiResponse:
+    engine = "postgresql" if is_postgres_enabled() else "sqlite"
+    try:
+        with connect_db() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return ok(
+            {
+                "status": "ok",
+                "engine": engine,
+                "sqlite_path": None if engine == "postgresql" else str(sqlite_db_path()),
+            }
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "engine": engine,
+                "message": str(error),
+            },
+        ) from error
 
 
 def _extract_multipart_file(content_type: str, body: bytes) -> bytes:

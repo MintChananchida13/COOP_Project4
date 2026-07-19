@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
 import { SetStateAction, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
@@ -20,6 +20,7 @@ interface WorkspaceTemplateEditorProps {
   onAddField: (roi?: RoiRatio, defaults?: Partial<TemplateField>) => void;
   onUpdateField: (fieldId: string, patch: Partial<TemplateField>) => void;
   onReorderFields: (orderedFieldIds: string[]) => void;
+  onReplacePageExtractionFields: (pageNumber: number, fields: { roi: RoiRatio; defaults: Partial<TemplateField> }[]) => void;
   onDeleteField: (fieldId: string) => void;
   onAddIgnoreRegion: (roi?: RoiRatio) => void;
   onUpdateIgnoreRegion: (regionId: string, patch: Partial<IgnoreRegion>) => void;
@@ -35,6 +36,37 @@ type AdminRoi = ROI & {
   workspaceKind: EditorMode;
   pageIndex?: number;
 };
+
+interface LayoutDetectedRegion {
+  field_name?: string;
+  type?: "text" | "table" | "image";
+  data_type?: "text" | "table" | "image";
+  extraction_method?: string;
+  confidence?: number;
+  roi?: {
+    page_number?: number;
+    x_ratio?: number;
+    y_ratio?: number;
+    width_ratio?: number;
+    height_ratio?: number;
+  };
+}
+
+interface LayoutDetectedPage {
+  page_index: number;
+  page_number: number;
+  image_width: number;
+  image_height: number;
+  regions: LayoutDetectedRegion[];
+  message?: string | null;
+}
+
+interface LayoutAnalysisResponse {
+  success?: boolean;
+  pages?: LayoutDetectedPage[];
+  detail?: string;
+  error?: string;
+}
 
 const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
@@ -59,6 +91,54 @@ const roiToRatio = (roi: ROI, pageNumber: number, metrics: WorkspaceImageMetrics
   widthRatio: clampRatio(roi.width / Math.max(metrics.imageWidth, 1)),
   heightRatio: clampRatio(roi.height / Math.max(metrics.imageHeight, 1)),
 });
+
+const normalizeLayoutRegionType = (region: LayoutDetectedRegion): "text" | "table" | "image" => {
+  if (region.type === "table" || region.data_type === "table") return "table";
+  if (region.type === "image" || region.data_type === "image") return "image";
+  return "text";
+};
+
+const layoutRegionToDetectedField = (
+  region: LayoutDetectedRegion,
+  pageNumber: number,
+  fieldNumber: number
+): { roi: RoiRatio; defaults: Partial<TemplateField> } | null => {
+  const roi = region.roi;
+  if (!roi) return null;
+
+  const xRatio = Number(roi.x_ratio);
+  const yRatio = Number(roi.y_ratio);
+  const widthRatio = Number(roi.width_ratio);
+  const heightRatio = Number(roi.height_ratio);
+  if (![xRatio, yRatio, widthRatio, heightRatio].every(Number.isFinite)) return null;
+
+  const safeRoi = {
+    pageNumber,
+    xRatio: clampRatio(xRatio),
+    yRatio: clampRatio(yRatio),
+    widthRatio: clampRatio(widthRatio),
+    heightRatio: clampRatio(heightRatio),
+  };
+  if (safeRoi.widthRatio <= 0 || safeRoi.heightRatio <= 0) return null;
+
+  const dataType = normalizeLayoutRegionType(region);
+  const fieldName = `field_${fieldNumber}`;
+  return {
+    roi: safeRoi,
+    defaults: {
+      fieldName,
+      displayLabel: fieldName,
+      dataType,
+      extractionMethod: dataType === "image" ? "extract_image" : "paddle_thai_ocr",
+      userSelectable: true,
+      defaultSelected: true,
+      useForVerification: false,
+      requiredForVerification: false,
+      roiPadding: 0,
+      sortOrder: fieldNumber,
+    },
+  };
+};
 
 const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): AdminRoi => {
   const box = ratioToImageBox(field.roi, metrics);
@@ -103,6 +183,7 @@ export default function WorkspaceTemplateEditorV2({
   onAddField,
   onUpdateField,
   onReorderFields,
+  onReplacePageExtractionFields,
   onDeleteField,
   onAddIgnoreRegion,
   onUpdateIgnoreRegion,
@@ -117,6 +198,9 @@ export default function WorkspaceTemplateEditorV2({
   const [testResult, setTestResult] = useState<TemplateStepTestResult | null>(null);
   const [testError, setTestError] = useState("");
   const [testAction, setTestAction] = useState<"extraction" | "verification" | null>(null);
+  const [autoDetectStatus, setAutoDetectStatus] = useState("");
+  const [autoDetectError, setAutoDetectError] = useState("");
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const pendingRoiRef = useRef<{ mode: EditorMode; roi: RoiRatio } | null>(null);
   const currentPageNumber = currentPage + 1;
   const selectedPage = pages[currentPage];
@@ -252,6 +336,63 @@ export default function WorkspaceTemplateEditorV2({
     nextOrder.splice(nextIndex, 0, field);
     onReorderFields(nextOrder.map((item) => item.id));
     selectField(field);
+  };
+
+  const handleAutoDetectExtractionRoi = async () => {
+    if (!selectedPage?.src || isAutoDetecting) return;
+
+    setStep("extraction_fields");
+    setMode("extraction_fields");
+    setSelectedId(null);
+    setAutoDetectStatus("");
+    setAutoDetectError("");
+    setIsAutoDetecting(true);
+
+    try {
+      const response = await fetch("http://localhost:8000/api/layout/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          images: [
+            {
+              page_index: currentPage,
+              image: selectedPage.src,
+            },
+          ],
+        }),
+      });
+      const responseText = await response.text();
+      let result: LayoutAnalysisResponse = {};
+      try {
+        result = responseText ? (JSON.parse(responseText) as LayoutAnalysisResponse) : {};
+      } catch {
+        result = { error: responseText || response.statusText };
+      }
+
+      if (!response.ok || !result.success) {
+        if (response.status === 404) {
+          throw new Error("ไม่พบ endpoint /api/layout/analyze กรุณา restart backend");
+        }
+        throw new Error(result.detail || result.error || "สร้าง ROI อัตโนมัติไม่สำเร็จ");
+      }
+
+      const detectedPage = (result.pages || []).find((page) => Number(page.page_index) === currentPage) || result.pages?.[0];
+      const detectedFields = (detectedPage?.regions || [])
+        .map((region, index) => layoutRegionToDetectedField(region, currentPageNumber, index + 1))
+        .filter((item): item is { roi: RoiRatio; defaults: Partial<TemplateField> } => item !== null);
+
+      onReplacePageExtractionFields(currentPageNumber, detectedFields);
+      setAutoDetectStatus(
+        detectedFields.length > 0
+          ? `สร้าง ROI อัตโนมัติ ${detectedFields.length} รายการ และลบ Extraction ROI เดิมของหน้านี้ ${currentPageExtractionFields.length} รายการ`
+          : `ไม่พบ Text, Table หรือ Image Region ในหน้า ${currentPageNumber} ระบบลบ Extraction ROI เดิมของหน้านี้แล้ว`
+      );
+    } catch (error) {
+      console.error("Admin auto ROI detection failed.", error);
+      setAutoDetectError(error instanceof Error ? error.message : "สร้าง ROI อัตโนมัติไม่สำเร็จ");
+    } finally {
+      setIsAutoDetecting(false);
+    }
   };
 
   const clearStepTest = () => {
@@ -440,7 +581,36 @@ export default function WorkspaceTemplateEditorV2({
                   </div>
                 </section>
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Current Page ROI</h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Current Page ROI</h3>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-500">{panelRois.length}</span>
+                  </div>
+                  {mode === "extraction_fields" && (
+                    <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
+                      <button
+                        type="button"
+                        onClick={handleAutoDetectExtractionRoi}
+                        disabled={isAutoDetecting || !selectedPage?.src}
+                        className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 shadow-sm hover:bg-indigo-100 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        {isAutoDetecting ? <Loader2 size={14} className="animate-spin" /> : <ScanSearch size={14} />}
+                        {isAutoDetecting ? "กำลังตีกรอบ ROI..." : "ตีกรอบ ROI อัตโนมัติ"}
+                      </button>
+                      <p className="text-[10px] font-semibold leading-relaxed text-slate-500">
+                        วิเคราะห์ Layout ของหน้าปัจจุบันด้วย PP-DocLayoutV3 แล้วสร้าง Extraction ROI ใหม่ โดยลบ ROI เดิมของหน้านี้ก่อนทุกครั้ง
+                      </p>
+                      {autoDetectStatus && (
+                        <p className="rounded-lg bg-emerald-50 px-2.5 py-2 text-[10px] font-bold leading-relaxed text-emerald-700">
+                          {autoDetectStatus}
+                        </p>
+                      )}
+                      {autoDetectError && (
+                        <p className="rounded-lg bg-red-50 px-2.5 py-2 text-[10px] font-bold leading-relaxed text-red-700">
+                          {autoDetectError}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
                     {panelRois.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">No ROI on this page.</p>

@@ -1,13 +1,21 @@
 ﻿"use client";
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
 import { ROI, OCRResult } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
   if (type === 'image') return <ImageIcon size={size} className="shrink-0 text-slate-400" />;
   return <FileText size={size} className="shrink-0 text-slate-400" />;
+};
+
+type DisplayFieldType = 'text' | 'table' | 'image';
+
+const getFieldTypeLabel = (type: DisplayFieldType) => {
+  if (type === "table") return "ตาราง";
+  if (type === "image") return "รูปภาพ";
+  return "ข้อความ";
 };
 
 const blobToDataUrl = (blob: Blob) =>
@@ -102,7 +110,22 @@ const parseJsonTable = (value: string): string[][] | null => {
 const parseTableText = (value: string): string[][] | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
+  if (/^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(trimmed)) return null;
   return parseJsonTable(trimmed) || parseMarkdownTable(trimmed) || parsePlainTextTable(trimmed);
+};
+
+const tableRowsToMarkdown = (rows: string[][]): string => {
+  const cleanedRows = rows.map(row => row.map(cell => cell.trimEnd()));
+  const maxColumns = Math.max(...cleanedRows.map(row => row.length), 1);
+  const normalizedRows = cleanedRows.map(row => [...row, ...Array(maxColumns - row.length).fill("")]);
+  const [header = [], ...bodyRows] = normalizedRows;
+  const safeHeader = header.map((cell, index) => cell || `Column ${index + 1}`);
+  const formatRow = (row: string[]) => `| ${row.map(cell => cell.replace(/\|/g, "/")).join(" | ")} |`;
+  return [
+    formatRow(safeHeader),
+    formatRow(Array(maxColumns).fill("---")),
+    ...bodyRows.map(formatRow),
+  ].join("\n");
 };
 
 const TableResultPreview = ({ value }: { value: string }) => {
@@ -135,6 +158,145 @@ const TableResultPreview = ({ value }: { value: string }) => {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+};
+
+const EditableTableResult = ({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (nextValue: string) => void;
+}) => {
+  const parsedRows = parseTableText(value);
+  const [localRows, setLocalRows] = useState<string[][]>(() => parsedRows || [["Column 1"], [""]]);
+
+  useEffect(() => {
+    setLocalRows(parsedRows || [["Column 1"], [""]]);
+  }, [value]);
+
+  const commitRows = (rows: string[][]) => {
+    const normalizedRows = rows.length > 0 ? rows : [["Column 1"], [""]];
+    setLocalRows(normalizedRows);
+    onChange(tableRowsToMarkdown(normalizedRows));
+  };
+
+  const maxColumns = Math.max(...localRows.map(row => row.length), 1);
+  const rows = localRows.map(row => [...row, ...Array(maxColumns - row.length).fill("")]);
+  const [header, ...bodyRows] = rows;
+
+  const updateCell = (rowIndex: number, cellIndex: number, nextValue: string) => {
+    const nextRows = rows.map(row => [...row]);
+    nextRows[rowIndex][cellIndex] = nextValue;
+    commitRows(nextRows);
+  };
+
+  const addRow = () => {
+    commitRows([...rows, Array(maxColumns).fill("")]);
+  };
+
+  const addColumn = () => {
+    commitRows(rows.map((row, index) => [...row, index === 0 ? `Column ${maxColumns + 1}` : ""]));
+  };
+
+  const removeRow = (rowIndex: number) => {
+    if (rows.length <= 2) return;
+    commitRows(rows.filter((_, index) => index !== rowIndex));
+  };
+
+  const removeColumn = (cellIndex: number) => {
+    if (maxColumns <= 1) return;
+    commitRows(rows.map(row => row.filter((_, index) => index !== cellIndex)));
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-300 bg-white shadow-sm">
+      <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">ตารางที่แก้ไขได้</p>
+          <p className="mt-0.5 text-[10px] font-medium text-slate-400">แก้ไขข้อมูลในแต่ละช่องได้โดยตรง</p>
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={addRow}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
+          >
+            <Plus size={12} /> เพิ่มแถว
+          </button>
+          <button
+            type="button"
+            onClick={addColumn}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
+          >
+            <Plus size={12} /> เพิ่มคอลัมน์
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-80 overflow-auto">
+        <table className="min-w-full border-collapse text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-slate-100">
+            <tr>
+              {header.map((cell, cellIndex) => (
+                <th key={cellIndex} className="min-w-28 border border-slate-300 bg-slate-100 p-0 align-top">
+                  <div className="flex items-center gap-1 p-1.5">
+                    <input
+                      value={cell}
+                      onChange={(event) => updateCell(0, cellIndex, event.target.value)}
+                      className="min-h-8 w-full rounded-md border border-transparent bg-white/70 px-2 py-1 text-xs font-black text-slate-800 outline-none focus:border-indigo-400 focus:bg-white"
+                      placeholder={`Column ${cellIndex + 1}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeColumn(cellIndex)}
+                      disabled={maxColumns <= 1}
+                      className="rounded-md p-1 text-slate-300 hover:bg-white hover:text-red-500 disabled:opacity-25"
+                      title="ลบคอลัมน์"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                </th>
+              ))}
+              <th className="w-10 border border-slate-300 bg-slate-100" />
+            </tr>
+          </thead>
+          <tbody>
+            {bodyRows.map((row, bodyIndex) => {
+              const rowIndex = bodyIndex + 1;
+              return (
+                <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/70">
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex} className="min-w-28 border border-slate-300 p-1.5 align-top">
+                      <textarea
+                        value={cell}
+                        onChange={(event) => updateCell(rowIndex, cellIndex, event.target.value)}
+                        className="min-h-9 w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1 text-xs font-medium leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white"
+                        rows={1}
+                        spellCheck={false}
+                        translate="no"
+                      />
+                    </td>
+                  ))}
+                  <td className="w-10 border border-slate-300 p-1 text-center align-middle">
+                    <button
+                      type="button"
+                      onClick={() => removeRow(rowIndex)}
+                      disabled={rows.length <= 2}
+                      className="rounded-md p-1 text-slate-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-25"
+                      title="ลบแถว"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
@@ -294,6 +456,20 @@ export default function GroundTruthEditorZone({
   const getRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
     return currentPageRois.find(roi => roi.id === result.roiId) || currentPageRois.find(roi => roi.fieldName === result.fieldName);
   };
+
+  const currentPageResultGroups = useMemo(() => {
+    const typedResults = currentPageOcrResults.map((res) => {
+      const matchedRoi = currentPageRois.find(roi => roi.id === res.roiId) || currentPageRois.find(roi => roi.fieldName === res.fieldName);
+      const fieldType = (matchedRoi?.type || res.type || "text") as DisplayFieldType;
+      return { res, matchedRoi, fieldType };
+    });
+
+    return {
+      text: typedResults.filter(item => item.fieldType === "text"),
+      table: typedResults.filter(item => item.fieldType === "table"),
+      image: typedResults.filter(item => item.fieldType === "image"),
+    };
+  }, [currentPageOcrResults, currentPageRois]);
 
   const handlePrevImage = () => {
     if (onImageIndexChange && currentImageIndex > 0) {
@@ -557,144 +733,230 @@ export default function GroundTruthEditorZone({
             </div>
           </div>
 
-          <div className="overflow-y-auto flex-1 min-h-0">
-            <table className="min-w-full text-xs text-left text-slate-600 table-fixed border-collapse">
-              <thead className="bg-slate-50 font-sans text-slate-500 font-semibold border-b border-slate-100 sticky top-0 z-10">
-                <tr>
-                  <th className="px-4 py-3 w-[22%]">ชื่อข้อมูล</th>
-                  <th className="px-4 py-3 w-[39%]">ข้อความจาก OCR</th>
-                  <th className="px-4 py-3 w-[39%]">ข้อความที่แก้ไขได้</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {currentPageOcrResults.map((res) => {
-                  const isSelected = activeFieldId === res.id;
-                  const matchedRoi = getRoiForResult(res);
-                  const fieldType = matchedRoi?.type || res.type || "text";
-                  return (
-                    <tr 
-                      key={res.id} 
-                      onClick={() => setActiveFieldId(res.id)} 
-                      className={`group cursor-pointer border-l-4 transition-colors ${
-                        isSelected
-                          ? 'border-l-indigo-500 bg-indigo-50/40 font-medium'
-                          : 'border-l-transparent hover:bg-slate-50/50'
-                      }`}
-                    >
+          <div className="overflow-y-auto flex-1 min-h-0 bg-slate-50/40 p-4">
+            {currentPageOcrResults.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-white py-20 text-center text-slate-400 font-medium">
+                ยังไม่มีผล OCR ในหน้านี้ <br />
+                <span className="text-[11px] font-normal text-slate-400">กลับไปหน้า ROI แล้วเริ่มอ่านข้อมูลก่อน</span>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {currentPageResultGroups.text.length > 0 && (
+                  <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <FileText size={15} className="text-slate-500" />
+                        <h4 className="text-xs font-black text-slate-800">ข้อความ</h4>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
+                        {currentPageResultGroups.text.length} รายการ
+                      </span>
+                    </div>
 
-                      <td className="px-4 py-4 align-top" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center gap-1 bg-transparent border border-transparent rounded px-1 group-hover:border-slate-200 focus-within:border-indigo-400 focus-within:bg-white transition-all">
-                            <input
-                              type="text"
-                              value={res.fieldName}
-                              onFocus={() => setActiveFieldId(res.id)}
-                              onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
-                              className="w-full bg-transparent font-bold text-slate-700 focus:outline-none py-1 text-xs truncate"
-                              placeholder="ชื่อข้อมูล..."
-                            />
-                            <Edit3 size={12} className="text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
-                          </div>
-                          {matchedRoi && (
-                            <div className="flex items-center gap-1.5 px-1 text-[9px] font-bold text-slate-400 uppercase select-none">
-                              {renderTypeIcon(matchedRoi.type, 10)}
-                              <span>ประเภท: {fieldType}</span>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      
-
-                      <td className="px-4 py-4 align-top w-[39%]">
-                        <div className="flex flex-col gap-1.5 h-full justify-between">
-                          {fieldType === 'image' && matchedRoi ? (
-                            <div className="flex flex-col gap-1 bg-white border border-slate-200 p-1.5 rounded-xl w-fit shadow-xs">
-                              <CroppedRoiPreview previewUrl={previewUrl} roi={matchedRoi} />
-                              <span className="text-[9px] font-bold text-slate-400">ภาพตัวอย่างจาก ROI</span>
-                            </div>
-                          ) : fieldType === 'table' ? (
-                            <div className="flex flex-col gap-2">
-                              <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                                <Table size={12} className="text-indigo-500" />
-                                <span>ผลถอดข้อมูลตาราง</span>
+                    <div className="divide-y divide-slate-100">
+                      {currentPageResultGroups.text.map(({ res, matchedRoi, fieldType }) => {
+                        const isSelected = activeFieldId === res.id;
+                        return (
+                          <div
+                            key={res.id}
+                            onClick={() => setActiveFieldId(res.id)}
+                            className={`grid grid-cols-1 gap-3 p-4 transition-colors lg:grid-cols-[minmax(150px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] ${
+                              isSelected ? "bg-indigo-50/50 ring-1 ring-inset ring-indigo-100" : "hover:bg-slate-50"
+                            }`}
+                          >
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center gap-1 rounded border border-transparent px-1 transition-all focus-within:border-indigo-400 focus-within:bg-white">
+                                <input
+                                  type="text"
+                                  value={res.fieldName}
+                                  onFocus={() => setActiveFieldId(res.id)}
+                                  onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
+                                  className="w-full bg-transparent py-1 text-xs font-bold text-slate-800 focus:outline-none"
+                                  placeholder="ชื่อข้อมูล..."
+                                />
+                                <Edit3 size={12} className="shrink-0 text-slate-300" />
                               </div>
-                              <TableResultPreview value={getRawOcrText(res)} />
+                              <div className="mt-1.5 flex items-center gap-1.5 px-1 text-[9px] font-bold uppercase text-slate-400">
+                                {renderTypeIcon(fieldType, 10)}
+                                <span>ประเภท: {getFieldTypeLabel(fieldType)}</span>
+                              </div>
+                              <span className={`mt-2 inline-flex w-fit rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${res.confidence >= 0.8 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                                ความมั่นใจ: {(res.confidence * 100).toFixed(1)}%
+                              </span>
                             </div>
-                          ) : (
-                            <div
-                              className="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-slate-650 font-medium text-xs break-words leading-relaxed shadow-sm normal-case"
-                              style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
-                              translate="no"
-                            >
-                              {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(ไม่พบข้อความ)</span>}
-                            </div>
-                          )}
-                          <span className={`w-fit px-1.5 py-0.5 rounded text-[10px] font-mono font-bold mt-1 ${res.confidence >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                            ความมั่นใจ: {(res.confidence * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                      </td>
-                      
 
-                      <td className="px-4 py-4 align-top w-[39%]" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex flex-col gap-1.5 h-full justify-between">
-                          {fieldType === 'image' ? (
-                            <div className="w-full bg-slate-50/50 border border-dashed border-slate-200 rounded-xl px-3 py-3 text-slate-400 font-bold text-center text-xs">
-                              Field รูปภาพ ไม่มีข้อความ OCR
+                            <div>
+                              <p className="mb-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความจาก OCR</p>
+                              <div
+                                className="min-h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium leading-relaxed text-slate-700 shadow-sm normal-case"
+                                style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
+                                translate="no"
+                              >
+                                {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(ไม่พบข้อความ)</span>}
+                              </div>
                             </div>
-                          ) : (
-                            <>
-                            {fieldType === 'table' && (
-                              <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-2 text-[10px] font-semibold text-indigo-700">
-                                แก้ไขข้อมูลตารางในรูปแบบข้อความ/JSON/Markdown ตามที่ OCR ส่งกลับมา
+
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <p className="mb-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความที่แก้ไขได้</p>
+                              <textarea
+                                value={res.extractedText}
+                                onFocus={() => setActiveFieldId(res.id)}
+                                onInput={autoResizeTextarea}
+                                autoCapitalize="off"
+                                autoComplete="off"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                translate="no"
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                data-enable-grammarly="false"
+                                ref={(el) => {
+                                  if (el) {
+                                    el.style.height = "auto";
+                                    el.style.height = `${el.scrollHeight}px`;
+                                  }
+                                }}
+                                onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))}
+                                className="min-h-10 w-full resize-none overflow-hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium leading-relaxed text-slate-800 shadow-inner transition-all focus:border-indigo-500 focus:outline-none normal-case"
+                                style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
+                                placeholder="แก้ไขข้อความ OCR..."
+                                rows={1}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                {currentPageResultGroups.table.length > 0 && (
+                  <section className="rounded-2xl border border-indigo-200 bg-white shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 border-b border-indigo-100 bg-indigo-50/60 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Table size={15} className="text-indigo-600" />
+                        <h4 className="text-xs font-black text-slate-900">ตาราง</h4>
+                      </div>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-indigo-600 ring-1 ring-indigo-100">
+                        {currentPageResultGroups.table.length} รายการ
+                      </span>
+                    </div>
+
+                    <div className="space-y-4 p-4">
+                      {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
+                        const isSelected = activeFieldId === res.id;
+                        return (
+                          <article
+                            key={res.id}
+                            onClick={() => setActiveFieldId(res.id)}
+                            className={`rounded-2xl border bg-white p-4 transition-colors ${
+                              isSelected ? "border-indigo-300 bg-indigo-50/30 shadow-sm" : "border-slate-200 hover:border-indigo-200"
+                            }`}
+                          >
+                            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div onClick={(e) => e.stopPropagation()} className="min-w-0 flex-1">
+                                <div className="flex max-w-sm items-center gap-1 rounded border border-transparent px-1 transition-all focus-within:border-indigo-400 focus-within:bg-white">
+                                  <input
+                                    type="text"
+                                    value={res.fieldName}
+                                    onFocus={() => setActiveFieldId(res.id)}
+                                    onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
+                                    className="w-full bg-transparent py-1 text-sm font-black text-slate-800 focus:outline-none"
+                                    placeholder="ชื่อข้อมูล..."
+                                  />
+                                  <Edit3 size={12} className="shrink-0 text-slate-300" />
+                                </div>
+                                <div className="mt-1 flex items-center gap-1.5 px-1 text-[9px] font-bold uppercase text-slate-400">
+                                  {renderTypeIcon(fieldType, 10)}
+                                  <span>ประเภท: {getFieldTypeLabel(fieldType)}</span>
+                                </div>
+                              </div>
+                              <span className={`inline-flex w-fit rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${res.confidence >= 0.8 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                                ความมั่นใจ: {(res.confidence * 100).toFixed(1)}%
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-4">
+                              <div>
+                                <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ผลตารางจาก OCR</p>
+                                <TableResultPreview value={getRawOcrText(res)} />
+                              </div>
+
+                              <div onClick={(e) => e.stopPropagation()}>
+                                <EditableTableResult
+                                  value={res.extractedText || getRawOcrText(res)}
+                                  onChange={(nextValue) =>
+                                    setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue } : item))
+                                  }
+                                />
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                {currentPageResultGroups.image.length > 0 && (
+                  <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <ImageIcon size={15} className="text-slate-500" />
+                        <h4 className="text-xs font-black text-slate-800">รูปภาพ</h4>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
+                        {currentPageResultGroups.image.length} รายการ
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+                      {currentPageResultGroups.image.map(({ res, matchedRoi, fieldType }) => {
+                        const isSelected = activeFieldId === res.id;
+                        return (
+                          <article
+                            key={res.id}
+                            onClick={() => setActiveFieldId(res.id)}
+                            className={`rounded-2xl border p-3 transition-colors ${
+                              isSelected ? "border-indigo-300 bg-indigo-50/40" : "border-slate-200 bg-white hover:bg-slate-50"
+                            }`}
+                          >
+                            <div onClick={(e) => e.stopPropagation()} className="mb-3">
+                              <div className="flex items-center gap-1 rounded border border-transparent px-1 transition-all focus-within:border-indigo-400 focus-within:bg-white">
+                                <input
+                                  type="text"
+                                  value={res.fieldName}
+                                  onFocus={() => setActiveFieldId(res.id)}
+                                  onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, fieldName: e.target.value } : item))}
+                                  className="w-full bg-transparent py-1 text-xs font-bold text-slate-800 focus:outline-none"
+                                  placeholder="ชื่อข้อมูล..."
+                                />
+                                <Edit3 size={12} className="shrink-0 text-slate-300" />
+                              </div>
+                              <div className="mt-1 flex items-center gap-1.5 px-1 text-[9px] font-bold uppercase text-slate-400">
+                                {renderTypeIcon(fieldType, 10)}
+                                <span>ประเภท: {getFieldTypeLabel(fieldType)}</span>
+                              </div>
+                            </div>
+
+                            {matchedRoi ? (
+                              <div className="w-fit rounded-xl border border-slate-200 bg-white p-2 shadow-inner">
+                                <CroppedRoiPreview previewUrl={previewUrl} roi={matchedRoi} maxWidth={220} />
+                              </div>
+                            ) : (
+                              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs font-bold text-slate-400">
+                                ไม่มีภาพตัวอย่าง ROI
                               </div>
                             )}
-                            <textarea 
-                              value={res.extractedText} 
-                              onFocus={() => setActiveFieldId(res.id)} 
-                              onInput={autoResizeTextarea}
-                              autoCapitalize="off"
-                              autoComplete="off"
-                              autoCorrect="off"
-                              spellCheck={false}
-                              translate="no"
-                              data-gramm="false"
-                              data-gramm_editor="false"
-                              data-enable-grammarly="false"
-                              ref={(el) => {
-                                if (el) {
-                                  el.style.height = "auto";
-                                  el.style.height = `${el.scrollHeight}px`;
-                                }
-                              }}
-                              onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))} 
-                              className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-medium text-xs leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner normal-case" 
-                              style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
-                              placeholder="แก้ไขข้อความ OCR..."
-                              rows={fieldType === 'table' ? 5 : 1}
-                            />
-                            </>
-                          )}
-                          <div className="text-[10px] py-0.5 opacity-0 select-none pointer-events-none mt-1" aria-hidden="true">
-                            Spacer
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-
-                {currentPageOcrResults.length === 0 && (
-                  <tr>
-                    <td colSpan={3} className="text-center py-20 text-slate-400 font-medium bg-slate-50/50">
-                      ยังไม่มีผล OCR ในหน้านี้ <br />
-                      <span className="text-[11px] font-normal text-slate-400">กลับไปหน้า ROI แล้วเริ่มอ่านข้อมูลก่อน</span>
-                    </td>
-                  </tr>
+                            <p className="mt-2 text-[10px] font-semibold text-slate-400">Field รูปภาพใช้สำหรับตัดภาพเท่านั้น ไม่มีข้อความ OCR</p>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
                 )}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
 
           <div className="p-4 border-t bg-slate-50/50 flex gap-3 relative">

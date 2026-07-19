@@ -8,7 +8,7 @@ import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWork
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
 import { ROI, OCRResult, TemplateField } from "../types/ocr";
-import { ADMIN_API_BASE_URL, detectTemplateDev, fetchTemplateBundle, type DetectionDevResult, type DetectionProjectedField } from "../admin/adminApi";
+import { ADMIN_API_BASE_URL, detectTemplateDev, fetchTemplateBundle, type DetectionDevResult } from "../admin/adminApi";
 import { ActionButton, InlineState } from "../shared/ui";
 
 interface PageConfig {
@@ -139,17 +139,8 @@ const loadImageElement = (src: string) =>
     imageObj.src = src;
   });
 
-const templateFieldsToWorkspaceRois = async (
-  fields: TemplateField[],
-  imageList: string[],
-  projectedFields: DetectionProjectedField[] = []
-) => {
+const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList: string[]) => {
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
-  const projectedByFieldId = new Map(
-    projectedFields
-      .filter((field) => field.fieldId && field.projectedRoi && field.projectionValid !== false)
-      .map((field) => [field.fieldId as string, field])
-  );
 
   return fields
     .filter((field) => !field.useForVerification)
@@ -160,20 +151,7 @@ const templateFieldsToWorkspaceRois = async (
         left.fieldName.localeCompare(right.fieldName)
     )
     .map((field) => {
-      const projectedField = projectedByFieldId.get(field.id);
-      const projectedRoi =
-        projectedField?.adaptiveStatus === "refined" && projectedField.adaptiveRoi
-          ? projectedField.adaptiveRoi
-          : projectedField?.projectedRoi;
-      const roi = projectedRoi
-        ? {
-            pageNumber: Number(projectedRoi.page_number ?? field.pageNumber),
-            xRatio: Number(projectedRoi.x_ratio ?? field.roi.xRatio),
-            yRatio: Number(projectedRoi.y_ratio ?? field.roi.yRatio),
-            widthRatio: Number(projectedRoi.width_ratio ?? field.roi.widthRatio),
-            heightRatio: Number(projectedRoi.height_ratio ?? field.roi.heightRatio),
-          }
-        : field.roi;
+      const roi = field.roi;
       const pageIndex = Math.max(0, roi.pageNumber - 1);
       const pageImage = pageImages[pageIndex];
       const displayWidth = 750;
@@ -215,7 +193,7 @@ const buildTemplateCanvasImages = async (sourceImages: string[], detection: Dete
     const pageCandidate =
       page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
       (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null);
-    const extractionSrc = backendPreviewSrc(pageCandidate?.extractionImagePreviewUrl);
+    const extractionSrc = backendPreviewSrc(pageCandidate?.alignedImagePreviewUrl || pageCandidate?.extractionImagePreviewUrl);
     if (!extractionSrc) return sourceImage;
     try {
       return await imageUrlToCanvasSafeSrc(extractionSrc);
@@ -264,11 +242,7 @@ export default function Home() {
     name: string;
     confidence?: number | null;
     decisionReason?: string | null;
-    projectionStatus?: string | null;
-    projectionConfidence?: number | null;
-    projectionFallbackReason?: string | null;
-    adaptiveRefinedCount?: number | null;
-    adaptiveFallbackCount?: number | null;
+    alignmentStatus?: string | null;
   } | null>(null);
 
   const handleUploadSuccess = (urls: string[]) => {
@@ -359,32 +333,13 @@ export default function Home() {
       setPreviewUrl(templateCanvasImages[currentIndex] || templateCanvasImages[0] || "");
       setImage(templateCanvasImages[currentIndex] || templateCanvasImages[0] || null);
 
-      const detectedRois = await templateFieldsToWorkspaceRois(
-        bundle.fields,
-        templateCanvasImages,
-        detection.bestCandidate?.projectedFields || []
-      );
-      const projection = detection.bestCandidate?.projection || {};
-      const roiCoordinateSpace = detection.bestCandidate?.roiCoordinateSpace || (projection.roi_coordinate_space as string | undefined);
+      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages);
       setMatchedTemplate({
         id: bundle.template.id,
         name: bundle.template.name,
         confidence: detection.bestCandidate?.finalScore ?? detection.bestCandidate?.score ?? null,
         decisionReason: detection.bestCandidate?.decisionReason ?? null,
-        projectionStatus: (projection.status as string | null | undefined) ?? null,
-        projectionConfidence: typeof projection.confidence === "number" ? projection.confidence : null,
-        projectionFallbackReason:
-          roiCoordinateSpace === "template_canvas"
-            ? "Using aligned template canvas and original template ROI"
-            : ((projection.fallback_reason as string | null | undefined) ?? null),
-        adaptiveRefinedCount:
-          typeof (projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_refined === "number"
-            ? ((projection.adaptive_refinement as Record<string, unknown>).text_fields_refined as number)
-            : null,
-        adaptiveFallbackCount:
-          typeof (projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_fallback === "number"
-            ? ((projection.adaptive_refinement as Record<string, unknown>).text_fields_fallback as number)
-            : null,
+        alignmentStatus: detection.bestCandidate?.alignmentStatus ?? null,
       });
 
       if (detectedRois.length === 0) {
@@ -696,7 +651,7 @@ export default function Home() {
             template_name: matchedTemplate.name,
             confidence: matchedTemplate.confidence ?? null,
             decision_reason: matchedTemplate.decisionReason ?? null,
-            projection_status: matchedTemplate.projectionStatus ?? null,
+            alignment_status: matchedTemplate.alignmentStatus ?? null,
           }
         : null,
       summary: {

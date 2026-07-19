@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 import cv2
 
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
-from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr
+from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 
 
 class OcrUnavailableError(RuntimeError):
@@ -57,6 +57,76 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
         "engine": result.get("engine") or "paddle_thai_ocr",
         "model": result.get("model"),
     }
+
+
+def _crop_roi_from_image(image, roi: Dict[str, Any]):
+    image_width, image_height = image.size
+    x_ratio = float(roi.get("x_ratio", 0) or 0)
+    y_ratio = float(roi.get("y_ratio", 0) or 0)
+    width_ratio = float(roi.get("width_ratio", 0) or 0)
+    height_ratio = float(roi.get("height_ratio", 0) or 0)
+
+    x = max(0, min(image_width - 1, int(round(x_ratio * image_width))))
+    y = max(0, min(image_height - 1, int(round(y_ratio * image_height))))
+    width = max(1, int(round(width_ratio * image_width)))
+    height = max(1, int(round(height_ratio * image_height)))
+    right = min(image_width, x + width)
+    bottom = min(image_height, y + height)
+    if right <= x or bottom <= y:
+        raise ValueError("ROI crop is outside the image bounds")
+    return image.crop((x, y, right, bottom))
+
+
+def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    if not roi_items:
+        return {}
+
+    Image, np = _load_image()
+    path = Path(image_path)
+    if not path.exists():
+        raise ValueError(f"Verification image not found: {image_path}")
+
+    image = Image.open(path).convert("RGB")
+    crops = []
+    keys = []
+    failed: Dict[str, Dict[str, Any]] = {}
+    for index, item in enumerate(roi_items):
+        key = str(item.get("id") or item.get("field_id") or index)
+        try:
+            crop = _crop_roi_from_image(image, item.get("roi") or item)
+            crops.append(cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR))
+            keys.append(key)
+        except Exception as error:
+            failed[key] = {
+                "text": "",
+                "confidence": 0.0,
+                "preprocessing": "paddle_text_recognition",
+                "segments": [],
+                "engine": "paddle_thai_ocr",
+                "model": None,
+                "error": str(error),
+            }
+
+    results: Dict[str, Dict[str, Any]] = dict(failed)
+    if not crops:
+        return results
+
+    try:
+        batch_results = run_paddle_thai_ocr_batch(crops)
+    except PaddleThaiOcrUnavailableError as error:
+        raise OcrUnavailableError(str(error)) from error
+
+    for key, result in zip(keys, batch_results):
+        results[key] = {
+            "text": str(result.get("text") or ""),
+            "confidence": round(float(result.get("confidence") or 0.0), 4),
+            "preprocessing": result.get("preprocessing") or "paddle_text_recognition",
+            "segments": result.get("segments") or [],
+            "engine": result.get("engine") or "paddle_thai_ocr",
+            "model": result.get("model"),
+            "error": result.get("error"),
+        }
+    return results
 
 
 def ocr_text_regions(image_path: str) -> Dict[str, Any]:

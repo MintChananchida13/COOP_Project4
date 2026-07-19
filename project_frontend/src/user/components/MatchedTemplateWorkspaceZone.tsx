@@ -11,11 +11,7 @@ interface MatchedTemplateInfo {
   name: string;
   confidence?: number | null;
   decisionReason?: string | null;
-  projectionStatus?: string | null;
-  projectionConfidence?: number | null;
-  projectionFallbackReason?: string | null;
-  adaptiveRefinedCount?: number | null;
-  adaptiveFallbackCount?: number | null;
+  alignmentStatus?: string | null;
 }
 
 interface MatchedTemplateWorkspaceZoneProps extends WorkspaceCustomEditorProps {
@@ -48,8 +44,11 @@ export default function MatchedTemplateWorkspaceZone({
       readOnly={false}
       hideOcrActions
       hideDrawTools
+      hideFooterActions
       lockRoiMetadata
       centerCanvas
+      layoutVariant="user"
+      workspaceHeightClassName="h-[520px]"
       getRoiBadges={() => []}
       getRoiClassName={(roi, selected) => {
         const disabled = roi.enabled === false;
@@ -70,6 +69,7 @@ export default function MatchedTemplateWorkspaceZone({
               : "bg-white border-emerald-200 text-emerald-700 font-bold"
         }`
       }
+      rightPanelClassName="min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col xl:col-span-4"
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
         const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
         const selectedRoi = currentPageRois.find((roi) => roi.id === selectedId);
@@ -78,12 +78,13 @@ export default function MatchedTemplateWorkspaceZone({
         );
 
         return (
-          <>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
                 onClick={props.onBackToAdjust}
-                className="ui-button-text inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-700 transition-colors hover:bg-slate-50"
+                className="ui-button-text inline-flex min-w-0 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-700 transition-colors hover:bg-slate-50"
               >
                 <ArrowLeft size={14} />
                 กลับไปปรับกรอบ
@@ -92,14 +93,14 @@ export default function MatchedTemplateWorkspaceZone({
               <button
                 type="button"
                 onClick={onSwitchToCustom}
-                className="ui-button-text rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
+                className="ui-button-text min-w-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
               >
                 ไปหน้า OCR แบบกำหนดเอง
               </button>
             </div>
 
-            <section className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-              <div className="flex items-start gap-3">
+            <section className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+              <div className="flex items-start gap-2.5">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm ring-1 ring-emerald-100">
                   <CheckCircle2 size={18} />
                 </div>
@@ -112,42 +113,15 @@ export default function MatchedTemplateWorkspaceZone({
                       : "ยังไม่มีค่าความมั่นใจ"}
                     {matchedTemplate.decisionReason ? ` · ${matchedTemplate.decisionReason}` : ""}
                   </p>
-                  {matchedTemplate.projectionStatus && (
-                    <div className="mt-3 rounded-xl border border-emerald-100 bg-white/75 px-3 py-2">
-                      <p className="ui-caption font-semibold text-emerald-800">
-                        {matchedTemplate.projectionStatus === "success" || matchedTemplate.projectionStatus === "partial"
-                          ? "ระบบปรับตำแหน่ง ROI ให้อัตโนมัติ"
-                          : "ใช้ตำแหน่ง ROI เดิมของ Template"}
-                      </p>
-                      <p className="ui-caption ui-tabular mt-0.5 text-emerald-700">
-                        สถานะการปรับตำแหน่ง {matchedTemplate.projectionStatus}
-                        {matchedTemplate.projectionConfidence !== undefined && matchedTemplate.projectionConfidence !== null
-                          ? ` · confidence ${(matchedTemplate.projectionConfidence * 100).toFixed(1)}%`
-                          : ""}
-                      </p>
-                      {matchedTemplate.projectionFallbackReason && (
-                        <p className="ui-caption mt-0.5 text-amber-700">{matchedTemplate.projectionFallbackReason}</p>
-                      )}
-                      {(matchedTemplate.adaptiveRefinedCount !== undefined || matchedTemplate.adaptiveFallbackCount !== undefined) && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span
-                            title="Adaptive ROI refined text fields using OCR word boxes inside the projected search region."
-                            className="ui-caption ui-tabular rounded-full bg-emerald-100 px-2 py-1 font-bold text-emerald-700"
-                          >
-                            ROI ปรับละเอียดแล้ว {matchedTemplate.adaptiveRefinedCount ?? 0}
-                          </span>
-                          {(matchedTemplate.adaptiveFallbackCount ?? 0) > 0 && (
-                            <span
-                              title="Some fields used projected ROI because OCR word boxes were not reliable enough."
-                              className="ui-caption ui-tabular rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-700"
-                            >
-                              ใช้ ROI สำรอง {matchedTemplate.adaptiveFallbackCount ?? 0}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <div className="mt-3 rounded-xl border border-emerald-100 bg-white/75 px-3 py-2">
+                    <p className="ui-caption break-words font-semibold text-emerald-800">
+                      ใช้ภาพที่จัดแนวเข้ากับ Template และใช้ ROI ต้นฉบับของ Template
+                    </p>
+                    <p className="ui-caption mt-0.5 break-words text-emerald-700">
+                      ไม่มีการปรับ ROI อัตโนมัติ
+                      {matchedTemplate.alignmentStatus ? ` · Alignment ${matchedTemplate.alignmentStatus}` : ""}
+                    </p>
+                  </div>
                 </div>
               </div>
             </section>
@@ -157,7 +131,7 @@ export default function MatchedTemplateWorkspaceZone({
                 <div>
                   <h3 className="ui-card-title text-slate-800">เลือกข้อมูลที่ต้องการอ่าน</h3>
                   <p className="ui-body mt-1 text-slate-500">
-                    เลือกรายการข้อมูลที่ต้องการอ่านจาก Template นี้ สามารถปรับตำแหน่งและขนาดกรอบได้ แต่ไม่สามารถเปลี่ยนชื่อหรือประเภท Field
+                    เลือก Field ที่ต้องการอ่าน สามารถขยับและปรับขนาดกรอบได้ แต่ไม่สามารถเปลี่ยนชื่อหรือประเภท Field
                   </p>
                 </div>
                 <span className="ui-caption ui-tabular shrink-0 rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
@@ -193,7 +167,7 @@ export default function MatchedTemplateWorkspaceZone({
                 />
               </div>
 
-              <div className="mt-3 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+              <div className="mt-3 max-h-[320px] space-y-2 overflow-y-auto pr-1">
                 {currentPageRois.length === 0 ? (
                   <p className="ui-body rounded-xl bg-slate-50 p-3 text-slate-500">ไม่พบ Field สำหรับหน้านี้</p>
                 ) : filteredRois.length === 0 ? (
@@ -245,17 +219,21 @@ export default function MatchedTemplateWorkspaceZone({
               </section>
             )}
 
-            <button
-              type="button"
-              disabled={props.isLoading || enabledCount === 0}
-              onClick={triggerOCRProcessing}
-              className="ui-button-text ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500"
-            >
-              <Cpu size={14} className={props.isLoading ? "animate-spin" : ""} />
-              {props.isLoading ? "กำลังอ่านข้อมูล..." : `อ่านข้อมูลที่เลือก (${enabledCount})`}
-            </button>
-            {enabledCount === 0 && <InlineState tone="warning" message="เลือก Field อย่างน้อย 1 รายการก่อนเริ่ม OCR" />}
-          </>
+            </div>
+
+            <div className="space-y-3 border-t border-slate-200 bg-white p-4">
+              {enabledCount === 0 && <InlineState tone="warning" message="เลือก Field อย่างน้อย 1 รายการก่อนเริ่ม OCR" />}
+              <button
+                type="button"
+                disabled={props.isLoading || enabledCount === 0}
+                onClick={triggerOCRProcessing}
+                className="ui-button-text ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-xl bg-[#0052cc] px-6 py-3.5 text-white shadow-md transition-all hover:bg-[#0043a4] disabled:bg-slate-400 disabled:text-white/80"
+              >
+                <Cpu size={14} className={props.isLoading ? "animate-spin" : ""} />
+                {props.isLoading ? "กำลังอ่านข้อมูล..." : `อ่านข้อมูลที่เลือก (${enabledCount})`}
+              </button>
+            </div>
+          </div>
         );
       }}
     />

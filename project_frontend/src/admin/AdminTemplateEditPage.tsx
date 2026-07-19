@@ -25,6 +25,11 @@ type LoadStatus = "loading" | "loaded" | "fallback" | "error";
 
 const editableTemplateStatuses: TemplateStatus[] = ["draft","validated","active", "nonactive"];
 
+interface AutoDetectedTemplateField {
+  roi: RoiRatio;
+  defaults: Partial<TemplateField>;
+}
+
 const defaultRoi = (pageNumber: number): RoiRatio => ({
   pageNumber,
   xRatio: 0.1,
@@ -321,6 +326,75 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       });
   };
 
+  const handleReplacePageExtractionFields = (pageNumber: number, detectedFields: AutoDetectedTemplateField[]) => {
+    const targetPage = selectedTemplatePages.find((page) => page.pageNumber === pageNumber);
+    if (!targetPage) return;
+
+    const previousFields = selectedTemplateFields;
+    const fieldsToDelete = previousFields.filter((field) => field.pageNumber === pageNumber && !field.useForVerification);
+    const remainingFields = previousFields.filter((field) => !(field.pageNumber === pageNumber && !field.useForVerification));
+
+    const optimisticFields = detectedFields.map(({ roi, defaults }, index) => {
+      localFieldSequenceRef.current += 1;
+      const fieldNumber = index + 1;
+      const fieldName = defaults.fieldName || `field_${fieldNumber}`;
+      return {
+        id: `local_field_${Date.now()}_${localFieldSequenceRef.current}`,
+        templateId,
+        templatePageId: targetPage.id,
+        pageNumber,
+        fieldName,
+        displayLabel: defaults.displayLabel || fieldName,
+        roi,
+        dataType: defaults.dataType || "text",
+        userSelectable: defaults.userSelectable ?? true,
+        defaultSelected: defaults.defaultSelected ?? true,
+        useForVerification: false,
+        expectedText: "",
+        matchType: "",
+        requiredForVerification: false,
+        extractionMethod: defaults.extractionMethod || "paddle_thai_ocr",
+        roiPadding: defaults.roiPadding ?? 0,
+        verificationWeight: defaults.verificationWeight ?? 1,
+        sortOrder: fieldNumber,
+      } satisfies TemplateField;
+    });
+
+    setSelectedTemplateFields([...remainingFields, ...optimisticFields]);
+
+    if (!canPersistToBackend) {
+      setLocalOnly("Auto ROI fields replaced locally.");
+      return;
+    }
+
+    (async () => {
+      try {
+        for (const field of fieldsToDelete) {
+          if (!field.id.startsWith("local_field_")) {
+            await deleteTemplateFieldApi(templateId, field.id);
+          }
+        }
+
+        let latestBundle: Awaited<ReturnType<typeof createTemplateFieldApi>> | null = null;
+        for (const field of optimisticFields) {
+          latestBundle = await createTemplateFieldApi(templateId, field);
+        }
+
+        if (latestBundle) {
+          applyBundle(latestBundle);
+        } else {
+          const bundle = await fetchTemplateBundle(templateId);
+          applyBundle(bundle);
+        }
+        setSaved(`Auto ROI replaced ${fieldsToDelete.length} old fields with ${optimisticFields.length} fields.`);
+      } catch (error) {
+        console.warn("Auto ROI replace failed.", error);
+        setSelectedTemplateFields(previousFields);
+        setLocalOnly("Auto ROI replace could not be persisted.");
+      }
+    })();
+  };
+
   const handleAddIgnoreRegion = (roi?: RoiRatio) => {
     if (!currentTemplatePage) return;
     const nextIndex = selectedIgnoreRegions.length + 1;
@@ -553,6 +627,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             onAddField={handleAddField}
             onUpdateField={handleUpdateField}
             onReorderFields={handleReorderFields}
+            onReplacePageExtractionFields={handleReplacePageExtractionFields}
             onDeleteField={handleDeleteField}
             onAddIgnoreRegion={handleAddIgnoreRegion}
             onUpdateIgnoreRegion={handleUpdateIgnoreRegion}

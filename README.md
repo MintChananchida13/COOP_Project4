@@ -10,7 +10,7 @@
   Next.js + TypeScript สำหรับ User OCR Studio และ Admin Template Management
 
 - `project_backend`  
-  FastAPI + SQLite + EasyOCR + OpenCV สำหรับ OCR, Template CRUD, Detection Pipeline, Embedding/Vector Store Adapter
+  FastAPI + PostgreSQL + PaddleOCR + OpenCV สำหรับ OCR, Template CRUD, Detection Pipeline และ Layout Signature Matching
 
 Blueprint ใน `project-blueprint-v4` เป็นเอกสารออกแบบ ไม่ใช่ runtime code
 
@@ -166,12 +166,57 @@ COOP_Project4/
 
 ## วิธีรันระบบ
 
+### Production Database: PostgreSQL
+
+ระบบ backend รองรับ PostgreSQL ผ่าน `DATABASE_URL` แล้ว โดยยัง fallback ไป SQLite เดิมได้ถ้าไม่ได้ตั้งค่า env นี้
+
+```powershell
+docker run --name ocr-postgres `
+  -e POSTGRES_DB=ocr_studio `
+  -e POSTGRES_USER=postgres `
+  -e POSTGRES_PASSWORD=postgres `
+  -p 5432:5432 `
+  -d postgres:16
+```
+
+ตั้งค่า env ก่อนรัน backend:
+
+```powershell
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
+$env:MODEL_SERVICE_URL="http://127.0.0.1:8010"
+uvicorn main:app
+```
+
+เมื่อใช้ PostgreSQL ครั้งแรก backend จะสร้างตารางหลักที่จำเป็นให้เอง เช่น `templates`, `template_pages`, `template_fields`, `template_requests`, `embedding_jobs` และ `verification_anchor_embeddings`
+
+### ย้ายข้อมูลเดิมจาก SQLite ไป PostgreSQL
+
+ใช้สคริปต์นี้เมื่อต้องการย้าย template, request, page, ROI, embedding job, verification anchor embedding และ log เดิมจาก `project_frontend/prisma/dev.db`
+
+ตรวจจำนวนข้อมูลก่อน:
+
+```powershell
+cd project_backend
+.\venv\Scripts\activate
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
+python migrate_sqlite_to_postgres.py --dry-run
+```
+
+ย้ายข้อมูลจริง:
+
+```powershell
+python migrate_sqlite_to_postgres.py
+```
+
+สคริปต์นี้ไม่ลบข้อมูล PostgreSQL ปลายทาง และสามารถรันซ้ำได้โดยจะ upsert ตาม `id`
+
 ### 1. Backend
 
 ```powershell
 cd project_backend
 .\venv\Scripts\activate
 pip install -r requirements.txt
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
 uvicorn main:app --reload
 ```
 
@@ -446,4 +491,3 @@ Detection:
 4. ทำ normalization backend ให้แม่นขึ้น แล้วค่อยเปิดใช้ใน production detection
 5. เพิ่ม OCR extraction pipeline หลัง final template selection แบบเต็ม รวมถึง table/image extraction
 6. ทำ permission/auth สำหรับ Admin ก่อน deploy จริง
-

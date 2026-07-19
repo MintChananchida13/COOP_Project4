@@ -1,33 +1,19 @@
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .db import connect as connect_db
 from .layout_signature_service import compare_layout_signatures, signature_from_json
 
 
-def _db_path() -> Path:
-    database_url = os.getenv("DATABASE_URL", "")
-    if database_url.startswith("file:"):
-        raw_path = database_url.replace("file:", "", 1).strip('"')
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        cwd_candidate = Path.cwd() / candidate
-        if cwd_candidate.exists():
-            return cwd_candidate
-    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
+def _connect() -> Any:
+    conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_layout_signature_column(conn)
     return conn
 
 
-def _ensure_layout_signature_column(conn: sqlite3.Connection) -> None:
+def _ensure_layout_signature_column(conn: Any) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(template_pages)").fetchall()}
     if columns and "layout_signature_json" not in columns:
         conn.execute("ALTER TABLE template_pages ADD COLUMN layout_signature_json TEXT")

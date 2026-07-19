@@ -54,55 +54,53 @@ const warpPerspective = (
   const destData = destCtx.createImageData(destW, destH);
   const destPixels = destData.data;
 
-  const x0 = corners[0].x, y0 = corners[0].y;
-  const x1 = corners[1].x, y1 = corners[1].y;
-  const x2 = corners[2].x, y2 = corners[2].y;
-  const x3 = corners[3].x, y3 = corners[3].y;
+  const solveLinearSystem = (matrix: number[][], values: number[]) => {
+    const n = values.length;
+    const a = matrix.map((row, index) => [...row, values[index]]);
+    for (let col = 0; col < n; col += 1) {
+      let pivot = col;
+      for (let row = col + 1; row < n; row += 1) {
+        if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row;
+      }
+      if (Math.abs(a[pivot][col]) < 1e-10) return null;
+      [a[col], a[pivot]] = [a[pivot], a[col]];
+      const divisor = a[col][col];
+      for (let j = col; j <= n; j += 1) a[col][j] /= divisor;
+      for (let row = 0; row < n; row += 1) {
+        if (row === col) continue;
+        const factor = a[row][col];
+        for (let j = col; j <= n; j += 1) a[row][j] -= factor * a[col][j];
+      }
+    }
+    return a.map((row) => row[n]);
+  };
 
-  const dx1 = x1 - x2;
-  const dx2 = x3 - x2;
-  const sx = x0 - x1 + x2 - x3;
-  const dy1 = y1 - y2;
-  const dy2 = y3 - y2;
-  const sy = y0 - y1 + y2 - y3;
-
-  let a0, a1, a2, a3, a4, a5, a6, a7;
-
-  if (sx === 0 && sy === 0) {
-    a0 = x1 - x0;
-    a1 = x2 - x1;
-    a2 = x0;
-    a3 = y1 - y0;
-    a4 = y2 - y1;
-    a5 = y0;
-    a6 = 0;
-    a7 = 0;
-  } else {
-    const denom = dx1 * dy2 - dy1 * dx2;
-    const g = (sx * dy2 - sy * dx2) / (denom || 1);
-    const h = (dx1 * sy - dy1 * sx) / (denom || 1);
-
-    a0 = x1 - x0 + g * x1;
-    a1 = x3 - x0 + h * x3;
-    a2 = x0;
-    a3 = y1 - y0 + g * y1;
-    a4 = y3 - y0 + h * y3;
-    a5 = y0;
-    a6 = g;
-    a7 = h;
-  }
+  const sourcePoints = [
+    { u: 0, v: 0, x: corners[0].x, y: corners[0].y },
+    { u: destW - 1, v: 0, x: corners[1].x, y: corners[1].y },
+    { u: destW - 1, v: destH - 1, x: corners[2].x, y: corners[2].y },
+    { u: 0, v: destH - 1, x: corners[3].x, y: corners[3].y },
+  ];
+  const matrix: number[][] = [];
+  const values: number[] = [];
+  sourcePoints.forEach(({ u, v, x, y }) => {
+    matrix.push([u, v, 1, 0, 0, 0, -u * x, -v * x]);
+    values.push(x);
+    matrix.push([0, 0, 0, u, v, 1, -u * y, -v * y]);
+    values.push(y);
+  });
+  const homography = solveLinearSystem(matrix, values);
+  if (!homography) return "";
+  const [h0, h1, h2, h3, h4, h5, h6, h7] = homography;
 
   const srcW = srcImg.naturalWidth;
   const srcH = srcImg.naturalHeight;
 
   for (let y = 0; y < destH; y++) {
-    const v = y / destH;
     for (let x = 0; x < destW; x++) {
-      const u = x / destW;
-
-      const denom = a6 * u + a7 * v + 1;
-      const srcX = Math.round((a0 * u + a1 * v + a2) / (denom || 1));
-      const srcY = Math.round((a3 * u + a4 * v + a5) / (denom || 1));
+      const denom = h6 * x + h7 * y + 1;
+      const srcX = Math.round((h0 * x + h1 * y + h2) / (denom || 1));
+      const srcY = Math.round((h3 * x + h4 * y + h5) / (denom || 1));
 
       const destIdx = (y * destW + x) * 4;
 
@@ -125,6 +123,39 @@ const warpPerspective = (
   return destCanvas.toDataURL("image/jpeg", 0.95);
 };
 
+const orderCropCorners = (corners: { x: number; y: number }[]) => {
+  const sortedByY = [...corners].sort((a, b) => a.y - b.y);
+  const top = sortedByY.slice(0, 2).sort((a, b) => a.x - b.x);
+  const bottom = sortedByY.slice(2, 4).sort((a, b) => a.x - b.x);
+  return [top[0], top[1], bottom[1], bottom[0]];
+};
+
+const extractAxisAlignedCropUrl = (
+  imgEl: HTMLImageElement,
+  corners: { x: number; y: number }[]
+): string | null => {
+  const naturalWidth = imgEl.naturalWidth;
+  const naturalHeight = imgEl.naturalHeight;
+  const minX = Math.max(0, Math.min(...corners.map((corner) => corner.x)));
+  const minY = Math.max(0, Math.min(...corners.map((corner) => corner.y)));
+  const maxX = Math.min(naturalWidth, Math.max(...corners.map((corner) => corner.x)));
+  const maxY = Math.min(naturalHeight, Math.max(...corners.map((corner) => corner.y)));
+  const width = Math.round(maxX - minX);
+  const height = Math.round(maxY - minY);
+
+  if (width < 24 || height < 24) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(imgEl, minX, minY, width, height, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", 0.95);
+};
+
 const extractPerspectiveCropAreaUrl = (imgEl: HTMLImageElement, config: PageConfig): string | null => {
   if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0 || !config.cropCorners || config.cropCorners.length !== 4) return null;
 
@@ -136,10 +167,10 @@ const extractPerspectiveCropAreaUrl = (imgEl: HTMLImageElement, config: PageConf
   const scaleX = naturalWidth / renderedWidth;
   const scaleY = naturalHeight / renderedHeight;
 
-  const naturalCorners = config.cropCorners.map(c => ({
+  const naturalCorners = orderCropCorners(config.cropCorners.map(c => ({
     x: c.x * scaleX,
     y: c.y * scaleY
-  }));
+  })));
 
   const dist = (p1: any, p2: any) => Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
   
@@ -150,10 +181,59 @@ const extractPerspectiveCropAreaUrl = (imgEl: HTMLImageElement, config: PageConf
 
   const destW = Math.round(Math.max(wTop, wBottom));
   const destH = Math.round(Math.max(hLeft, hRight));
+  const aspectRatio = destW / (destH || 1);
+  const areaRatio = (destW * destH) / (naturalWidth * naturalHeight);
 
-  if (destW <= 0 || destH <= 0) return null;
+  if (destW < 24 || destH < 24) return extractAxisAlignedCropUrl(imgEl, naturalCorners);
+  if (!Number.isFinite(aspectRatio) || aspectRatio < 0.12 || aspectRatio > 8 || areaRatio < 0.01) {
+    return extractAxisAlignedCropUrl(imgEl, naturalCorners);
+  }
   return warpPerspective(imgEl, naturalCorners, destW, destH);
 };
+
+const multiply2d = (
+  left: { a: number; b: number; c: number; d: number },
+  right: { a: number; b: number; c: number; d: number }
+) => ({
+  a: left.a * right.a + left.c * right.b,
+  b: left.b * right.a + left.d * right.b,
+  c: left.a * right.c + left.c * right.d,
+  d: left.b * right.c + left.d * right.d,
+});
+
+const buildImageTransform = (config: PageConfig) => {
+  const angleRad = (config.rotation * Math.PI) / 180;
+  const skewX = Math.tan((config.perspectiveH * Math.PI) / 180);
+  const skewY = Math.tan((config.perspectiveV * Math.PI) / 180);
+  const scale = {
+    a: config.flipH ? -1 : 1,
+    b: 0,
+    c: 0,
+    d: config.flipV ? -1 : 1,
+  };
+  const rotation = {
+    a: Math.cos(angleRad),
+    b: Math.sin(angleRad),
+    c: -Math.sin(angleRad),
+    d: Math.cos(angleRad),
+  };
+  const skew = {
+    a: 1,
+    b: skewY,
+    c: skewX,
+    d: 1,
+  };
+  return multiply2d(scale, multiply2d(rotation, skew));
+};
+
+const transformPoint = (
+  matrix: { a: number; b: number; c: number; d: number },
+  x: number,
+  y: number
+) => ({
+  x: matrix.a * x + matrix.c * y,
+  y: matrix.b * x + matrix.d * y,
+});
 
 const DEFAULT_CONFIG: PageConfig = {
   rotation: 0,
@@ -207,6 +287,7 @@ export default function AdjustZone({
   const [liveCropPreviewUrl, setLiveCropPreviewUrl] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [activeCornerIdx, setActiveCornerIdx] = useState<number | null>(null);
+  const [cropError, setCropError] = useState<string | null>(null);
 
   const currentConfig = useMemo(() => {
     return pagesConfig[currentIndex] || { ...DEFAULT_CONFIG };
@@ -232,6 +313,7 @@ export default function AdjustZone({
 
   useEffect(() => {
     setLiveCropPreviewUrl(isCropped ? croppedLocalUrl : null);
+    setCropError(null);
   }, [isCropped, croppedLocalUrl, currentIndex]);
 
   const processSingleImageCanvas = (imgEl: HTMLImageElement, config: PageConfig, baseIsCropped: boolean): string => {
@@ -295,20 +377,23 @@ export default function AdjustZone({
     const ctx = finalCanvas.getContext('2d');
     if (!ctx) return imgEl.src;
 
-    const angleRad = (config.rotation * Math.PI) / 180;
-    const dV = Math.tan((config.perspectiveV * Math.PI) / 180);
-    const dH = Math.tan((config.perspectiveH * Math.PI) / 180);
+    const matrix = buildImageTransform(config);
+    const halfW = targetWidth / 2;
+    const halfH = targetHeight / 2;
+    const transformedCorners = [
+      transformPoint(matrix, -halfW, -halfH),
+      transformPoint(matrix, halfW, -halfH),
+      transformPoint(matrix, halfW, halfH),
+      transformPoint(matrix, -halfW, halfH),
+    ];
+    const minX = Math.min(...transformedCorners.map((point) => point.x));
+    const minY = Math.min(...transformedCorners.map((point) => point.y));
+    const maxX = Math.max(...transformedCorners.map((point) => point.x));
+    const maxY = Math.max(...transformedCorners.map((point) => point.y));
+    const finalWidth = Math.ceil(maxX - minX);
+    const finalHeight = Math.ceil(maxY - minY);
 
-    const absCos = Math.abs(Math.cos(angleRad));
-    const absSin = Math.abs(Math.sin(angleRad));
-    
-    let baseWidth = targetWidth * absCos + targetHeight * absSin;
-    let baseHeight = targetWidth * absSin + targetHeight * absCos;
-    
-    let finalWidth = baseWidth + Math.abs(baseHeight * dH);
-    let finalHeight = baseHeight + Math.abs(baseWidth * dV);
-
-    if (finalWidth <= 0 || finalHeight <= 0) return imgEl.src;
+    if (finalWidth <= 0 || finalHeight <= 0 || !Number.isFinite(finalWidth) || !Number.isFinite(finalHeight)) return imgEl.src;
 
     finalCanvas.width = finalWidth;
     finalCanvas.height = finalHeight;
@@ -316,13 +401,9 @@ export default function AdjustZone({
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, finalWidth, finalHeight);
 
-    ctx.translate(finalWidth / 2, finalHeight / 2);
-    ctx.scale(config.flipH ? -1 : 1, config.flipV ? -1 : 1);
-    ctx.rotate(angleRad);
-    ctx.transform(1, dV, dH, 1, 0, 0);
-
     ctx.filter = `brightness(${config.brightness}%) contrast(${config.contrast + config.sharpness}%)`;
-    ctx.drawImage(sourceCanvas, -targetWidth / 2, -targetHeight / 2);
+    ctx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, -minX, -minY);
+    ctx.drawImage(sourceCanvas, -halfW, -halfH);
 
     return finalCanvas.toDataURL('image/jpeg', 0.95);
   };
@@ -394,6 +475,7 @@ export default function AdjustZone({
 
   const handleResetToDefault = () => {
     setLiveCropPreviewUrl(null);
+    setCropError(null);
     
     updateCurrentConfig({ 
       ...DEFAULT_CONFIG,
@@ -441,21 +523,42 @@ export default function AdjustZone({
   };
 
   const handleInstantLocalCrop = () => {
+    setCropError(null);
     if (currentConfig.cropCorners && currentConfig.cropCorners.length === 4 && rawImageRef.current && rawImageRef.current.complete && rawImageRef.current.naturalWidth > 0) {
       const croppedUrl = extractPerspectiveCropAreaUrl(rawImageRef.current, currentConfig);
+      if (!croppedUrl) {
+        setCropError("ไม่สามารถครอปภาพจากกรอบนี้ได้ กรุณาปรับมุมทั้ง 4 จุดให้ครอบคลุมเอกสารอีกครั้ง");
+        return;
+      }
       updateCurrentConfig({ 
         isCropped: true, 
         isCropActive: false,
         croppedLocalUrl: croppedUrl
       });
+      return;
     }
+    setCropError("รูปภาพยังไม่พร้อมสำหรับการครอป กรุณารอสักครู่แล้วลองอีกครั้ง");
   };
 
   const handleModifyCrop = () => {
+    setCropError(null);
     updateCurrentConfig({ isCropped: false, isCropActive: true });
   };
 
+  const handleCancelCrop = () => {
+    setLiveCropPreviewUrl(null);
+    setCropError(null);
+    updateCurrentConfig({
+      isCropped: false,
+      isCropActive: false,
+      croppedLocalUrl: null,
+      cropCorners: null,
+      cropBox: null,
+    });
+  };
+
   const handleActivateCrop = () => {
+    setCropError(null);
     const imgEl = rawImageRef.current;
     if (!imgEl) return;
     
@@ -532,7 +635,7 @@ return (
                   src={currentRawUrl}
                   alt="Document Preview"
                   className="max-h-[340px] md:max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain"
-                  style={dynamicPreviewStyle}
+                  style={isCropActive ? undefined : dynamicPreviewStyle}
                 />
 
                 {isCropActive &&
@@ -697,13 +800,29 @@ return (
             </button>
           )
         ) : (
-          <button
-            type="button"
-            onClick={handleModifyCrop}
-            className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
-          >
-            <RefreshCw size={13} /> แก้ไขพื้นที่ครอป
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleModifyCrop}
+              className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <RefreshCw size={13} /> แก้ไขกรอบ
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCancelCrop}
+              className="w-full py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <Crop size={13} /> ยกเลิกครอป
+            </button>
+          </div>
+        )}
+
+        {cropError && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-5 text-amber-800">
+            {cropError}
+          </div>
         )}
       </div>
     </div>
@@ -758,8 +877,8 @@ return (
       </div>
 
       {[
-        ["เอียงแนวตั้ง", perspectiveV, "perspectiveV"],
-        ["เอียงแนวนอน", perspectiveH, "perspectiveH"],
+        ["ปรับเส้นแนวตั้ง", perspectiveH, "perspectiveH"],
+        ["ปรับเส้นแนวนอน", perspectiveV, "perspectiveV"],
       ].map(([label, value, key]) => (
         <div key={key as string} className="space-y-1">
           <div className="flex justify-between items-center text-xs">

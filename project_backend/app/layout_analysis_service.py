@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
+from .model_runtime_client import ModelRuntimeUnavailableError, remote_analyze_layout, remote_detect_text_boxes
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _PADDLEX_CACHE_HOME = _BACKEND_ROOT / "storage" / "paddlex_cache"
 os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(_PADDLEX_CACHE_HOME))
@@ -281,6 +283,14 @@ def analyze_layout(image: np.ndarray) -> Dict[str, Any]:
     if image is None or image.size == 0:
         raise ValueError("Invalid image for layout analysis.")
 
+    try:
+        remote_result = remote_analyze_layout(image)
+        if remote_result is not None:
+            return remote_result
+    except ModelRuntimeUnavailableError as error:
+        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise LayoutAnalysisUnavailableError(str(error)) from error
+
     height, width = image.shape[:2]
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
         temp_path = temp_file.name
@@ -358,6 +368,14 @@ def analyze_layout(image: np.ndarray) -> Dict[str, Any]:
 
 
 def detect_text_boxes(image_path: str) -> Dict[str, Any]:
+    try:
+        remote_result = remote_detect_text_boxes(image_path)
+        if remote_result is not None:
+            return remote_result
+    except ModelRuntimeUnavailableError as error:
+        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise LayoutAnalysisUnavailableError(str(error)) from error
+
     image = cv2.imread(image_path)
     if image is None or image.size == 0:
         raise ValueError("Invalid image for text box detection.")

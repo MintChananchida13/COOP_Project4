@@ -16,12 +16,13 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .alignment_service import AlignmentService
+from .db import connect as connect_db
 from .embedding_service import EmbeddingContextError
 from .image_normalization import ImageNormalizationService
 from .layout_analysis_service import analyze_layout
 from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_to_json
 from .layout_template_matcher import search_layout_candidates
-from .ocr_adapter import OcrUnavailableError, ocr_roi
+from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
 from .vision_embedding_adapter import encode_images
 from .schemas import (
     CustomOcrRequest,
@@ -65,23 +66,8 @@ def _normalize_data_type(value: Optional[str]) -> str:
     return "text"
 
 
-def _db_path() -> Path:
-    database_url = os.getenv("DATABASE_URL", "")
-    if database_url.startswith("file:"):
-        raw_path = database_url.replace("file:", "", 1).strip('"')
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        cwd_candidate = Path.cwd() / candidate
-        if cwd_candidate.exists():
-            return cwd_candidate
-
-    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
+def _connect() -> Any:
+    conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_requested_field_metadata_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
@@ -693,7 +679,7 @@ class EmbeddingService:
                 """
                 SELECT * FROM embedding_jobs
                 WHERE template_id = ?
-                ORDER BY requested_at DESC, rowid DESC
+                ORDER BY requested_at DESC, id DESC
                 LIMIT 1
                 """,
                 (template_id,),
@@ -1098,6 +1084,34 @@ class VerificationService:
                 "checked_fields": [],
             }
 
+        text_ocr_cache: Dict[str, Dict[str, Any]] = {}
+        text_ocr_errors: Dict[str, str] = {}
+        text_fields_by_page: Dict[int, List[Dict[str, Any]]] = {}
+        for field in fields:
+            if field.get("data_type") == "image":
+                continue
+            page_number = int(field["page_number"])
+            image_path = (page_image_paths or {}).get(page_number)
+            if image_path:
+                text_fields_by_page.setdefault(page_number, []).append(field)
+
+        for page_number, page_fields in text_fields_by_page.items():
+            image_path = (page_image_paths or {}).get(page_number)
+            if not image_path:
+                continue
+            try:
+                page_results = ocr_rois(
+                    image_path,
+                    [{"id": field["id"], "roi": field["roi"]} for field in page_fields],
+                )
+                text_ocr_cache.update(page_results)
+            except OcrUnavailableError as error:
+                for field in page_fields:
+                    text_ocr_errors[field["id"]] = str(error)
+            except Exception as error:
+                for field in page_fields:
+                    text_ocr_errors[field["id"]] = f"ROI OCR failed: {error}"
+
         checked_fields = []
         for field in fields:
             expected_text = field.get("expected_text")
@@ -1182,9 +1196,15 @@ class VerificationService:
 
             if image_path:
                 try:
-                    ocr_result = ocr_roi(image_path, field["roi"])
+                    if field["id"] in text_ocr_errors:
+                        raise OcrUnavailableError(text_ocr_errors[field["id"]])
+                    ocr_result = text_ocr_cache.get(field["id"])
+                    if ocr_result is None:
+                        ocr_result = ocr_roi(image_path, field["roi"])
                     actual_text = str(ocr_result.get("text") or "")
                     ocr_confidence = float(ocr_result.get("confidence") or 0.0)
+                    if ocr_result.get("error"):
+                        field_error = str(ocr_result.get("error"))
                 except OcrUnavailableError as error:
                     field_error = str(error)
                 except Exception as error:

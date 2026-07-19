@@ -1,6 +1,5 @@
 import io
 import os
-import sqlite3
 import base64
 import cv2
 import numpy as np
@@ -12,17 +11,23 @@ from fastapi import HTTPException
 
 from .alignment_service import AlignmentService
 from .anchor_projection_service import AnchorProjectionService
+from .db import connect as connect_db
 from .image_normalization import ImageNormalizationService
 from .layout_analysis_service import analyze_layout
 from .layout_alignment_service import LayoutAlignmentService
 from .layout_signature_service import build_layout_signature
 from .layout_template_matcher import search_layout_candidates
+from .pipeline_core import get_pipeline_core_config
 from .services import DecisionService, VerificationService
 
 
 DETECTION_THRESHOLD = 0.75
-DETECTION_VERSION = "layout-signature-v1"
+PIPELINE_CONFIG = get_pipeline_core_config()
+DETECTION_VERSION = PIPELINE_CONFIG.version
 PDF_RENDER_SCALE = 2.0
+DETECTION_RETRIEVAL_LIMIT = max(1, int(os.getenv("DETECTION_RETRIEVAL_LIMIT", "5")))
+DETECTION_FULL_EVAL_LIMIT = max(1, int(os.getenv("DETECTION_FULL_EVAL_LIMIT", "2")))
+DETECTION_ALIGNMENT_LIMIT = max(0, int(os.getenv("DETECTION_ALIGNMENT_LIMIT", "1")))
 verification_service = VerificationService()
 decision_service = DecisionService()
 normalization_service = ImageNormalizationService()
@@ -31,23 +36,8 @@ layout_alignment_service = LayoutAlignmentService()
 projection_service = AnchorProjectionService()
 
 
-def _db_path() -> Path:
-    database_url = os.getenv("DATABASE_URL", "")
-    if database_url.startswith("file:"):
-        raw_path = database_url.replace("file:", "", 1).strip('"')
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        cwd_candidate = Path.cwd() / candidate
-        if cwd_candidate.exists():
-            return cwd_candidate
-
-    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
+def _connect() -> Any:
+    conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -465,6 +455,7 @@ def _candidate_from_result(
     page_index: int,
     query_image_path: str,
     normalization_info: Optional[Dict[str, Any]] = None,
+    allow_alignment: bool = True,
 ) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
@@ -527,7 +518,7 @@ def _candidate_from_result(
 
     # 2) Template alignment is part of the production path.
     # The alignment service precheck skips ORB when geometry already matches.
-    should_try_alignment = template_id is not None
+    should_try_alignment = template_id is not None and allow_alignment
 
     if should_try_alignment:
         alignment = _align_candidate_page(
@@ -725,6 +716,112 @@ def _candidate_from_result(
         "projection": projection,
         "projected_fields": projection.get("projected_fields", []),
         "metadata": metadata,
+        "evaluation_status": "full",
+        "alignment_evaluated": bool(allow_alignment),
+    }
+
+
+def _lightweight_candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    metadata = result.get("metadata") or {}
+    vector_id = str(result.get("vector_id") or "")
+    template_id = _template_id_from_metadata(metadata, vector_id)
+    template = _fetch_template(template_id)
+    if template_id and template is None:
+        return None
+
+    template_status = template.get("status") if template else metadata.get("template_status")
+    if template_status != "active":
+        return None
+
+    template_name = template.get("name") if template else metadata.get("template_name")
+    page_count = template.get("page_count") if template else metadata.get("page_count")
+    final_confidence_threshold = decision_service.final_confidence_threshold(template, metadata)
+    field_count = metadata.get("field_count")
+    if template and field_count is None:
+        with _connect() as conn:
+            field_count = conn.execute(
+                """
+                SELECT COUNT(*) as count
+                FROM template_fields
+                WHERE template_id = ?
+                  AND use_for_verification = 0
+                """,
+                (template_id,),
+            ).fetchone()["count"]
+
+    retrieval_score = round(float(result.get("score", 0.0) or 0.0), 4)
+    verification = {
+        "template_id": template_id,
+        "status": "not_evaluated_fast_path",
+        "passed": False,
+        "score": 0.0,
+        "text_anchor_score": 0.0,
+        "image_anchor_score": 0.0,
+        "required_passed": False,
+        "checked_fields": [],
+    }
+    return {
+        "template_id": template_id,
+        "vector_id": vector_id,
+        "score": retrieval_score,
+        "retrieval_score": retrieval_score,
+        "layout_score": retrieval_score,
+        "layout_debug": metadata.get("layout_debug") or result.get("layout_debug"),
+        "average_score": retrieval_score,
+        "matched_pages": 0,
+        "template_name": template_name,
+        "template_status": template_status,
+        "page_count": page_count,
+        "field_count": field_count,
+        "model_name": metadata.get("model_name") or metadata.get("layout_signature_version"),
+        "vector_store_engine": metadata.get("vector_store_engine") or "layout-signature",
+        "retrieval_engine": metadata.get("retrieval_engine") or "layout_signature",
+        "alignment_status": "not_evaluated",
+        "alignment": _alignment_result("skipped", "candidate_not_fully_evaluated_fast_path"),
+        "alignment_debug": {"reason": "candidate_not_fully_evaluated_fast_path"},
+        "alignment_score": 0.0,
+        "alignment_passed": False,
+        "alignment_fallback_used": True,
+        "alignment_reason": "candidate_not_fully_evaluated_fast_path",
+        "normalized_verification_score": None,
+        "aligned_verification_score": None,
+        "verification_source_used": None,
+        "before_alignment_verification": None,
+        "after_alignment_verification": None,
+        "verification_improvement": None,
+        "alignment_match_image_path": None,
+        "alignment_match_image_preview_url": None,
+        "aligned_image_path": None,
+        "aligned_image_preview_url": None,
+        "normalized_image_path": None,
+        "normalized_image_preview_url": None,
+        "extraction_image_path": None,
+        "extraction_image_preview_url": None,
+        "roi_coordinate_space": None,
+        "verification": verification,
+        "verification_score": 0.0,
+        "text_anchor_score": 0.0,
+        "image_anchor_score": 0.0,
+        "anchor_score": 0.0,
+        "verification_passed": False,
+        "final_score": retrieval_score,
+        "final_passed": False,
+        "decision_reason": "not_evaluated_fast_path",
+        "decision_path": "not_evaluated_fast_path",
+        "required_passed": False,
+        "required_failed_fields": [],
+        "final_confidence_threshold": final_confidence_threshold,
+        "layout_similarity_threshold": float((template or {}).get("similarity_threshold") or metadata.get("similarity_threshold") or DETECTION_THRESHOLD),
+        "projection": {
+            "template_id": template_id,
+            "status": "not_evaluated",
+            "method": "fast_path_skipped",
+            "projected_fields": [],
+        },
+        "projected_fields": [],
+        "metadata": metadata,
+        "evaluation_status": "lightweight",
+        "alignment_evaluated": False,
     }
 
 
@@ -732,16 +829,34 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
     page_index = int(page_info["page_index"])
     normalized_image_path = str(page_info["normalized_path"])
     query_signature = _layout_signature_for_image_path(normalized_image_path)
-    raw_results = search_layout_candidates(query_signature, page_number=page_index, limit=5)
-    candidates = [
-        candidate
-        for candidate in (
-            _candidate_from_result(result, page_image_paths, page_index, normalized_image_path, page_info.get("normalization"))
-            for result in raw_results
-        )
-        if candidate is not None
-    ]
-    candidates = sorted(candidates, key=lambda item: (item["final_score"], item["retrieval_score"]), reverse=True)
+    raw_results = search_layout_candidates(query_signature, page_number=page_index, limit=DETECTION_RETRIEVAL_LIMIT)
+    candidates = []
+    for index, result in enumerate(raw_results, start=1):
+        if index <= DETECTION_FULL_EVAL_LIMIT:
+            candidate = _candidate_from_result(
+                result,
+                page_image_paths,
+                page_index,
+                normalized_image_path,
+                page_info.get("normalization"),
+                allow_alignment=index <= DETECTION_ALIGNMENT_LIMIT,
+            )
+        else:
+            candidate = _lightweight_candidate_from_result(result)
+        if candidate is not None:
+            candidate["retrieval_rank"] = index
+            candidates.append(candidate)
+
+    candidates = sorted(
+        candidates,
+        key=lambda item: (
+            bool(item["final_passed"]),
+            item.get("evaluation_status") == "full",
+            item["final_score"],
+            item["retrieval_score"],
+        ),
+        reverse=True,
+    )
     passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
     best_candidate = passing_candidates[0] if passing_candidates else None
     matched = best_candidate is not None
@@ -769,6 +884,10 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             "query_layout_signature": query_signature,
             "raw_candidate_count": len(raw_results),
             "active_candidate_count": len(candidates),
+            "retrieval_limit": DETECTION_RETRIEVAL_LIMIT,
+            "full_evaluation_limit": DETECTION_FULL_EVAL_LIMIT,
+            "alignment_limit": DETECTION_ALIGNMENT_LIMIT,
+            "fast_path_enabled": DETECTION_FULL_EVAL_LIMIT < DETECTION_RETRIEVAL_LIMIT or DETECTION_ALIGNMENT_LIMIT < DETECTION_FULL_EVAL_LIMIT,
             "aligned_candidate_paths": [
                 candidate["alignment"]["aligned_image_path"]
                 for candidate in candidates
@@ -902,6 +1021,7 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "pages": pages,
         "message": None if matched else "No candidate passed verification and final confidence." if candidates else "No active embedded templates available.",
         "debug": {
+            "pipeline_core": PIPELINE_CONFIG.to_debug_dict(),
             "vector_store_mode": "not_used_for_global_retrieval",
             "vision_embedding_mode": "not_used_for_global_retrieval",
             "retrieval_engine": "layout_signature",

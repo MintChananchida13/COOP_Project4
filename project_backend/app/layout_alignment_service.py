@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +17,10 @@ class LayoutAlignmentService:
     MIN_IMPROVEMENT = -0.02
     SKIP_SCORE = 0.93
     SKIP_ASPECT_DELTA = 0.03
+    MAX_SIGNATURE_CACHE = 64
+
+    def __init__(self) -> None:
+        self._signature_cache: Dict[str, Dict[str, Any]] = {}
 
     def align_to_template(
         self,
@@ -36,10 +41,8 @@ class LayoutAlignmentService:
             return self._result("failed", "template_image_unreadable", output_path, None, error="Unable to read template image")
 
         try:
-            query_analysis = analyze_layout(query)
-            template_analysis = analyze_layout(template)
-            query_signature = build_layout_signature(query_analysis)
-            template_signature = build_layout_signature(template_analysis)
+            query_signature = self._signature_for_image(query)
+            template_signature = self._signature_for_image(template)
         except Exception as error:
             return self._result("failed", "layout_analysis_failed", output_path, None, error=str(error))
 
@@ -121,7 +124,7 @@ class LayoutAlignmentService:
             )
 
         try:
-            warped_signature = build_layout_signature(analyze_layout(warped))
+            warped_signature = self._signature_for_image(warped, use_cache=False)
             after_debug = compare_layout_signatures(warped_signature, template_signature)
             after_score = float(after_debug.get("score") or 0.0)
         except Exception as error:
@@ -217,6 +220,26 @@ class LayoutAlignmentService:
             if candidate.exists():
                 source_path = candidate
         return cv2.imread(str(source_path)) if source_path.exists() else None
+
+    def _signature_for_image(self, image: np.ndarray, use_cache: bool = True) -> Dict[str, Any]:
+        cache_key = self._image_cache_key(image)
+        if use_cache and cache_key in self._signature_cache:
+            return self._signature_cache[cache_key]
+
+        signature = build_layout_signature(analyze_layout(image))
+        if use_cache:
+            if len(self._signature_cache) >= self.MAX_SIGNATURE_CACHE:
+                first_key = next(iter(self._signature_cache))
+                self._signature_cache.pop(first_key, None)
+            self._signature_cache[cache_key] = signature
+        return signature
+
+    def _image_cache_key(self, image: np.ndarray) -> str:
+        height, width = image.shape[:2]
+        digest = hashlib.sha1()
+        digest.update(str((width, height, image.dtype)).encode("utf-8"))
+        digest.update(np.ascontiguousarray(image).tobytes())
+        return digest.hexdigest()
 
     def _aspect_delta(self, query: Dict[str, Any], template: Dict[str, Any]) -> float:
         query_aspect = float(query.get("page_aspect_ratio") or 0.0)

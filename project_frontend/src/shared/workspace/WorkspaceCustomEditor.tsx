@@ -77,12 +77,15 @@ export interface WorkspaceCustomEditorProps {
   hideStepProgress?: boolean;
   hideRightPanel?: boolean;
   hideFooter?: boolean;
+  hideFooterActions?: boolean;
   hideDrawTools?: boolean;
   lockRoiMetadata?: boolean;
   workspaceHeightClassName?: string;
   rootClassName?: string;
   centerCanvas?: boolean;
   imageFrameClassName?: string;
+  layoutVariant?: "default" | "user";
+  rightPanelClassName?: string;
   rightPanelRenderer?: (api: {
     currentPageRois: (ROI & { pageIndex?: number })[];
     selectedId: number | null;
@@ -93,6 +96,11 @@ export interface WorkspaceCustomEditorProps {
     triggerOCRProcessing: () => void;
   }) => React.ReactNode;
   toolbarExtra?: React.ReactNode;
+  canvasActionRenderer?: (api: {
+    currentPageRois: (ROI & { pageIndex?: number })[];
+    selectedId: number | null;
+    triggerOCRProcessing: () => void;
+  }) => React.ReactNode;
   getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
   getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
@@ -119,19 +127,24 @@ export default function WorkspaceCustomEditor({
   hideStepProgress = false,
   hideRightPanel = false,
   hideFooter = false,
+  hideFooterActions = false,
   hideDrawTools = false,
   lockRoiMetadata = false,
   workspaceHeightClassName = "h-[620px]",
   rootClassName = "max-w-7xl mx-auto space-y-6 pb-20",
   centerCanvas = false,
   imageFrameClassName = "w-[750px]",
+  layoutVariant = "default",
+  rightPanelClassName,
   rightPanelRenderer,
   toolbarExtra,
+  canvasActionRenderer,
   getRoiClassName,
   getRoiLabelClassName,
   getRoiBadges,
   onImageMetricsChange,
 }: WorkspaceCustomEditorProps) {
+  const isUserLayout = layoutVariant === "user";
   const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly || hideDrawTools ? 'pan' : 'box');
   const [activeDrawPoints, setActiveDrawPoints] = useState<{ x: number; y: number }[]>([]);
 
@@ -306,6 +319,61 @@ export default function WorkspaceCustomEditor({
       return roiPage === Number(currentIndex);
     });
   }, [rois, currentIndex]);
+
+  const renderPagePagination = () => (
+    <div className="w-full rounded-xl border border-slate-200 bg-[#edf2f7] px-4 py-3 text-slate-800 shadow-sm select-none">
+      <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
+        <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          หน้าปัจจุบัน:
+          <span className="ml-1 font-mono text-sm font-bold text-slate-800">
+            {currentIndex + 1} / {imagesList.length} หน้า
+          </span>
+        </div>
+
+        <div className="flex w-full items-center justify-center gap-2 sm:w-auto">
+          <button
+            type="button"
+            disabled={currentIndex === 0 || isLoading}
+            onClick={() => onIndexChange(currentIndex - 1)}
+            className="flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-650 transition-all hover:bg-slate-50 disabled:opacity-30 disabled:hover:bg-white"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+
+          <div className="flex max-w-[320px] items-center gap-2 overflow-x-auto py-0.5">
+            {imagesList.map((url, idx) => (
+              <button
+                key={idx}
+                type="button"
+                disabled={isLoading}
+                onClick={() => onIndexChange(idx)}
+                className={`relative h-12 w-9 shrink-0 overflow-hidden rounded-md border shadow-md transition-all ${
+                  currentIndex === idx
+                    ? "scale-105 border-blue-500 ring-2 ring-blue-500/50"
+                    : "border-slate-250 opacity-60 hover:opacity-100"
+                }`}
+              >
+                <img src={url} alt={`Page ${idx + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentIndex === imagesList.length - 1 || isLoading}
+            onClick={() => onIndexChange(currentIndex + 1)}
+            className="flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-650 transition-all hover:bg-slate-50 disabled:opacity-30 disabled:hover:bg-white"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleZoomIn = () => {
     if (zoomIndex < ZOOM_STEPS.length - 1) setZoomIndex(prev => prev + 1);
@@ -755,10 +823,10 @@ export default function WorkspaceCustomEditor({
 
 
       {/* Main canvas row */}
-      <div className={`grid ${workspaceHeightClassName} ${hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]"} gap-5 items-stretch`}>
+      <div className={`relative grid ${workspaceHeightClassName} ${isUserLayout ? (hideRightPanel ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-12") : (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]")} gap-5 items-stretch`}>
         
         {/* Left toolbar */}
-                <div className="flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto">
+                <div className={isUserLayout ? "absolute left-3 top-3 bottom-3 z-40 flex w-14 flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white/95 py-4 shadow-lg shadow-slate-900/10 select-none overflow-y-auto backdrop-blur" : "flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto"}>
           <button 
             type="button"
             onClick={() => { setActiveTool('pan'); setSelectedId(null); setActiveDrawPoints([]); }}
@@ -886,35 +954,43 @@ export default function WorkspaceCustomEditor({
         </div>
 
         {/* Center document canvas */}
-        <div 
-          ref={viewportRef} 
-          className={`min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner h-full relative`}
-        >
+        <div className={`relative min-w-0 h-full ${isUserLayout ? "flex flex-col" : ""} ${isUserLayout && !hideRightPanel ? "xl:col-span-8" : ""}`}>
+          {canvasActionRenderer && (
+            <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex w-fit max-w-[calc(100%-2rem)] justify-end">
+              <div className="pointer-events-auto">
+                {canvasActionRenderer({ currentPageRois, selectedId, triggerOCRProcessing })}
+              </div>
+            </div>
+          )}
           <div 
-            ref={containerRef}
-            className={`relative inline-block ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'quad' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
-            style={{ 
-              transform: `scale(${currentZoom})`, 
-              transformOrigin: "top left",
-              transition: "transform 0.1s ease-out"
-            }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onDoubleClick={handleDoubleClick}
+            ref={viewportRef} 
+            className={`min-w-0 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner ${isUserLayout ? "min-h-0 flex-1" : "h-full"} relative`}
           >
-            <div className={`relative ${imageFrameClassName} h-auto bg-transparent`}>
-              {previewUrl && (
-                <img 
-                  ref={imageRef}
-                  src={previewUrl} 
-                  alt="Workspace" 
-                  draggable="false" 
-                  onLoad={reportImageMetrics}
-                  className="w-full h-auto block select-none pointer-events-none border border-slate-300 shadow-xl rounded bg-white"
-                />
-              )}
+            <div 
+              ref={containerRef}
+              className={`relative inline-block ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'quad' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
+              style={{ 
+                transform: `scale(${currentZoom})`, 
+                transformOrigin: "top left",
+                transition: "transform 0.1s ease-out"
+              }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onDoubleClick={handleDoubleClick}
+            >
+              <div className={`relative ${imageFrameClassName} h-auto bg-transparent`}>
+                {previewUrl && (
+                  <img 
+                    ref={imageRef}
+                    src={previewUrl} 
+                    alt="Workspace" 
+                    draggable="false" 
+                    onLoad={reportImageMetrics}
+                    className="w-full h-auto block select-none pointer-events-none border border-slate-300 shadow-xl rounded bg-white"
+                  />
+                )}
                   
               {isDrawing && dragBox && (
                 <div 
@@ -1090,15 +1166,22 @@ export default function WorkspaceCustomEditor({
               })}
               </div>
             </div>
+            </div>
           </div>
+          {isUserLayout && !hideFooter && (
+            <div className="mt-4">
+              {renderPagePagination()}
+            </div>
+          )}
         </div>
 
         {/* Right properties panel */}
-        {!hideRightPanel && <div className="min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+        {!hideRightPanel && <div className={rightPanelClassName || (isUserLayout ? "min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col xl:col-span-4" : "min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4")}>
           {rightPanelRenderer ? (
             rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI, triggerOCRProcessing })
           ) : (
             <>
+              <div className={isUserLayout ? "min-h-0 flex-1 space-y-4 overflow-y-auto p-4" : "contents"}>
               <button
                 type="button"
                 onClick={onBackToAdjust}
@@ -1185,13 +1268,27 @@ export default function WorkspaceCustomEditor({
                   ))}
                 </div>
               </div>
+              </div>
+              {isUserLayout && !hideOcrActions && !hideFooterActions && (
+                <div className="border-t border-slate-200 bg-white p-4">
+                  <button
+                    type="button"
+                    disabled={rois.length === 0 || isLoading}
+                    onClick={triggerOCRProcessing}
+                    className="ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-xl bg-[#0052cc] px-6 py-3.5 text-xs font-bold uppercase tracking-wider text-white shadow-md transition-all hover:bg-[#0043a4] disabled:bg-slate-400 disabled:text-white/80"
+                  >
+                    <Cpu size={14} className={isLoading ? "animate-spin" : ""} />
+                    {isLoading ? "กำลังประมวลผล ROI..." : "อ่านข้อมูลที่เลือก"}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>}
       </div>
 
       {/* Footer carousel and action buttons */}
-      {!hideFooter && <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
+      {!hideFooter && !isUserLayout && <div className="w-full bg-[#edf2f7] text-slate-800 border border-slate-200 rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm select-none">
         <div className="flex items-center gap-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
             หน้าปัจจุบัน: <span className="text-slate-800 text-sm ml-1 font-bold">{currentIndex + 1} / {imagesList.length} หน้า</span>
@@ -1241,7 +1338,7 @@ export default function WorkspaceCustomEditor({
           </div>
         </div>
 
-        {!hideOcrActions && <div className="flex items-center gap-3 w-full sm:w-auto">
+        {!hideOcrActions && !hideFooterActions && <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="flex flex-col gap-2 w-full sm:w-auto">
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
               <button 

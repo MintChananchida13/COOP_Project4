@@ -1,12 +1,12 @@
 import json
 import os
-import sqlite3
 import base64
 import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .db import connect as connect_db
 from .vector_store_adapter import upsert_template_vector
 from .vision_embedding_adapter import encode_images
 
@@ -28,20 +28,6 @@ class EmbeddingResult:
     ignore_coverage: float
 
 
-def _db_path() -> Path:
-    database_url = os.getenv("DATABASE_URL", "")
-    if database_url.startswith("file:"):
-        raw_path = database_url.replace("file:", "", 1).strip('"')
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        cwd_candidate = Path.cwd() / candidate
-        if cwd_candidate.exists():
-            return cwd_candidate
-
-    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
-
-
 def _project_backend_path() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -50,14 +36,13 @@ def _storage_path() -> Path:
     return _project_backend_path() / "storage" / "embedding_previews"
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
+def _connect() -> Any:
+    conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+def _row_to_dict(row: Any) -> Dict[str, Any]:
     return dict(row)
 
 
