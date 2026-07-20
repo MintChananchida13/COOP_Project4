@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { FileImage } from "lucide-react";
-import { Template } from "../types/ocr";
-import { deleteTemplateApi, fetchTemplates } from "./adminApi";
+import { Template, TemplateStatus } from "../types/ocr";
+import { deleteTemplateApi, fetchTemplates, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
 import { useAdminState } from "./AdminState";
 import { ActionButton, EmptyState, InlineState, LoadingState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
@@ -15,14 +15,28 @@ const statusFilterOptions: { value: AdminStatusFilter; label: string }[] = [
   { value: "nonactive", label: "ไม่ใช้งาน" },
 ];
 
+const manageableStatuses: TemplateStatus[] = ["active", "nonactive", "disabled"];
+
+const statusSelectLabel = (status: TemplateStatus) => {
+  if (status === "active") return "ใช้งานอยู่";
+  if (status === "nonactive" || status === "disabled") return "ปิดใช้งานชั่วคราว";
+  if (status === "draft") return "ฉบับร่าง";
+  if (status === "embedding_pending") return "กำลังเตรียมเผยแพร่";
+  if (status === "validated") return "ตรวจสอบแล้ว";
+  return status.replaceAll("_", " ");
+};
+
 export default function AdminTemplatesPage() {
   const { templates: fallbackTemplates } = useAdminState();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<AdminStatusFilter>("all");
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback">("loading");
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [statusUpdatingTemplateId, setStatusUpdatingTemplateId] = useState<string | null>(null);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [statusError, setStatusError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +75,33 @@ export default function AdminTemplatesPage() {
     draft: templates.filter((template) => template.status === "draft").length,
     active: templates.filter((template) => template.status === "active").length,
     nonactive: templates.filter((template) => template.status !== "draft" && template.status !== "active").length,
+  };
+
+  const handleChangeTemplateStatus = async (template: Template, nextStatus: TemplateStatus) => {
+    if (loadStatus !== "loaded") {
+      setStatusError("ไม่สามารถเปลี่ยนสถานะ Template ตัวอย่างได้ เพราะไม่ได้โหลดจากฐานข้อมูลจริง");
+      return;
+    }
+
+    const actionLabel = nextStatus === "active" ? "เปิดใช้งาน" : "ปิดใช้งานชั่วคราว";
+    if (!window.confirm(`${actionLabel} Template "${template.name}"?`)) return;
+
+    setStatusUpdatingTemplateId(template.id);
+    setStatusMessage("");
+    setStatusError("");
+    setDeleteMessage("");
+    setDeleteError("");
+
+    try {
+      const bundle = await updateTemplateStatus(template.id, nextStatus);
+      setTemplates((current) => current.map((item) => (item.id === template.id ? bundle.template : item)));
+      setStatusMessage(`${actionLabel} Template "${template.name}" เรียบร้อยแล้ว`);
+    } catch (error) {
+      console.warn("Template status update failed.", error);
+      setStatusError(error instanceof Error ? error.message : "เปลี่ยนสถานะ Template ไม่สำเร็จ");
+    } finally {
+      setStatusUpdatingTemplateId(null);
+    }
   };
 
   const handleDeleteTemplate = async (template: Template) => {
@@ -135,6 +176,12 @@ export default function AdminTemplatesPage() {
       {deleteError && (
         <InlineState tone="danger" message={deleteError} />
       )}
+      {statusMessage && (
+        <InlineState tone="success" message={statusMessage} />
+      )}
+      {statusError && (
+        <InlineState tone="danger" message={statusError} />
+      )}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filteredTemplates.map((template) => (
@@ -172,10 +219,36 @@ export default function AdminTemplatesPage() {
             <div className="flex flex-wrap gap-2">
               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
               <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+              <label className="min-w-[170px]">
+                <span className="sr-only">Template status</span>
+                <select
+                  value={manageableStatuses.includes(template.status) ? (template.status === "disabled" ? "nonactive" : template.status) : template.status}
+                  onChange={(event) => {
+                    const nextStatus = event.target.value as TemplateStatus;
+                    if (nextStatus !== template.status) {
+                      handleChangeTemplateStatus(template, nextStatus);
+                    }
+                  }}
+                  disabled={
+                    loadStatus !== "loaded" ||
+                    deletingTemplateId === template.id ||
+                    statusUpdatingTemplateId === template.id ||
+                    !manageableStatuses.includes(template.status)
+                  }
+                  title={!manageableStatuses.includes(template.status) ? "Template ต้องผ่านการ Publish ก่อน จึงจะเปิดหรือปิดใช้งานได้" : undefined}
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 shadow-sm outline-none transition-colors hover:border-indigo-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {!manageableStatuses.includes(template.status) && (
+                    <option value={template.status}>{statusSelectLabel(template.status)}</option>
+                  )}
+                  <option value="active">ใช้งานอยู่</option>
+                  <option value="nonactive">ปิดใช้งานชั่วคราว</option>
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => handleDeleteTemplate(template)}
-                disabled={loadStatus !== "loaded" || deletingTemplateId === template.id}
+                disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id}
                 className="ui-stable-action-sm rounded-xl border border-red-200 bg-white px-4 py-2.5 text-xs font-black text-red-600 transition-colors hover:bg-red-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 {deletingTemplateId === template.id ? "กำลังลบ..." : "ลบ"}
