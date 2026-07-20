@@ -490,6 +490,8 @@ def _candidate_from_result(
     if template_status != "active":
         return None
 
+    matching_weights = decision_service.matching_weights(template, metadata)
+
     # 1) Verify จาก normalized ก่อน
     normalized_verification = verification_service.verify_template(
         template_id,
@@ -586,6 +588,7 @@ def _candidate_from_result(
         retrieval_score,
         verification,
         final_confidence_threshold,
+        matching_weights,
     )
     layout_threshold = float((template or {}).get("similarity_threshold") or metadata.get("similarity_threshold") or DETECTION_THRESHOLD)
     if retrieval_score < layout_threshold:
@@ -704,6 +707,8 @@ def _candidate_from_result(
         "text_anchor_score": decision.get("text_anchor_score"),
         "image_anchor_score": decision.get("image_anchor_score"),
         "anchor_score": decision.get("anchor_score"),
+        "matching_weights": decision.get("matching_weights"),
+        "effective_matching_weights": decision.get("effective_matching_weights"),
         "verification_passed": decision["verification_passed"],
         "final_score": decision["final_score"],
         "final_passed": decision["final_passed"],
@@ -928,6 +933,7 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             max_retrieval_score,
             verification,
             float(best_page_cand.get("final_confidence_threshold") or DecisionService.DEFAULT_FINAL_CONFIDENCE_THRESHOLD),
+            best_page_cand.get("matching_weights"),
         )
 
         aggregated.append({
@@ -973,6 +979,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "text_anchor_score": decision.get("text_anchor_score"),
             "image_anchor_score": decision.get("image_anchor_score"),
             "anchor_score": decision.get("anchor_score"),
+            "matching_weights": decision.get("matching_weights"),
+            "effective_matching_weights": decision.get("effective_matching_weights"),
             "verification_passed": decision["verification_passed"],
             "final_score": decision["final_score"],
             "final_passed": decision["final_passed"],

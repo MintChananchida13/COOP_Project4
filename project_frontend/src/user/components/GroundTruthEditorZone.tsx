@@ -442,6 +442,11 @@ export default function GroundTruthEditorZone({
   const [zoomIndex, setZoomIndex] = useState<number>(2); 
   const currentZoom = ZOOM_STEPS[zoomIndex];
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const resultsPanelRef = useRef<HTMLDivElement | null>(null);
+  const textSectionRef = useRef<HTMLElement | null>(null);
+  const tableSectionRef = useRef<HTMLElement | null>(null);
+  const imageSectionRef = useRef<HTMLElement | null>(null);
+  const fieldResultRefs = useRef<Map<number, HTMLDivElement | HTMLElement>>(new Map());
 
 
   const currentPageRois = useMemo(() => {
@@ -470,6 +475,54 @@ export default function GroundTruthEditorZone({
       image: typedResults.filter(item => item.fieldType === "image"),
     };
   }, [currentPageOcrResults, currentPageRois]);
+
+  const editedFieldCount = useMemo(() => {
+    return currentPageOcrResults.filter((res) => getRawOcrText(res) !== res.extractedText).length;
+  }, [currentPageOcrResults]);
+
+  const scrollInsideResultsPanel = (target: HTMLElement | null, block: "start" | "center" = "start") => {
+    const container = resultsPanelRef.current;
+    if (!container || !target) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
+    const top =
+      block === "center"
+        ? relativeTop - Math.max(0, (container.clientHeight - targetRect.height) / 2)
+        : relativeTop - 12;
+
+    container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  };
+
+  const scrollToResult = (resultId: number) => {
+    setActiveFieldId(resultId);
+    window.setTimeout(() => {
+      scrollInsideResultsPanel(fieldResultRefs.current.get(resultId) || null, "center");
+    }, 0);
+  };
+
+  const scrollToSection = (type: "all" | DisplayFieldType | "edited") => {
+    if (type === "all") {
+      const firstResult = currentPageOcrResults[0];
+      if (firstResult) scrollToResult(firstResult.id);
+      return;
+    }
+
+    if (type === "edited") {
+      const firstEdited = currentPageOcrResults.find((res) => getRawOcrText(res) !== res.extractedText);
+      if (firstEdited) scrollToResult(firstEdited.id);
+      return;
+    }
+
+    const target =
+      type === "text"
+        ? textSectionRef.current
+        : type === "table"
+          ? tableSectionRef.current
+          : imageSectionRef.current;
+    scrollInsideResultsPanel(target, "start");
+  };
 
   const handlePrevImage = () => {
     if (onImageIndexChange && currentImageIndex > 0) {
@@ -565,7 +618,7 @@ export default function GroundTruthEditorZone({
                     return (
                       <div
                         key={res.id}
-                        onClick={() => setActiveFieldId(res.id)}
+                        onClick={() => scrollToResult(res.id)}
                         className={`absolute border cursor-pointer transition-all duration-300 pointer-events-auto ${
                           hasPoints 
                             ? 'border-transparent bg-transparent shadow-none' 
@@ -733,7 +786,55 @@ export default function GroundTruthEditorZone({
             </div>
           </div>
 
-          <div className="overflow-y-auto flex-1 min-h-0 bg-slate-50/40 p-4">
+          <div ref={resultsPanelRef} className="overflow-y-auto flex-1 min-h-0 bg-slate-50/40 p-4">
+            {currentPageOcrResults.length > 0 && (
+              <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
+                <button
+                  type="button"
+                  onClick={() => scrollToSection("all")}
+                  className="rounded-xl border border-slate-200 bg-white p-2.5 text-left transition-all hover:border-indigo-200 hover:bg-indigo-50/40 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                >
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">ทั้งหมด</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-slate-900">{currentPageOcrResults.length}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection("text")}
+                  disabled={currentPageResultGroups.text.length === 0}
+                  className="rounded-xl border border-slate-200 bg-white p-2.5 text-left transition-all hover:border-indigo-200 hover:bg-indigo-50/40 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความ</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-slate-900">{currentPageResultGroups.text.length}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection("table")}
+                  disabled={currentPageResultGroups.table.length === 0}
+                  className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-2.5 text-left transition-all hover:border-indigo-300 hover:bg-indigo-100/60 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">ตาราง</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-indigo-900">{currentPageResultGroups.table.length}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection("image")}
+                  disabled={currentPageResultGroups.image.length === 0}
+                  className="rounded-xl border border-sky-100 bg-sky-50/70 p-2.5 text-left transition-all hover:border-sky-300 hover:bg-sky-100/70 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="text-[10px] font-black uppercase tracking-wider text-sky-600">รูปภาพ</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-sky-900">{currentPageResultGroups.image.length}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection("edited")}
+                  disabled={editedFieldCount === 0}
+                  className="rounded-xl border border-amber-100 bg-amber-50/70 p-2.5 text-left transition-all hover:border-amber-300 hover:bg-amber-100/70 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="text-[10px] font-black uppercase tracking-wider text-amber-600">แก้ไขแล้ว</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-amber-900">{editedFieldCount}</p>
+                </button>
+              </div>
+            )}
             {currentPageOcrResults.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white py-20 text-center text-slate-400 font-medium">
                 ยังไม่มีผล OCR ในหน้านี้ <br />
@@ -742,8 +843,8 @@ export default function GroundTruthEditorZone({
             ) : (
               <div className="space-y-5">
                 {currentPageResultGroups.text.length > 0 && (
-                  <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3">
+                  <section ref={textSectionRef} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden scroll-mt-4">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-3.5 py-2.5">
                       <div className="flex items-center gap-2">
                         <FileText size={15} className="text-slate-500" />
                         <h4 className="text-xs font-black text-slate-800">ข้อความ</h4>
@@ -759,12 +860,16 @@ export default function GroundTruthEditorZone({
                         return (
                           <div
                             key={res.id}
+                            ref={(el) => {
+                              if (el) fieldResultRefs.current.set(res.id, el);
+                              else fieldResultRefs.current.delete(res.id);
+                            }}
                             onClick={() => setActiveFieldId(res.id)}
-                            className={`grid grid-cols-1 gap-3 p-4 transition-colors lg:grid-cols-[minmax(150px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] ${
+                            className={`grid min-w-0 grid-cols-1 gap-3 p-3 transition-colors xl:grid-cols-[minmax(125px,0.55fr)_minmax(0,1fr)_minmax(0,1fr)] ${
                               isSelected ? "bg-indigo-50/50 ring-1 ring-inset ring-indigo-100" : "hover:bg-slate-50"
                             }`}
                           >
-                            <div onClick={(e) => e.stopPropagation()}>
+                            <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center gap-1 rounded border border-transparent px-1 transition-all focus-within:border-indigo-400 focus-within:bg-white">
                                 <input
                                   type="text"
@@ -785,18 +890,18 @@ export default function GroundTruthEditorZone({
                               </span>
                             </div>
 
-                            <div>
+                            <div className="min-w-0">
                               <p className="mb-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความจาก OCR</p>
                               <div
-                                className="min-h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium leading-relaxed text-slate-700 shadow-sm normal-case"
-                                style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
+                                className="min-h-10 w-full max-w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium leading-relaxed text-slate-700 shadow-sm normal-case break-all"
+                                style={{ textTransform: "none", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
                                 translate="no"
                               >
                                 {getRawOcrText(res) !== "" ? getRawOcrText(res) : <span className="text-slate-400 italic">(ไม่พบข้อความ)</span>}
                               </div>
                             </div>
 
-                            <div onClick={(e) => e.stopPropagation()}>
+                            <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
                               <p className="mb-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความที่แก้ไขได้</p>
                               <textarea
                                 value={res.extractedText}
@@ -817,8 +922,8 @@ export default function GroundTruthEditorZone({
                                   }
                                 }}
                                 onChange={(e) => setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: e.target.value } : item))}
-                                className="min-h-10 w-full resize-none overflow-hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium leading-relaxed text-slate-800 shadow-inner transition-all focus:border-indigo-500 focus:outline-none normal-case"
-                                style={{ textTransform: "none", whiteSpace: "pre-wrap" }}
+                                className="min-h-10 w-full max-w-full resize-y overflow-auto rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium leading-relaxed text-slate-800 shadow-inner transition-all focus:border-indigo-500 focus:outline-none normal-case break-all"
+                                style={{ textTransform: "none", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
                                 placeholder="แก้ไขข้อความ OCR..."
                                 rows={1}
                               />
@@ -831,8 +936,8 @@ export default function GroundTruthEditorZone({
                 )}
 
                 {currentPageResultGroups.table.length > 0 && (
-                  <section className="rounded-2xl border border-indigo-200 bg-white shadow-sm overflow-hidden">
-                    <div className="flex items-center justify-between gap-3 border-b border-indigo-100 bg-indigo-50/60 px-4 py-3">
+                  <section ref={tableSectionRef} className="rounded-2xl border border-indigo-200 bg-white shadow-sm overflow-hidden scroll-mt-4">
+                    <div className="flex items-center justify-between gap-3 border-b border-indigo-100 bg-indigo-50/60 px-3.5 py-2.5">
                       <div className="flex items-center gap-2">
                         <Table size={15} className="text-indigo-600" />
                         <h4 className="text-xs font-black text-slate-900">ตาราง</h4>
@@ -842,14 +947,18 @@ export default function GroundTruthEditorZone({
                       </span>
                     </div>
 
-                    <div className="space-y-4 p-4">
+                    <div className="space-y-3 p-3">
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         return (
                           <article
                             key={res.id}
+                            ref={(el) => {
+                              if (el) fieldResultRefs.current.set(res.id, el);
+                              else fieldResultRefs.current.delete(res.id);
+                            }}
                             onClick={() => setActiveFieldId(res.id)}
-                            className={`rounded-2xl border bg-white p-4 transition-colors ${
+                            className={`rounded-xl border bg-white p-3 transition-colors ${
                               isSelected ? "border-indigo-300 bg-indigo-50/30 shadow-sm" : "border-slate-200 hover:border-indigo-200"
                             }`}
                           >
@@ -899,8 +1008,8 @@ export default function GroundTruthEditorZone({
                 )}
 
                 {currentPageResultGroups.image.length > 0 && (
-                  <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3">
+                  <section ref={imageSectionRef} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden scroll-mt-4">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-3.5 py-2.5">
                       <div className="flex items-center gap-2">
                         <ImageIcon size={15} className="text-slate-500" />
                         <h4 className="text-xs font-black text-slate-800">รูปภาพ</h4>
@@ -910,14 +1019,18 @@ export default function GroundTruthEditorZone({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2">
                       {currentPageResultGroups.image.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         return (
                           <article
                             key={res.id}
+                            ref={(el) => {
+                              if (el) fieldResultRefs.current.set(res.id, el);
+                              else fieldResultRefs.current.delete(res.id);
+                            }}
                             onClick={() => setActiveFieldId(res.id)}
-                            className={`rounded-2xl border p-3 transition-colors ${
+                            className={`rounded-xl border p-3 transition-colors ${
                               isSelected ? "border-indigo-300 bg-indigo-50/40" : "border-slate-200 bg-white hover:bg-slate-50"
                             }`}
                           >
@@ -963,9 +1076,10 @@ export default function GroundTruthEditorZone({
             <button 
               type="button"
               onClick={onApproveAndSave} 
-              className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2"
+              disabled={ocrResults.length === 0}
+              className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2 disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
             >
-              <Save size={15} /> บันทึกผลลัพธ์
+              <Save size={15} /> {ocrResults.length === 0 ? "ยังไม่มีผล OCR ให้บันทึก" : "บันทึกการเปลี่ยนแปลง"}
             </button>
           </div>
         </div>

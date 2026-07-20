@@ -100,6 +100,9 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
       pageCount: selectedRequest.pageCount,
       similarityThreshold: 0.75,
       finalConfidenceThreshold: 0.8,
+      layoutWeight: 0.5,
+      textAnchorWeight: 0.35,
+      imageAnchorWeight: 0.15,
     };
     const newPages: TemplatePage[] = selectedRequest.pages.map((page) => ({
       id: `tpl_page_${Date.now()}_${page.pageNumber}`,
@@ -110,6 +113,9 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
       normalizedImageUrl: page.sampleImageUrl || samplePage,
       similarityThreshold: 0.75,
       finalConfidenceThreshold: 0.8,
+      layoutWeight: 0.5,
+      textAnchorWeight: 0.35,
+      imageAnchorWeight: 0.15,
     }));
     const newFields = selectedRequest.requestedFields.map((field, index) => {
       const page = newPages.find((item) => item.pageNumber === field.roi.pageNumber) || newPages[0];
@@ -148,6 +154,9 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
         normalizedImageUrl: samplePage,
         similarityThreshold: template.similarityThreshold,
         finalConfidenceThreshold: template.finalConfidenceThreshold,
+        layoutWeight: template.layoutWeight,
+        textAnchorWeight: template.textAnchorWeight,
+        imageAnchorWeight: template.imageAnchorWeight,
       },
     ]);
     updateTemplate(templateId, { pageCount: nextPageNumber });

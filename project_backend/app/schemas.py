@@ -98,6 +98,9 @@ class TemplateCreate(BaseModel):
     page_count: int = Field(default=1, ge=1)
     similarity_threshold: float = Field(default=0.75, ge=0, le=1)
     final_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
+    layout_weight: float = Field(default=0.50, ge=0, le=1)
+    text_anchor_weight: float = Field(default=0.35, ge=0, le=1)
+    image_anchor_weight: float = Field(default=0.15, ge=0, le=1)
     created_by: Optional[str] = None
 
 
@@ -109,6 +112,9 @@ class TemplateUpdate(BaseModel):
     page_count: Optional[int] = Field(default=None, ge=1)
     similarity_threshold: Optional[float] = Field(default=None, ge=0, le=1)
     final_confidence_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    layout_weight: Optional[float] = Field(default=None, ge=0, le=1)
+    text_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
+    image_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
     rejection_reason: Optional[str] = None
 
 

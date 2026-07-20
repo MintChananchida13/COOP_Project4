@@ -535,36 +535,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Template Pages</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">
-              Review submitted pages and define ROI in Workspace.
-            </p>
-          </div>
-
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {selectedTemplatePages.map((page, index) => (
-            <div key={page.id} className={`rounded-xl border px-3 py-2 text-xs font-bold ${safeCurrentPage === index ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-slate-50"}`}>
-              <button type="button" onClick={() => setCurrentPage(index)}>Page {page.pageNumber}</button>
-              <input
-                value={page.pageName || ""}
-                onChange={(event) => setSelectedTemplatePages((prev) => prev.map((item) => item.id === page.id ? { ...item, pageName: event.target.value } : item))}
-                onBlur={(event) => handleUpdatePage(page.id, { pageName: event.target.value })}
-                className="ml-2 w-28 rounded border border-slate-200 bg-white px-2 py-1 text-[10px]"
-                placeholder="Page name"
-              />
-              {selectedTemplatePages.length > 1 && (
-                <button type="button" onClick={() => handleRemovePage(page.id)} className="ml-3 text-red-600">Remove</button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
       {selectedTemplatePages.length > 0 && currentTemplatePage && (
         <div className="space-y-4">
           <WorkspaceTemplateEditor

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, CheckCircle2, Cpu, FileText, Image as ImageIcon, Table } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ROI } from "../../types/ocr";
 import WorkspaceCustomEditor, { WorkspaceCustomEditorProps } from "../../shared/workspace/WorkspaceCustomEditor";
 import { InlineState, StatusBadge } from "../../shared/ui";
@@ -37,18 +37,33 @@ export default function MatchedTemplateWorkspaceZone({
   ...props
 }: MatchedTemplateWorkspaceZoneProps) {
   const [fieldQuery, setFieldQuery] = useState("");
+  const rightPanelScrollRef = useRef<HTMLDivElement | null>(null);
+  const fieldItemRefs = useRef<Map<number, HTMLLabelElement>>(new Map());
+
+  const scrollRightPanelToField = (roiId: number) => {
+    setFieldQuery("");
+    window.setTimeout(() => {
+      const container = rightPanelScrollRef.current;
+      const target = fieldItemRefs.current.get(roiId);
+      if (!container || !target) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
+      const top = relativeTop - Math.max(0, (container.clientHeight - targetRect.height) / 2);
+      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }, 50);
+  };
 
   return (
     <WorkspaceCustomEditor
       {...props}
+      onCanvasRoiSelect={scrollRightPanelToField}
       readOnly={false}
       hideOcrActions
       hideDrawTools
       hideFooterActions
       lockRoiMetadata
-      centerCanvas
-      layoutVariant="user"
-      workspaceHeightClassName="h-[520px]"
       getRoiBadges={() => []}
       getRoiClassName={(roi, selected) => {
         const disabled = roi.enabled === false;
@@ -69,7 +84,6 @@ export default function MatchedTemplateWorkspaceZone({
               : "bg-white border-emerald-200 text-emerald-700 font-bold"
         }`
       }
-      rightPanelClassName="min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col"
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
         const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
         const selectedRoi = currentPageRois.find((roi) => roi.id === selectedId);
@@ -79,7 +93,7 @@ export default function MatchedTemplateWorkspaceZone({
 
         return (
           <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            <div ref={rightPanelScrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
@@ -179,6 +193,10 @@ export default function MatchedTemplateWorkspaceZone({
                     return (
                       <label
                         key={`${roi.pageIndex ?? 0}-${roi.id}`}
+                        ref={(el) => {
+                          if (el) fieldItemRefs.current.set(roi.id, el);
+                          else fieldItemRefs.current.delete(roi.id);
+                        }}
                         className={`ui-label flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition-all ${
                           selected
                             ? "border-emerald-300 bg-emerald-50 text-emerald-950"

@@ -618,23 +618,23 @@ return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
       {/* Left Preview */}
       <div className="xl:col-span-8 space-y-4">
-        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[420px] md:h-[540px] overflow-hidden shadow-inner relative p-4">
+        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[640px] md:h-[calc(100vh-220px)] overflow-hidden shadow-inner relative p-6">
           <div className="relative flex items-center justify-center w-full h-full">
             {isCropped && liveCropPreviewUrl ? (
               <img
                 ref={croppedImageRef}
                 src={liveCropPreviewUrl}
                 alt="Cropped Preview"
-                className="max-h-[360px] md:max-h-[460px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
+                className="max-h-[380px] md:max-h-[480px] max-w-full w-auto h-auto block border border-slate-300 shadow-2xl bg-white rounded-lg select-none object-contain"
                 style={dynamicPreviewStyle}
               />
             ) : (
-              <div className="relative inline-block max-h-[340px] md:max-h-[440px] max-w-full">
+              <div className="relative inline-block max-h-[380px] md:max-h-[480px] max-w-full">
                 <img
                   ref={rawImageRef}
                   src={currentRawUrl}
                   alt="Document Preview"
-                  className="max-h-[340px] md:max-h-[440px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain"
+                  className="max-h-[380px] md:max-h-[480px] max-w-full block border border-slate-200 shadow-xl bg-white rounded-lg select-none object-contain"
                   style={isCropActive ? undefined : dynamicPreviewStyle}
                 />
 
@@ -744,7 +744,7 @@ return (
 
 {/* Right Tools */}
 <div className="xl:col-span-4 flex flex-col">
-  <div className="max-h-[570px] overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+  <div className="min-h-[640px] md:h-[calc(100vh-220px)] overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
     <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
       <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
         <RotateCcw size={13} /> รีเซ็ตการปรับแต่ง

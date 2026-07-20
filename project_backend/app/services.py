@@ -70,6 +70,7 @@ def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_requested_field_metadata_columns(conn)
+    _ensure_template_matching_weight_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
     _ensure_embedding_jobs_table(conn)
@@ -109,6 +110,20 @@ def _ensure_embedding_jobs_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)"
     )
+    conn.commit()
+
+
+def _ensure_template_matching_weight_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(templates)").fetchall()
+    }
+    if columns and "layout_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN layout_weight REAL DEFAULT 0.50")
+    if columns and "text_anchor_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN text_anchor_weight REAL DEFAULT 0.35")
+    if columns and "image_anchor_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN image_anchor_weight REAL DEFAULT 0.15")
     conn.commit()
 
 
@@ -225,6 +240,9 @@ def _template_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "page_count": item["page_count"],
         "similarity_threshold": item["similarity_threshold"],
         "final_confidence_threshold": item["final_confidence_threshold"],
+        "layout_weight": item.get("layout_weight", 0.50),
+        "text_anchor_weight": item.get("text_anchor_weight", 0.35),
+        "image_anchor_weight": item.get("image_anchor_weight", 0.15),
         "rejection_reason": item["rejection_reason"],
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -1464,6 +1482,9 @@ class DecisionService:
     HIGH_RETRIEVAL_SCORE = 0.95
     STRONG_VERIFICATION_SCORE = 0.75
     DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.8
+    DEFAULT_LAYOUT_WEIGHT = 0.50
+    DEFAULT_TEXT_ANCHOR_WEIGHT = 0.35
+    DEFAULT_IMAGE_ANCHOR_WEIGHT = 0.15
 
     def _truthy(self, value: Any) -> bool:
         if isinstance(value, bool):
@@ -1524,11 +1545,51 @@ class DecisionService:
             return self.DEFAULT_FINAL_CONFIDENCE_THRESHOLD
         return threshold
 
+    def matching_weights(self, template: Optional[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+        metadata = metadata or {}
+
+        def read_weight(key: str, fallback: float) -> float:
+            raw_value = template.get(key) if template and template.get(key) is not None else metadata.get(key)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                value = fallback
+            return max(0.0, min(1.0, value))
+
+        weights = {
+            "layout": read_weight("layout_weight", self.DEFAULT_LAYOUT_WEIGHT),
+            "text_anchor": read_weight("text_anchor_weight", self.DEFAULT_TEXT_ANCHOR_WEIGHT),
+            "image_anchor": read_weight("image_anchor_weight", self.DEFAULT_IMAGE_ANCHOR_WEIGHT),
+        }
+        total = sum(weights.values())
+        if total <= 0:
+            return {
+                "layout": self.DEFAULT_LAYOUT_WEIGHT,
+                "text_anchor": self.DEFAULT_TEXT_ANCHOR_WEIGHT,
+                "image_anchor": self.DEFAULT_IMAGE_ANCHOR_WEIGHT,
+            }
+        return {key: round(value / total, 4) for key, value in weights.items()}
+
+    def _effective_matching_weights(self, configured_weights: Dict[str, float], verification: Dict[str, Any]) -> Dict[str, float]:
+        checked_fields = verification.get("checked_fields") or verification.get("verification_details") or []
+        has_text_anchor = any(isinstance(field, dict) and field.get("anchor_type") == "text" for field in checked_fields)
+        has_image_anchor = any(isinstance(field, dict) and field.get("anchor_type") == "image" for field in checked_fields)
+        weights = dict(configured_weights)
+        if not has_text_anchor:
+            weights["text_anchor"] = 0.0
+        if not has_image_anchor:
+            weights["image_anchor"] = 0.0
+        total = sum(weights.values())
+        if total <= 0:
+            return {"layout": 1.0, "text_anchor": 0.0, "image_anchor": 0.0}
+        return {key: round(value / total, 4) for key, value in weights.items()}
+
     def decide_candidate(
         self,
         retrieval_score: float,
         verification: Dict[str, Any],
         final_confidence_threshold: float,
+        matching_weights: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         retrieval_score = round(float(retrieval_score), 4)
         verification_score = round(float(verification.get("score", 0.0) or 0.0), 4)
@@ -1539,8 +1600,22 @@ class DecisionService:
         required_passed = self._required_passed_from_fields(verification, raw_required_passed)
         required_failed_fields = self._required_failed_fields(verification)
         verification_status = verification.get("status")
-        anchor_score = round((text_anchor_score + image_anchor_score) / 2, 4)
-        final_score = round((retrieval_score * 0.50) + (anchor_score * 0.50), 4)
+        configured_weights = matching_weights or self.matching_weights(None, {})
+        effective_weights = self._effective_matching_weights(configured_weights, verification)
+        anchor_weight = effective_weights["text_anchor"] + effective_weights["image_anchor"]
+        anchor_score = round(
+            (
+                (text_anchor_score * effective_weights["text_anchor"]) +
+                (image_anchor_score * effective_weights["image_anchor"])
+            ) / anchor_weight,
+            4,
+        ) if anchor_weight > 0 else 0.0
+        final_score = round(
+            (retrieval_score * effective_weights["layout"]) +
+            (text_anchor_score * effective_weights["text_anchor"]) +
+            (image_anchor_score * effective_weights["image_anchor"]),
+            4,
+        )
         final_passed = final_score >= final_confidence_threshold
         decision_path = "final_threshold_passed" if final_passed else "final_threshold_failed"
 
@@ -1550,6 +1625,8 @@ class DecisionService:
             "text_anchor_score": text_anchor_score,
             "image_anchor_score": image_anchor_score,
             "anchor_score": anchor_score,
+            "matching_weights": configured_weights,
+            "effective_matching_weights": effective_weights,
             "verification_passed": verification_passed,
             "final_score": round(float(final_score), 4),
             "final_passed": final_passed,
@@ -1874,10 +1951,11 @@ class AdminTemplateService:
                 """
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
-                    similarity_threshold, final_confidence_threshold, created_by,
+                    similarity_threshold, final_confidence_threshold,
+                    layout_weight, text_anchor_weight, image_anchor_weight, created_by,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -1887,6 +1965,9 @@ class AdminTemplateService:
                     payload.page_count,
                     payload.similarity_threshold,
                     payload.final_confidence_threshold,
+                    payload.layout_weight,
+                    payload.text_anchor_weight,
+                    payload.image_anchor_weight,
                     payload.created_by,
                 ),
             )
@@ -2085,8 +2166,10 @@ class AdminTemplateService:
         verification = VerificationService().verify_template(candidate_template["id"], alignment_context["page_paths"])
         if is_current_draft:
             verification = self._apply_temporary_draft_image_anchor_scores(candidate_template, verification, alignment_context["page_paths"])
-        threshold = DecisionService().final_confidence_threshold(candidate_template, {})
-        decision = DecisionService().decide_candidate(global_score, verification, threshold)
+        decision_service = DecisionService()
+        threshold = decision_service.final_confidence_threshold(candidate_template, {})
+        weights = decision_service.matching_weights(candidate_template, {})
+        decision = decision_service.decide_candidate(global_score, verification, threshold, weights)
         return {
             "template_id": candidate_template["id"],
             "template_name": candidate_template.get("name"),
@@ -2098,6 +2181,8 @@ class AdminTemplateService:
             "text_anchor_score": decision["text_anchor_score"],
             "image_anchor_score": decision["image_anchor_score"],
             "anchor_score": decision.get("anchor_score"),
+            "matching_weights": decision.get("matching_weights"),
+            "effective_matching_weights": decision.get("effective_matching_weights"),
             "verification_score": decision["verification_score"],
             "final_score": decision["final_score"],
             "alignment_status": alignment_context["alignment_status"],
@@ -2285,6 +2370,9 @@ class AdminTemplateService:
                 "image_anchor_count": len(image_anchors),
                 "similarity_threshold": draft.get("similarity_threshold"),
                 "final_confidence_threshold": draft.get("final_confidence_threshold"),
+                "layout_weight": draft.get("layout_weight"),
+                "text_anchor_weight": draft.get("text_anchor_weight"),
+                "image_anchor_weight": draft.get("image_anchor_weight"),
             },
             "temporary_embedding": {
                 "status": "generated",
@@ -2559,6 +2647,9 @@ class AdminTemplateService:
             "page_count": "page_count",
             "similarity_threshold": "similarity_threshold",
             "final_confidence_threshold": "final_confidence_threshold",
+            "layout_weight": "layout_weight",
+            "text_anchor_weight": "text_anchor_weight",
+            "image_anchor_weight": "image_anchor_weight",
             "rejection_reason": "rejection_reason",
         }
         updates = [(column_map[key], value) for key, value in patch.items() if key in column_map]

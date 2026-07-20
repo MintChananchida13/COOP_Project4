@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import AdjustZone from "../user/components/AdjustZone";
 import WorkspaceZone from "../user/components/WorkspaceZone";
@@ -39,6 +39,8 @@ interface TemplateDetectionNotice {
   message: string;
   detail?: string;
 }
+
+type NoticeTone = "success" | "warning" | "danger" | "info";
 
 const NoTemplateDetectionCard = ({ notice }: { notice: TemplateDetectionNotice }) => (
   <section className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
@@ -245,6 +247,55 @@ const downloadTextFile = (filename: string, content: string, mimeType = "applica
   URL.revokeObjectURL(url);
 };
 
+const parseExportTable = (value: string): string[][] | null => {
+  const trimmed = value.trim();
+  if (!trimmed || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(trimmed)) return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed) && parsed.every((row) => Array.isArray(row))) {
+      return parsed.map((row) => row.map((cell) => String(cell ?? "")));
+    }
+    if (Array.isArray(parsed) && parsed.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+      const keys = Array.from(new Set(parsed.flatMap((row) => Object.keys(row))));
+      return [keys, ...parsed.map((row) => keys.map((key) => String(row[key] ?? "")))];
+    }
+  } catch {
+    // Continue with markdown/plain-text parsing.
+  }
+
+  const markdownRows = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.includes("|"))
+    .map((line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()))
+    .filter((row) => !row.every((cell) => /^:?-{3,}:?$/.test(cell)));
+  if (markdownRows.length >= 2) return markdownRows;
+
+  const plainRows = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter(Boolean)
+    .map((line) => line.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean));
+  return plainRows.length >= 2 && plainRows.some((row) => row.length > 1) ? plainRows : null;
+};
+
+const tableRowsToObjects = (rows: string[][]) => {
+  const [header = [], ...bodyRows] = rows;
+  const headers = header.map((cell, index) => cell || `column_${index + 1}`);
+  return bodyRows.map((row) =>
+    Object.fromEntries(headers.map((headerName, index) => [headerName, row[index] ?? ""]))
+  );
+};
+
+const assignExportField = (fields: Record<string, unknown>, name: string, value: unknown) => {
+  if (!(name in fields)) {
+    fields[name] = value;
+    return;
+  }
+  fields[name] = Array.isArray(fields[name]) ? [...fields[name], value] : [fields[name], value];
+};
+
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
   const [imagesList, setImagesList] = useState<string[]>([]);
@@ -263,10 +314,17 @@ export default function Home() {
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
   const [classificationStatus, setClassificationStatus] = useState<string>("");
   const [templateDetectionNotice, setTemplateDetectionNotice] = useState<TemplateDetectionNotice | null>(null);
+  const [operationNotice, setOperationNotice] = useState<{ tone: NoticeTone; title: string; message: string } | null>(null);
   const [isTemplateDecisionOpen, setIsTemplateDecisionOpen] = useState<boolean>(false);
   const [templateDecisionStatus, setTemplateDecisionStatus] = useState<string>("");
   const [exportJson, setExportJson] = useState<string>("");
+  const [exportText, setExportText] = useState<string>("");
   const [copyStatus, setCopyStatus] = useState<string>("");
+  const [isGroundTruthSaved, setIsGroundTruthSaved] = useState<boolean>(false);
+  const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string>("");
+  const [saveNotice, setSaveNotice] = useState<{ tone: "success" | "error"; title: string; message: string } | null>(null);
+  const [isExportWarningOpen, setIsExportWarningOpen] = useState<boolean>(false);
+  const [pendingExportType, setPendingExportType] = useState<"json" | "text">("json");
   const [matchedTemplate, setMatchedTemplate] = useState<{
     id: string;
     name: string;
@@ -274,6 +332,11 @@ export default function Home() {
     decisionReason?: string | null;
     alignmentStatus?: string | null;
   } | null>(null);
+
+  const handleGroundTruthResultsChange = (next: Parameters<typeof setOcrResults>[0]) => {
+    setIsGroundTruthSaved(false);
+    setOcrResults(next);
+  };
 
   const handleUploadSuccess = (urls: string[]) => {
     setImagesList(urls);
@@ -284,8 +347,11 @@ export default function Home() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setIsGroundTruthSaved(false);
+    setLastDraftSavedAt("");
     setClassificationStatus("");
     setTemplateDetectionNotice(null);
+    setOperationNotice(null);
     setIsTemplateDecisionOpen(false);
     setTemplateDecisionStatus("");
     setMatchedTemplate(null);
@@ -319,8 +385,11 @@ export default function Home() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setIsGroundTruthSaved(false);
+    setLastDraftSavedAt("");
     setClassificationStatus("");
     setTemplateDetectionNotice(null);
+    setOperationNotice(null);
     setIsTemplateDecisionOpen(false);
     setTemplateDecisionStatus("");
     setMatchedTemplate(null);
@@ -335,7 +404,10 @@ export default function Home() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
+    setIsGroundTruthSaved(false);
+    setLastDraftSavedAt("");
     setMatchedTemplate(null);
+    setOperationNotice(null);
     setCurrentStep("studio");
     setIsTemplateDecisionOpen(true);
     setTemplateDecisionStatus("กำลังเตรียมภาพที่ยืนยันขอบเขตแล้ว");
@@ -411,12 +483,18 @@ export default function Home() {
   const handleRunOCR = async () => {
     const activeRois = rois.filter((roi) => roi.enabled !== false);
     if (activeRois.length === 0) {
-      alert("กรุณาวาดหรือเปิดใช้งาน ROI อย่างน้อย 1 กล่องก่อนอ่าน OCR");
+      setOperationNotice({
+        tone: "warning",
+        title: "ยังไม่มีข้อมูลให้ OCR",
+        message: "กรุณาเลือกหรือเปิดใช้งาน ROI อย่างน้อย 1 กล่องก่อนอ่านข้อมูล",
+      });
       return;
     }
 
     setIsLoading(true);
     setOcrResults([]);
+    setIsGroundTruthSaved(false);
+    setOperationNotice(null);
     setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
     try {
@@ -499,14 +577,23 @@ export default function Home() {
 
       if (combinedResults.length > 0) {
         setOcrResults(combinedResults);
+        setIsGroundTruthSaved(false);
         setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
-        alert("ไม่สามารถดึงข้อมูล OCR ได้ กรุณาตรวจสอบเอนจินระบบ");
+        setOperationNotice({
+          tone: "warning",
+          title: "ไม่พบผล OCR",
+          message: "ระบบอ่านข้อมูลจาก ROI ที่เลือกไม่ได้ กรุณาตรวจสอบตำแหน่ง ROI หรือสถานะ OCR engine",
+        });
       }
     } catch (err) {
       console.error(err);
-      alert("เกิดข้อผิดพลาดในการประมวลผลภาพรวมพร้อมกันทุกหน้า");
+      setOperationNotice({
+        tone: "danger",
+        title: "อ่านข้อมูลไม่สำเร็จ",
+        message: err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการประมวลผล OCR",
+      });
     } finally {
       setIsLoading(false);
       setOcrProgress(null);
@@ -516,6 +603,8 @@ export default function Home() {
   const handleRunFullPageOCR = async () => {
     setIsLoading(true);
     setOcrResults([]);
+    setIsGroundTruthSaved(false);
+    setOperationNotice(null);
     setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
     try {
@@ -617,14 +706,23 @@ export default function Home() {
         });
 
         setOcrResults(allOcrResults);
+        setIsGroundTruthSaved(false);
         setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
-        alert("ไม่พบข้อความใดๆ บนเอกสารจากการสแกนด้วย AI Engine");
+        setOperationNotice({
+          tone: "warning",
+          title: "ไม่พบข้อความในเอกสาร",
+          message: "ระบบไม่พบข้อความจากการอ่านทั้งหน้า กรุณาตรวจสอบคุณภาพภาพหรือกำหนด ROI เอง",
+        });
       }
     } catch (err) {
       console.error(err);
-      alert("เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งเอกสาร");
+      setOperationNotice({
+        tone: "danger",
+        title: "อ่านทั้งหน้าไม่สำเร็จ",
+        message: err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งเอกสาร",
+      });
     } finally {
       setIsLoading(false);
       setOcrProgress(null);
@@ -632,95 +730,180 @@ export default function Home() {
   };
 
   const handleApproveAndSave = async () => {
-    const currentPageResults = ocrResults.filter((res) => {
-      const resPage = res.pageIndex !== undefined ? Number(res.pageIndex) : 0;
-      return resPage === Number(currentIndex);
-    });
-
-    const payload = {
-      templateName: `Thai_Legal_Document_Page_${currentIndex + 1}`,
-      extracted_data: currentPageResults.map((item) => ({
-        fieldName: item.fieldName || "",
-        text: item.extractedText || "",
-        confidence: item.confidence !== undefined ? item.confidence : 0.9,
-        saved_path: item.saved_path || "",
-      })),
-    };
-
     try {
-      await fetch("http://localhost:8000/api/templates/approve-and-save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const savedPayload = {
+        saved_at: new Date().toISOString(),
+        ...buildExportPayload(),
+      };
+      window.localStorage.setItem("ocr-studio:last-saved-result", JSON.stringify(savedPayload));
+      setIsGroundTruthSaved(true);
+      setSaveNotice({
+        tone: "success",
+        title: "บันทึกการเปลี่ยนแปลงแล้ว",
+        message: `บันทึกผล OCR ของหน้า ${currentIndex + 1} ไว้ในเครื่องเรียบร้อยแล้ว สามารถส่งออก JSON หรือ Text ได้`,
       });
-      alert(`บันทึกข้อมูลของเอกสารหน้า ${currentIndex + 1} เรียบร้อยแล้ว!`);
+      return;
     } catch (error) {
       console.error(error);
-      alert("เกิดข้อผิดพลาดในการบันทึกข้อมูล");
+      setSaveNotice({
+        tone: "error",
+        title: "บันทึกไม่สำเร็จ",
+        message: error instanceof Error ? error.message : "เกิดข้อผิดพลาดในการบันทึกข้อมูล",
+      });
+      return;
     }
   };
 
   const buildExportPayload = () => {
-    const exportedAt = new Date().toISOString();
-    const fields = ocrResults.map((result) => {
+    const pages = Array.from({ length: Math.max(imagesList.length, 1) }, (_, index) => ({
+      page: index + 1,
+      fields: {} as Record<string, unknown>,
+    }));
+
+    ocrResults.forEach((result) => {
       const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
-      return {
-        field_name: result.fieldName,
-        value: result.extractedText,
-        original_text: result.originalText ?? result.extractedText,
-        confidence: result.confidence,
-        page_number: (result.pageIndex ?? matchedRoi?.pageIndex ?? 0) + 1,
-        type: result.type || matchedRoi?.type || "text",
-        data_type: result.dataType || matchedRoi?.dataType || "string",
-        extraction_method: matchedRoi?.extractionMethod || "paddle_thai_ocr",
-        roi: matchedRoi
-          ? {
-              x: matchedRoi.x,
-              y: matchedRoi.y,
-              width: matchedRoi.width,
-              height: matchedRoi.height,
-              page_index: matchedRoi.pageIndex ?? 0,
-              points: matchedRoi.points || null,
-            }
-          : null,
-      };
+      const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
+      const page = pages[pageIndex] || pages[0];
+      const fieldName = result.fieldName || matchedRoi?.fieldName || `field_${Object.keys(page.fields).length + 1}`;
+      const fieldType = result.type || matchedRoi?.type || matchedRoi?.dataType || "text";
+      const rawValue = result.extractedText || "";
+
+      if (fieldType === "table") {
+        const tableRows = parseExportTable(rawValue);
+        assignExportField(page.fields, fieldName, tableRows ? tableRowsToObjects(tableRows) : rawValue);
+        return;
+      }
+
+      if (fieldType === "image") {
+        assignExportField(page.fields, fieldName, result.saved_path || rawValue || "image");
+        return;
+      }
+
+      assignExportField(page.fields, fieldName, rawValue);
     });
 
     return {
-      export_version: "1.0",
-      exported_at: exportedAt,
-      source: "ocr_studio",
-      document: {
-        page_count: imagesList.length,
-        active_page: currentIndex + 1,
-      },
-      template_match: matchedTemplate
-        ? {
-            template_id: matchedTemplate.id,
-            template_name: matchedTemplate.name,
-            confidence: matchedTemplate.confidence ?? null,
-            decision_reason: matchedTemplate.decisionReason ?? null,
-            alignment_status: matchedTemplate.alignmentStatus ?? null,
-          }
-        : null,
-      summary: {
-        field_count: fields.length,
-        average_confidence:
-          fields.length > 0
-            ? Number((fields.reduce((sum, field) => sum + Number(field.confidence || 0), 0) / fields.length).toFixed(4))
-            : 0,
-      },
-      fields,
-      pages: imagesList.map((_, index) => ({
-        page_number: index + 1,
-        field_count: fields.filter((field) => field.page_number === index + 1).length,
-      })),
+      template: matchedTemplate?.name ?? null,
+      page_count: pages.length,
+      pages,
     };
   };
 
-  const handleOpenExportJson = () => {
+  useEffect(() => {
+    if (currentStep !== "editor" || ocrResults.length === 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const savedAt = new Date().toISOString();
+      window.localStorage.setItem(
+        "ocr-studio:draft-result",
+        JSON.stringify({
+          draft_saved_at: savedAt,
+          ...buildExportPayload(),
+        })
+      );
+      setLastDraftSavedAt(savedAt);
+    }, 600);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentStep, ocrResults, rois, imagesList.length, matchedTemplate?.name]);
+
+  const openExportJson = () => {
     setCopyStatus("");
+    setExportText("");
     setExportJson(JSON.stringify(buildExportPayload(), null, 2));
+  };
+
+  const renderPlainValue = (value: unknown, indent = ""): string => {
+    if (Array.isArray(value)) {
+      if (value.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+        return value
+          .map((row, index) => {
+            const cells = Object.entries(row as Record<string, unknown>)
+              .map(([key, cell]) => `${key}: ${String(cell ?? "")}`)
+              .join(" | ");
+            return `${indent}${index + 1}. ${cells}`;
+          })
+          .join("\n");
+      }
+      return value.map((item) => `${indent}- ${String(item ?? "")}`).join("\n");
+    }
+
+    if (value && typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>)
+        .map(([key, child]) => `${indent}${key}: ${String(child ?? "")}`)
+        .join("\n");
+    }
+
+    return `${indent}${String(value ?? "")}`;
+  };
+
+  const buildExportPlainText = () => {
+    const payload = buildExportPayload();
+    const lines: string[] = [];
+
+    if (payload.template) {
+      lines.push(`Template: ${payload.template}`);
+    }
+    lines.push(`Pages: ${payload.page_count}`);
+
+    payload.pages.forEach((page) => {
+      lines.push("");
+      lines.push(`Page ${page.page}`);
+
+      const fields = Object.entries(page.fields);
+      if (fields.length === 0) {
+        lines.push("- No OCR fields");
+        return;
+      }
+
+      fields.forEach(([fieldName, value]) => {
+        const rendered = renderPlainValue(value, "  ");
+        if (rendered.includes("\n")) {
+          lines.push(`${fieldName}:`);
+          lines.push(rendered);
+        } else {
+          lines.push(`${fieldName}: ${rendered.trim()}`);
+        }
+      });
+    });
+
+    return lines.join("\n").trim();
+  };
+
+  const openExportText = () => {
+    setCopyStatus("");
+    setExportJson("");
+    setExportText(buildExportPlainText());
+  };
+
+  const requestExport = (type: "json" | "text") => {
+    setPendingExportType(type);
+    if (!isGroundTruthSaved) {
+      setIsExportWarningOpen(true);
+      return;
+    }
+    if (type === "json") {
+      openExportJson();
+      return;
+    }
+    openExportText();
+  };
+
+  const handleOpenExportJson = () => {
+    requestExport("json");
+  };
+
+  const handleOpenExportText = () => {
+    requestExport("text");
+  };
+
+  const continuePendingExport = () => {
+    setIsExportWarningOpen(false);
+    if (pendingExportType === "text") {
+      openExportText();
+      return;
+    }
+    openExportJson();
   };
 
   const handleCopyExportJson = async () => {
@@ -732,6 +915,83 @@ export default function Home() {
       setCopyStatus("Copy failed. You can select and copy the JSON manually.");
     }
   };
+
+  const handleCopyExportText = async () => {
+    if (!exportText) return;
+    try {
+      await navigator.clipboard.writeText(exportText);
+      setCopyStatus("Copied text to clipboard.");
+    } catch {
+      setCopyStatus("Copy failed. You can select and copy the text manually.");
+    }
+  };
+
+  const getUserFlowStatus = (): { tone: NoticeTone; title: string; message: string } => {
+    if (currentStep === "upload") {
+      return {
+        tone: "info",
+        title: "เริ่มงานเอกสาร",
+        message: "อัปโหลดรูปภาพหรือ PDF เพื่อเริ่มตรวจขอบเขตเอกสาร",
+      };
+    }
+
+    if (currentStep === "adjust") {
+      return {
+        tone: "info",
+        title: "ตรวจขอบเขตเอกสาร",
+        message: "ปรับกรอบให้ครอบเฉพาะเอกสาร จากนั้นยืนยันเพื่อค้นหา Template และโหลด ROI",
+      };
+    }
+
+    if (currentStep === "studio") {
+      if (isLoading) {
+        return {
+          tone: "info",
+          title: "กำลังอ่านข้อมูล",
+          message: ocrProgress
+            ? `กำลังประมวลผลหน้า ${ocrProgress.currentPage}/${ocrProgress.totalPages}`
+            : "ระบบกำลังอ่านข้อมูลจาก ROI ที่เลือก",
+        };
+      }
+
+      if (matchedTemplate) {
+        return {
+          tone: "success",
+          title: "พร้อมอ่านข้อมูลจาก Template",
+          message: `พบ Template "${matchedTemplate.name}" แล้ว เลือก Field ที่ต้องการและกดอ่านข้อมูลที่เลือก`,
+        };
+      }
+
+      if (templateDetectionNotice) {
+        return {
+          tone: "warning",
+          title: "ใช้ Custom OCR",
+          message: "ระบบไม่พบ Template ที่มั่นใจพอ สามารถกำหนด ROI เองและอ่านข้อมูลต่อได้",
+        };
+      }
+
+      return {
+        tone: "info",
+        title: "กำหนด ROI",
+        message: "เลือกหรือวาด ROI สำหรับข้อมูลที่ต้องการ OCR",
+      };
+    }
+
+    return {
+      tone: isGroundTruthSaved ? "success" : "warning",
+      title: isGroundTruthSaved ? "ผล OCR ถูกบันทึกแล้ว" : "ตรวจสอบผล OCR ก่อนส่งออก",
+      message: isGroundTruthSaved
+        ? "สามารถส่งออก JSON หรือ Text ได้"
+        : lastDraftSavedAt
+          ? `ระบบบันทึก draft อัตโนมัติไว้แล้ว ${new Date(lastDraftSavedAt).toLocaleTimeString("th-TH")}`
+          : "แก้ไขผล OCR ให้เรียบร้อย จากนั้นกดบันทึกการเปลี่ยนแปลง",
+    };
+  };
+
+  const userFlowStatus = getUserFlowStatus();
+  const exportPreviewPayload = exportJson || exportText ? buildExportPayload() : null;
+  const exportFieldCount =
+    exportPreviewPayload?.pages.reduce((sum, page) => sum + Object.keys(page.fields).length, 0) ?? 0;
 
   return (
     <main className="min-h-screen bg-slate-50 py-6 select-none">
@@ -760,6 +1020,11 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        <InlineState tone={userFlowStatus.tone} title={userFlowStatus.title} message={userFlowStatus.message} />
+        {operationNotice && (
+          <InlineState tone={operationNotice.tone} title={operationNotice.title} message={operationNotice.message} />
+        )}
 
         <div className="hidden text-center py-2">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
@@ -815,8 +1080,6 @@ export default function Home() {
 
         {currentStep === "studio" && (
           <>
-            {classificationStatus && !templateDetectionNotice && <InlineState tone={matchedTemplate ? "success" : "info"} message={classificationStatus} />}
-
             {matchedTemplate ? (
               <MatchedTemplateWorkspaceZone
                 matchedTemplate={matchedTemplate}
@@ -882,7 +1145,7 @@ export default function Home() {
               previewUrl={imagesList[currentIndex] || previewUrl}
               rois={rois}
               ocrResults={ocrResults}
-              setOcrResults={setOcrResults}
+              setOcrResults={handleGroundTruthResultsChange}
               onBackToStudio={() => setCurrentStep("studio")}
               onApproveAndSave={handleApproveAndSave}
               imageList={imagesList}
@@ -891,9 +1154,9 @@ export default function Home() {
             />
             <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
               <div>
-                <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Additional Actions</h2>
+                <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Actions</h2>
                 <p className="text-xs font-semibold text-slate-500">
-                  Export the OCR result or send this session to admin review.
+                  ส่งออกผลลัพธ์เป็น JSON หรือส่งคำขอให้ผู้ดูแลระบบตรวจสอบ Template
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -902,21 +1165,21 @@ export default function Home() {
                   onClick={handleOpenExportJson}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
-                  Export
+                  ส่งออก JSON
                 </button>
                 <button
                   type="button"
-                  onClick={() => console.info("Download action is a placeholder.")}
+                  onClick={handleOpenExportText}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
-                  Download
+                  Export Text
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsTemplateRequestOpen(true)}
                   className="rounded-xl bg-indigo-600 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-indigo-700"
                 >
-                  Request New Template
+                  ส่งคำขอ Template ใหม่
                 </button>
               </div>
             </section>
@@ -934,7 +1197,7 @@ export default function Home() {
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export JSON</h2>
                       <p className="mt-1 text-xs font-semibold text-slate-500">
-                        Structured OCR result from the current session.
+                        JSON แบบย่อจากผล OCR ที่ตรวจและแก้ไขแล้ว
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -966,10 +1229,118 @@ export default function Home() {
                       {copyStatus}
                     </div>
                   )}
+                  {exportPreviewPayload && (
+                    <div className="grid gap-3 border-b border-slate-100 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-600 sm:grid-cols-3">
+                      <div>Template: <span className="text-slate-900">{exportPreviewPayload.template || "Custom OCR"}</span></div>
+                      <div>Pages: <span className="tabular-nums text-slate-900">{exportPreviewPayload.page_count}</span></div>
+                      <div>Fields: <span className="tabular-nums text-slate-900">{exportFieldCount}</span></div>
+                    </div>
+                  )}
                   <div className="min-h-0 flex-1 overflow-auto bg-slate-950 p-4">
                     <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-slate-100">
                       {exportJson}
                     </pre>
+                  </div>
+                </section>
+              </div>
+            )}
+            {exportText && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <section className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Text</h2>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Plain text summary from the reviewed OCR result.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyExportText}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                      >
+                        Copy Text
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadTextFile(`ocr-export-${Date.now()}.txt`, exportText, "text/plain")}
+                        className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+                      >
+                        Download TXT
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExportText("")}
+                        className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  {copyStatus && (
+                    <div className="border-b border-slate-100 bg-emerald-50 px-5 py-2 text-xs font-bold text-emerald-700">
+                      {copyStatus}
+                    </div>
+                  )}
+                  {exportPreviewPayload && (
+                    <div className="grid gap-3 border-b border-slate-100 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-600 sm:grid-cols-3">
+                      <div>Template: <span className="text-slate-900">{exportPreviewPayload.template || "Custom OCR"}</span></div>
+                      <div>Pages: <span className="tabular-nums text-slate-900">{exportPreviewPayload.page_count}</span></div>
+                      <div>Fields: <span className="tabular-nums text-slate-900">{exportFieldCount}</span></div>
+                    </div>
+                  )}
+                  <div className="min-h-0 flex-1 overflow-auto bg-slate-950 p-4">
+                    <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-slate-100">
+                      {exportText}
+                    </pre>
+                  </div>
+                </section>
+              </div>
+            )}
+            {saveNotice && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+                <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                  <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full ${
+                    saveNotice.tone === "success" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+                  }`}>
+                    {saveNotice.tone === "success" ? "✓" : "!"}
+                  </div>
+                  <h2 className="mt-4 text-center text-base font-black text-slate-950">{saveNotice.title}</h2>
+                  <p className="mt-2 text-center text-sm font-semibold leading-relaxed text-slate-500">{saveNotice.message}</p>
+                  <button
+                    type="button"
+                    onClick={() => setSaveNotice(null)}
+                    className="mt-5 w-full rounded-xl bg-slate-900 px-4 py-3 text-xs font-black text-white hover:bg-slate-800"
+                  >
+                    ตกลง
+                  </button>
+                </section>
+              </div>
+            )}
+            {isExportWarningOpen && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+                <section className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-50 text-amber-600">!</div>
+                  <h2 className="mt-4 text-center text-base font-black text-slate-950">ยังไม่ได้บันทึกการเปลี่ยนแปลง</h2>
+                  <p className="mt-2 text-center text-sm font-semibold leading-relaxed text-slate-500">
+                    ควรบันทึกผล OCR ที่แก้ไขแล้วก่อนส่งออก เพื่อให้แน่ใจว่าไฟล์ที่ส่งออกเป็นข้อมูลล่าสุด
+                  </p>
+                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsExportWarningOpen(false)}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                    >
+                      กลับไปบันทึก
+                    </button>
+                    <button
+                      type="button"
+                      onClick={continuePendingExport}
+                      className="rounded-xl bg-indigo-600 px-4 py-3 text-xs font-black text-white hover:bg-indigo-700"
+                    >
+                      ส่งออกต่อ
+                    </button>
                   </div>
                 </section>
               </div>

@@ -565,7 +565,6 @@ export default function WorkspaceTemplateEditorV2({
               : amber ? "bg-white border-amber-200 text-amber-700 font-bold" : "bg-white border-indigo-200 text-indigo-700 font-bold"
           }`;
         }}
-        rightPanelClassName="min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col"
         rightPanelRenderer={({ currentPageRois: panelRois, setSelectedId: selectRoi }) => (
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">

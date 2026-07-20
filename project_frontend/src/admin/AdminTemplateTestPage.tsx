@@ -82,11 +82,45 @@ interface EmbeddingInputPreview {
 }
 
 const DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.75;
+const DEFAULT_MATCHING_WEIGHTS = {
+  layoutWeight: 0.5,
+  textAnchorWeight: 0.35,
+  imageAnchorWeight: 0.15,
+};
 
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
 
 const isNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value);
+
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+
+const readMatchingWeights = (weights: {
+  layoutWeight?: number | null;
+  textAnchorWeight?: number | null;
+  imageAnchorWeight?: number | null;
+}) => ({
+  layoutWeight: clampUnit(Number.isFinite(weights.layoutWeight) ? Number(weights.layoutWeight) : DEFAULT_MATCHING_WEIGHTS.layoutWeight),
+  textAnchorWeight: clampUnit(Number.isFinite(weights.textAnchorWeight) ? Number(weights.textAnchorWeight) : DEFAULT_MATCHING_WEIGHTS.textAnchorWeight),
+  imageAnchorWeight: clampUnit(Number.isFinite(weights.imageAnchorWeight) ? Number(weights.imageAnchorWeight) : DEFAULT_MATCHING_WEIGHTS.imageAnchorWeight),
+});
+
+const normalizeMatchingWeights = (weights: {
+  layoutWeight?: number | null;
+  textAnchorWeight?: number | null;
+  imageAnchorWeight?: number | null;
+}) => {
+  const raw = readMatchingWeights(weights);
+  const total = raw.layoutWeight + raw.textAnchorWeight + raw.imageAnchorWeight;
+  if (total <= 0) return DEFAULT_MATCHING_WEIGHTS;
+  return {
+    layoutWeight: Number((raw.layoutWeight / total).toFixed(4)),
+    textAnchorWeight: Number((raw.textAnchorWeight / total).toFixed(4)),
+    imageAnchorWeight: Number((raw.imageAnchorWeight / total).toFixed(4)),
+  };
+};
+
+const formatWeightPercent = (value: number) => `${Math.round(value * 100)}%`;
 
 const isValidRoi = (roi?: TemplateField["roi"] | IgnoreRegion["roi"]) =>
   Boolean(
@@ -658,6 +692,79 @@ function DraftOverviewMetric({ label, value, tone = "slate" }: { label: string; 
   );
 }
 
+function MatchingWeightsPanel({
+  matchingWeights,
+  effectiveMatchingWeights,
+  imageAnchorCount,
+  onWeightChange,
+  onWeightBlur,
+  onUseRecommended,
+}: {
+  matchingWeights: typeof DEFAULT_MATCHING_WEIGHTS;
+  effectiveMatchingWeights: typeof DEFAULT_MATCHING_WEIGHTS;
+  imageAnchorCount: number;
+  onWeightChange: (key: "layoutWeight" | "textAnchorWeight" | "imageAnchorWeight", value: number) => void;
+  onWeightBlur: () => void;
+  onUseRecommended: () => void;
+}) {
+  const weightItems = [
+    { key: "layoutWeight" as const, label: "Layout Signature", value: matchingWeights.layoutWeight, hint: "โครงสร้างหน้าเอกสาร", disabled: false },
+    { key: "textAnchorWeight" as const, label: "Text Anchors", value: matchingWeights.textAnchorWeight, hint: "ข้อความยืนยัน Template", disabled: false },
+    {
+      key: "imageAnchorWeight" as const,
+      label: "Image Anchors",
+      value: imageAnchorCount > 0 ? matchingWeights.imageAnchorWeight : 0,
+      hint: imageAnchorCount > 0 ? "โลโก้ ตรา หรือภาพคงที่" : "ไม่มี Image Anchor จึงไม่ใช้คะแนนส่วนนี้",
+      disabled: imageAnchorCount === 0,
+    },
+  ];
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Matching Weights</h4>
+          <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-500">
+            กำหนดน้ำหนัก Layout Signature, Text Anchors และ Image Anchors สำหรับการคำนวณ Final Score
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onUseRecommended}
+          className="ui-stable-action rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black text-slate-700 hover:border-indigo-200 hover:text-indigo-700"
+        >
+          ใช้ค่าแนะนำ
+        </button>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {weightItems.map((item) => (
+          <label key={item.key} className="block rounded-lg border border-slate-100 bg-slate-50 p-3">
+            <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">{item.label}</span>
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.01"
+              value={item.value}
+              disabled={item.disabled}
+              onChange={(event) => {
+                if (!item.disabled) onWeightChange(item.key, Number(event.target.value));
+              }}
+              onBlur={onWeightBlur}
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            />
+            <span className="mt-1 block text-[10px] font-semibold text-slate-500">{item.hint}</span>
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-800">
+        Effective: Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} · Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} · Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
+        {imageAnchorCount === 0 && <span className="block text-[10px] text-indigo-600">Template นี้ยังไม่มี Image Anchor ระบบจึงกระจายน้ำหนักไปที่ Layout/Text อัตโนมัติ</span>}
+      </div>
+    </div>
+  );
+}
+
 function DraftSectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div>
@@ -856,6 +963,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback" | "error">("loading");
   const [ocrResults, setOcrResults] = useState<OcrPreviewResult[]>([]);
+  const [anchorPreviewResults, setAnchorPreviewResults] = useState<OcrPreviewResult[]>([]);
   const [ocrStatus, setOcrStatus] = useState("");
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [simulation, setSimulation] = useState<PrepublishSimulationResult | null>(null);
@@ -929,6 +1037,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     acc[result.pageNumber] = [...(acc[result.pageNumber] || []), result];
     return acc;
   }, {});
+  const anchorPreviewsByPage = anchorPreviewResults.reduce<Record<number, OcrPreviewResult[]>>((acc, result) => {
+    acc[result.pageNumber] = [...(acc[result.pageNumber] || []), result];
+    return acc;
+  }, {});
   const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
   const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
   const publishPrerequisitesMet = Boolean(simulationPassed && detectionTestPassed);
@@ -943,6 +1055,22 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const finalConfidenceThreshold = typeof template?.finalConfidenceThreshold === "number" && Number.isFinite(template.finalConfidenceThreshold)
     ? template.finalConfidenceThreshold
     : DEFAULT_FINAL_CONFIDENCE_THRESHOLD;
+  const matchingWeights = useMemo(
+    () => readMatchingWeights({
+      layoutWeight: template?.layoutWeight,
+      textAnchorWeight: template?.textAnchorWeight,
+      imageAnchorWeight: template?.imageAnchorWeight,
+    }),
+    [template?.layoutWeight, template?.textAnchorWeight, template?.imageAnchorWeight]
+  );
+  const effectiveMatchingWeights = useMemo(() => {
+    const weights = {
+      layoutWeight: matchingWeights.layoutWeight,
+      textAnchorWeight: textAnchors.length > 0 ? matchingWeights.textAnchorWeight : 0,
+      imageAnchorWeight: imageAnchors.length > 0 ? matchingWeights.imageAnchorWeight : 0,
+    };
+    return normalizeMatchingWeights(weights);
+  }, [imageAnchors.length, matchingWeights, textAnchors.length]);
   const validationSteps = [
     { step: 1, label: "Review ROI & OCR", enabled: true, done: ocrPreviewPassed },
     { step: 2, label: "Layout Simulation", enabled: ocrPreviewPassed, done: simulationPassed },
@@ -959,6 +1087,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     setIsPreviewing(true);
     setOcrStatus("Running OCR on extraction fields...");
     setOcrResults([]);
+    setAnchorPreviewResults([]);
 
     try {
       const nextResults: OcrPreviewResult[] = [];
@@ -1006,7 +1135,27 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       }
 
       setOcrResults(nextResults);
-      setOcrStatus(`OCR preview complete for ${nextResults.length} extraction fields.`);
+      const nextAnchorPreviews: OcrPreviewResult[] = [];
+      for (const anchor of verificationAnchors) {
+        const page = safePages.find((item) => item.pageNumber === anchor.pageNumber);
+        const imageSrc = page?.normalizedImageUrl || page?.sampleImageUrl || samplePage;
+        const roiPreviewUrl = await cropFieldPreview(imageSrc, anchor);
+        const isImageAnchor = anchor.dataType === "image";
+        nextAnchorPreviews.push({
+          id: anchor.id,
+          pageNumber: anchor.pageNumber,
+          fieldName: anchor.fieldName,
+          displayLabel: anchor.displayLabel,
+          extractionMethod: isImageAnchor ? "image_feature" : "ocr_text",
+          ocrText: isImageAnchor ? "(image anchor crop ready)" : anchor.expectedText || "",
+          roiPreviewUrl: roiPreviewUrl || undefined,
+          expectedText: anchor.expectedText || undefined,
+          verificationStatus: isImageAnchor || anchor.expectedText?.trim() ? "pass" : "not_configured",
+          passed: Boolean(roiPreviewUrl && (isImageAnchor || anchor.expectedText?.trim())),
+        });
+      }
+      setAnchorPreviewResults(nextAnchorPreviews);
+      setOcrStatus(`OCR preview complete for ${nextResults.length} extraction fields and ${nextAnchorPreviews.length} verification anchors.`);
     } catch (error) {
       console.error(error);
       setOcrStatus("OCR preview failed. Check the OCR backend and image data.");
@@ -1095,6 +1244,38 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       console.warn("Final confidence threshold save failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Final confidence threshold save failed.");
     }
+  };
+
+  const updateMatchingWeightDraft = (key: "layoutWeight" | "textAnchorWeight" | "imageAnchorWeight", value: number) => {
+    setTemplate((current) => current ? { ...current, [key]: Number.isFinite(value) ? clampUnit(value) : 0 } : current);
+  };
+
+  const persistMatchingWeights = async (weights = matchingWeights) => {
+    if (!template) return;
+    const configured = readMatchingWeights(weights);
+    const nextWeights = imageAnchors.length > 0
+      ? configured
+      : { ...configured, imageAnchorWeight: 0 };
+    setStatusMessage("");
+    setSimulationError("");
+    try {
+      const bundle = await updateTemplateApi(templateId, nextWeights);
+      setTemplate(bundle.template);
+      setPages(bundle.pages);
+      setFields(bundle.fields);
+      setStatusMessage("Matching weights saved.");
+    } catch (error) {
+      console.warn("Matching weights save failed.", error);
+      setSimulationError(error instanceof Error ? error.message : "Matching weights save failed.");
+    }
+  };
+
+  const applyRecommendedMatchingWeights = async () => {
+    const recommended = imageAnchors.length > 0
+      ? DEFAULT_MATCHING_WEIGHTS
+      : { layoutWeight: 0.6, textAnchorWeight: textAnchors.length > 0 ? 0.4 : 0, imageAnchorWeight: 0 };
+    setTemplate((current) => current ? { ...current, ...recommended } : current);
+    await persistMatchingWeights(recommended);
   };
 
   if (loadStatus === "loading") {
@@ -1202,6 +1383,15 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         </div>
       </section>
 
+      <MatchingWeightsPanel
+        matchingWeights={matchingWeights}
+        effectiveMatchingWeights={effectiveMatchingWeights}
+        imageAnchorCount={imageAnchors.length}
+        onWeightChange={updateMatchingWeightDraft}
+        onWeightBlur={() => persistMatchingWeights()}
+        onUseRecommended={applyRecommendedMatchingWeights}
+      />
+
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader title="ROI & OCR Preview" subtitle="ต้อง Preview OCR ให้ผ่านก่อน จึงจะไปขั้น Simulation ได้." />
@@ -1302,6 +1492,85 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </aside>
         </div>
         {ocrStatus && <p className="mt-3 text-xs font-bold text-slate-600">{ocrStatus}</p>}
+        {(ocrResults.length > 0 || anchorPreviewResults.length > 0) && (
+          <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50/70 p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h4 className="text-xs font-black text-orange-950">Verification Anchors Preview</h4>
+                <p className="mt-1 text-[11px] font-semibold text-orange-700">
+                  แสดง ROI ที่ใช้ยืนยัน Template เท่านั้น ไม่ใช่ข้อมูลที่จะส่งออกให้ผู้ใช้
+                </p>
+              </div>
+              <span className="w-fit rounded-full bg-orange-600 px-2.5 py-1 text-[10px] font-black uppercase text-white">
+                {verificationAnchors.length} Anchors
+              </span>
+            </div>
+            <div className="mt-3 space-y-3">
+              {verificationAnchors.length === 0 ? (
+                <p className="rounded-lg bg-white p-3 text-xs font-semibold text-orange-600">ยังไม่มี Verification Anchors สำหรับ Template นี้</p>
+              ) : (
+                safePages.map((page) => {
+                  const pageAnchors = verificationAnchors.filter((anchor) => anchor.pageNumber === page.pageNumber);
+                  const pagePreviews = anchorPreviewsByPage[page.pageNumber] || [];
+                  if (pageAnchors.length === 0) return null;
+                  return (
+                    <div key={`anchor-preview-${page.id}`} className="rounded-xl border border-orange-100 bg-white p-3">
+                      <h5 className="text-[11px] font-black uppercase tracking-wider text-orange-800">Page {page.pageNumber}</h5>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {pageAnchors.map((anchor) => {
+                          const preview = pagePreviews.find((item) => item.id === anchor.id);
+                          const isImageAnchor = anchor.dataType === "image";
+                          return (
+                            <button
+                              key={anchor.id}
+                              type="button"
+                              onClick={() => setSelectedFieldId(anchor.id)}
+                              className={`rounded-xl border p-3 text-left text-xs transition-colors ${
+                                selectedFieldId === anchor.id
+                                  ? "border-orange-500 bg-orange-50 text-orange-950 ring-2 ring-orange-200"
+                                  : "border-orange-100 bg-white text-slate-800 hover:border-orange-300"
+                              }`}
+                            >
+                              <div className="flex gap-3">
+                                {preview?.roiPreviewUrl ? (
+                                  <img src={preview.roiPreviewUrl} alt="" className="h-16 w-24 rounded-lg border border-orange-100 bg-white object-contain" />
+                                ) : (
+                                  <div className="flex h-16 w-24 items-center justify-center rounded-lg border border-dashed border-orange-200 bg-orange-50 text-[10px] font-bold text-orange-400">
+                                    No preview
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate font-black text-slate-900">{anchor.displayLabel}</div>
+                                  <div className="mt-0.5 text-[10px] font-bold text-slate-500">{anchor.fieldName}</div>
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[9px] font-black uppercase text-orange-700">
+                                      {isImageAnchor ? "Image Anchor" : "Text Anchor"}
+                                    </span>
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-black uppercase text-slate-600">
+                                      Weight {anchor.verificationWeight ?? 1}
+                                    </span>
+                                    {anchor.requiredForVerification && (
+                                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-black uppercase text-red-700">Required</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              {!isImageAnchor && (
+                                <div className="mt-3 rounded-lg bg-orange-50 p-2 text-[11px] font-semibold text-orange-900">
+                                  Expected: {anchor.expectedText || "ยังไม่ได้กำหนด Expected Text"}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
         <div className="mt-4 space-y-4">
           {ocrResults.length === 0 ? (
             <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">No OCR preview results yet.</p>

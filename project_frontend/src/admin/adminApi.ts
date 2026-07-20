@@ -102,6 +102,9 @@ interface ApiTemplate {
   page_count: number;
   similarity_threshold: number;
   final_confidence_threshold: number;
+  layout_weight?: number | null;
+  text_anchor_weight?: number | null;
+  image_anchor_weight?: number | null;
   rejection_reason?: string | null;
   pages?: ApiTemplatePage[];
   fields?: ApiTemplateField[];
@@ -144,6 +147,8 @@ export interface DetectionCandidate {
   verificationScore?: number | null;
   textAnchorScore?: number | null;
   imageAnchorScore?: number | null;
+  matchingWeights?: Record<string, number>;
+  effectiveMatchingWeights?: Record<string, number>;
   verificationPassed?: boolean | null;
   finalScore?: number | null;
   finalPassed?: boolean | null;
@@ -258,6 +263,8 @@ export interface PrepublishCandidate {
   imageAnchorScore: number;
   verificationScore: number;
   finalScore: number;
+  matchingWeights?: Record<string, number>;
+  effectiveMatchingWeights?: Record<string, number>;
   alignmentStatus: string;
   alignmentReason?: string | null;
   alignmentDetails?: Record<string, unknown>[];
@@ -287,6 +294,9 @@ export interface PrepublishSimulationResult {
     imageAnchorCount: number;
     similarityThreshold?: number | null;
     finalConfidenceThreshold?: number | null;
+    layoutWeight?: number | null;
+    textAnchorWeight?: number | null;
+    imageAnchorWeight?: number | null;
   };
   temporaryEmbedding: {
     status: string;
@@ -474,6 +484,9 @@ const mapApiTemplate = (template: ApiTemplate): Template => {
     pageCount: template.page_count,
     similarityThreshold: template.similarity_threshold,
     finalConfidenceThreshold: template.final_confidence_threshold,
+    layoutWeight: typeof template.layout_weight === "number" ? template.layout_weight : 0.5,
+    textAnchorWeight: typeof template.text_anchor_weight === "number" ? template.text_anchor_weight : 0.35,
+    imageAnchorWeight: typeof template.image_anchor_weight === "number" ? template.image_anchor_weight : 0.15,
     rejectionReason: template.rejection_reason || undefined,
     previewImageUrl: previewPage?.sample_image_url || previewPage?.normalized_image_url || undefined,
   };
@@ -532,6 +545,8 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
   textAnchorScore: typeof candidate.text_anchor_score === "number" ? candidate.text_anchor_score : null,
   imageAnchorScore: typeof candidate.image_anchor_score === "number" ? candidate.image_anchor_score : null,
+  matchingWeights: (candidate.matching_weights as Record<string, number> | undefined) || undefined,
+  effectiveMatchingWeights: (candidate.effective_matching_weights as Record<string, number> | undefined) || undefined,
   verificationPassed: typeof candidate.verification_passed === "boolean" ? candidate.verification_passed : null,
   finalScore: typeof candidate.final_score === "number" ? candidate.final_score : null,
   finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
@@ -837,6 +852,9 @@ export const updateTemplateApi = async (templateId: string, patch: Partial<Templ
         page_count: patch.pageCount,
         similarity_threshold: patch.similarityThreshold,
         final_confidence_threshold: patch.finalConfidenceThreshold,
+        layout_weight: patch.layoutWeight,
+        text_anchor_weight: patch.textAnchorWeight,
+        image_anchor_weight: patch.imageAnchorWeight,
         rejection_reason: patch.rejectionReason,
       }),
     }),
@@ -956,6 +974,8 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
   imageAnchorScore: Number(candidate.image_anchor_score || 0),
   verificationScore: Number(candidate.verification_score || 0),
   finalScore: Number(candidate.final_score || 0),
+  matchingWeights: (candidate.matching_weights as Record<string, number> | undefined) || undefined,
+  effectiveMatchingWeights: (candidate.effective_matching_weights as Record<string, number> | undefined) || undefined,
   alignmentStatus: String(candidate.alignment_status || "skipped"),
   alignmentReason: (candidate.alignment_reason as string | null | undefined) ?? null,
   alignmentDetails: Array.isArray(candidate.alignment_details)
@@ -1013,6 +1033,9 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
       imageAnchorCount: Number(summary.image_anchor_count || 0),
       similarityThreshold: typeof summary.similarity_threshold === "number" ? summary.similarity_threshold : null,
       finalConfidenceThreshold: typeof summary.final_confidence_threshold === "number" ? summary.final_confidence_threshold : null,
+      layoutWeight: typeof summary.layout_weight === "number" ? summary.layout_weight : null,
+      textAnchorWeight: typeof summary.text_anchor_weight === "number" ? summary.text_anchor_weight : null,
+      imageAnchorWeight: typeof summary.image_anchor_weight === "number" ? summary.image_anchor_weight : null,
     },
     temporaryEmbedding: {
       status: String(temp.status || "not_generated"),

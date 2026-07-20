@@ -84,6 +84,9 @@ export const initialTemplates: Template[] = [
     pageCount: 1,
     similarityThreshold: 0.75,
     finalConfidenceThreshold: 0.8,
+    layoutWeight: 0.5,
+    textAnchorWeight: 0.35,
+    imageAnchorWeight: 0.15,
   },
   {
     id: "tpl_002",
@@ -95,6 +98,9 @@ export const initialTemplates: Template[] = [
     pageCount: 1,
     similarityThreshold: 0.78,
     finalConfidenceThreshold: 0.84,
+    layoutWeight: 0.5,
+    textAnchorWeight: 0.35,
+    imageAnchorWeight: 0.15,
   },
 ];
 

@@ -10,6 +10,7 @@ def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
     _ensure_layout_signature_column(conn)
+    _ensure_template_matching_weight_columns(conn)
     return conn
 
 
@@ -18,6 +19,17 @@ def _ensure_layout_signature_column(conn: Any) -> None:
     if columns and "layout_signature_json" not in columns:
         conn.execute("ALTER TABLE template_pages ADD COLUMN layout_signature_json TEXT")
         conn.commit()
+
+
+def _ensure_template_matching_weight_columns(conn: Any) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(templates)").fetchall()}
+    if columns and "layout_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN layout_weight REAL DEFAULT 0.50")
+    if columns and "text_anchor_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN text_anchor_weight REAL DEFAULT 0.35")
+    if columns and "image_anchor_weight" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN image_anchor_weight REAL DEFAULT 0.15")
+    conn.commit()
 
 
 def search_layout_candidates(
@@ -36,6 +48,9 @@ def search_layout_candidates(
                 t.status AS template_status,
                 t.page_count AS page_count,
                 t.final_confidence_threshold AS final_confidence_threshold,
+                t.layout_weight AS layout_weight,
+                t.text_anchor_weight AS text_anchor_weight,
+                t.image_anchor_weight AS image_anchor_weight,
                 tp.id AS template_page_id,
                 tp.page_number AS page_number,
                 tp.layout_signature_json AS layout_signature_json
@@ -65,6 +80,9 @@ def search_layout_candidates(
             "template_page_id": row["template_page_id"],
             "page_number": row["page_number"],
             "final_confidence_threshold": row["final_confidence_threshold"],
+            "layout_weight": row["layout_weight"],
+            "text_anchor_weight": row["text_anchor_weight"],
+            "image_anchor_weight": row["image_anchor_weight"],
             "retrieval_engine": "layout_signature",
             "vector_store_engine": "layout-signature",
             "layout_signature_version": signature.get("version"),

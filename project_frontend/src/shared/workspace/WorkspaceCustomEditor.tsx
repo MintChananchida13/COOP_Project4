@@ -49,6 +49,11 @@ interface LayoutAnalysisResponse {
   error?: string;
 }
 
+const WORKSPACE_ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.85, 1.0, 1.1, 1.2, 1.33, 1.5, 1.75, 2.0, 2.5, 3.0];
+const WORKSPACE_DEFAULT_ZOOM_INDEX = WORKSPACE_ZOOM_STEPS.findIndex((step) => step === 1.0);
+const WORKSPACE_LOCKED_HEIGHT_CLASS = "h-[calc(100vh-220px)] min-h-[640px]";
+const WORKSPACE_MAX_FIT_ZOOM = 3.0;
+
 export interface WorkspaceCustomEditorProps {
   previewUrl: string;
   image: string | null;
@@ -83,6 +88,7 @@ export interface WorkspaceCustomEditorProps {
   workspaceHeightClassName?: string;
   rootClassName?: string;
   centerCanvas?: boolean;
+  fitImageToViewport?: boolean;
   imageFrameClassName?: string;
   layoutVariant?: "default" | "user";
   rightPanelClassName?: string;
@@ -106,6 +112,7 @@ export interface WorkspaceCustomEditorProps {
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
   getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
   onImageMetricsChange?: (metrics: WorkspaceImageMetrics) => void;
+  onCanvasRoiSelect?: (roiId: number) => void;
 }
 
 export default function WorkspaceCustomEditor({
@@ -131,11 +138,12 @@ export default function WorkspaceCustomEditor({
   hideFooterActions = false,
   hideDrawTools = false,
   lockRoiMetadata = false,
-  workspaceHeightClassName = "h-[620px]",
+  workspaceHeightClassName = WORKSPACE_LOCKED_HEIGHT_CLASS,
   rootClassName = "max-w-7xl mx-auto space-y-6 pb-20",
-  centerCanvas = false,
+  centerCanvas = true,
+  fitImageToViewport = true,
   imageFrameClassName = "w-[750px]",
-  layoutVariant = "default",
+  layoutVariant = "user",
   rightPanelClassName,
   rightPanelTopContent,
   rightPanelRenderer,
@@ -145,6 +153,7 @@ export default function WorkspaceCustomEditor({
   getRoiLabelClassName,
   getRoiBadges,
   onImageMetricsChange,
+  onCanvasRoiSelect,
 }: WorkspaceCustomEditorProps) {
   const isUserLayout = layoutVariant === "user";
   const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly || hideDrawTools ? 'pan' : 'box');
@@ -171,9 +180,8 @@ export default function WorkspaceCustomEditor({
   const [dragBox, setDragBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Standard zoom levels.
-  const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
-  const [zoomIndex, setZoomIndex] = useState<number>(2); 
-  const currentZoom = ZOOM_STEPS[zoomIndex];
+  const [zoomIndex, setZoomIndex] = useState<number>(WORKSPACE_DEFAULT_ZOOM_INDEX);
+  const currentZoom = WORKSPACE_ZOOM_STEPS[zoomIndex];
   const [isAutoDetectingRoi, setIsAutoDetectingRoi] = useState(false);
   const [autoDetectMessage, setAutoDetectMessage] = useState("");
 
@@ -183,26 +191,43 @@ export default function WorkspaceCustomEditor({
   const imageRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const currentZoomRef = useRef(currentZoom);
-
-  useEffect(() => {
-    currentZoomRef.current = currentZoom;
-  }, [currentZoom]);
+  const defaultRightPanelScrollRef = useRef<HTMLDivElement | null>(null);
+  const defaultRightPanelRoiRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const reportImageMetrics = React.useCallback(() => {
     if (!imageRef.current || !containerRef.current || !onImageMetricsChange) return;
-    const imageRect = imageRef.current.getBoundingClientRect();
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const measuredZoom = currentZoomRef.current || 1;
+    const imageElement = imageRef.current;
+    const imageWidth = imageElement.clientWidth || imageElement.naturalWidth || 1;
+    const imageHeight =
+      imageElement.clientHeight ||
+      (imageElement.naturalWidth > 0 ? (imageElement.naturalHeight / imageElement.naturalWidth) * imageWidth : 1);
+
     onImageMetricsChange({
-      imageOffsetX: (imageRect.left - containerRect.left) / measuredZoom,
-      imageOffsetY: (imageRect.top - containerRect.top) / measuredZoom,
-      imageWidth: imageRect.width / measuredZoom,
-      imageHeight: imageRect.height / measuredZoom,
-      naturalWidth: imageRef.current.naturalWidth,
-      naturalHeight: imageRef.current.naturalHeight,
+      imageOffsetX: 0,
+      imageOffsetY: 0,
+      imageWidth,
+      imageHeight,
+      naturalWidth: imageElement.naturalWidth,
+      naturalHeight: imageElement.naturalHeight,
     });
   }, [onImageMetricsChange]);
+
+  const fitCurrentImageToViewport = React.useCallback(() => {
+    if (!fitImageToViewport || !viewportRef.current || !containerRef.current || !imageRef.current) return;
+    const viewport = viewportRef.current;
+    const baseWidth = containerRef.current.offsetWidth || imageRef.current.clientWidth;
+    const baseHeight = containerRef.current.offsetHeight || imageRef.current.clientHeight;
+    if (!Number.isFinite(baseWidth) || !Number.isFinite(baseHeight) || baseWidth <= 0 || baseHeight <= 0) return;
+
+    const availableWidth = Math.max(120, viewport.clientWidth - 32);
+    const availableHeight = Math.max(120, viewport.clientHeight - 32);
+    const targetZoom = Math.min(WORKSPACE_MAX_FIT_ZOOM, availableWidth / baseWidth, availableHeight / baseHeight);
+    let nextIndex = 0;
+    for (let index = 0; index < WORKSPACE_ZOOM_STEPS.length; index += 1) {
+      if (WORKSPACE_ZOOM_STEPS[index] <= targetZoom + 0.001) nextIndex = index;
+    }
+    setZoomIndex((prev) => (prev === nextIndex ? prev : nextIndex));
+  }, [fitImageToViewport]);
 
   // Toggle field labels and keep undo/redo history.
   const [showLabels, setShowLabels] = useState(true);
@@ -309,11 +334,25 @@ export default function WorkspaceCustomEditor({
   }, [previewUrl, currentIndex, reportImageMetrics]);
 
   useEffect(() => {
-    if (!onImageMetricsChange) return;
-    const handleResize = () => reportImageMetrics();
+    const handleResize = () => {
+      fitCurrentImageToViewport();
+      reportImageMetrics();
+    };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [onImageMetricsChange, reportImageMetrics]);
+  }, [fitCurrentImageToViewport, onImageMetricsChange, reportImageMetrics]);
+
+  useEffect(() => {
+    if (!fitImageToViewport) return;
+    window.requestAnimationFrame(() => {
+      fitCurrentImageToViewport();
+      reportImageMetrics();
+    });
+  }, [currentIndex, fitCurrentImageToViewport, fitImageToViewport, previewUrl, reportImageMetrics]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(reportImageMetrics);
+  }, [currentZoom, reportImageMetrics]);
 
   const currentPageRois = useMemo(() => {
     return rois.filter(roi => {
@@ -321,6 +360,24 @@ export default function WorkspaceCustomEditor({
       return roiPage === Number(currentIndex);
     });
   }, [rois, currentIndex]);
+
+  const scrollDefaultRightPanelToRoi = (roiId: number) => {
+    const container = defaultRightPanelScrollRef.current;
+    const target = defaultRightPanelRoiRefs.current.get(roiId);
+    if (!container || !target) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
+    const top = relativeTop - Math.max(0, (container.clientHeight - targetRect.height) / 2);
+    container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  };
+
+  const selectRoiFromCanvas = (roiId: number) => {
+    setSelectedId(roiId);
+    onCanvasRoiSelect?.(roiId);
+    window.setTimeout(() => scrollDefaultRightPanelToRoi(roiId), 0);
+  };
 
   const renderPagePagination = () => (
     <div className="w-full rounded-xl border border-slate-200 bg-[#edf2f7] px-4 py-3 text-slate-800 shadow-sm select-none">
@@ -378,7 +435,7 @@ export default function WorkspaceCustomEditor({
   );
 
   const handleZoomIn = () => {
-    if (zoomIndex < ZOOM_STEPS.length - 1) setZoomIndex(prev => prev + 1);
+    if (zoomIndex < WORKSPACE_ZOOM_STEPS.length - 1) setZoomIndex(prev => prev + 1);
   };
 
   const handleZoomOut = () => {
@@ -825,7 +882,7 @@ export default function WorkspaceCustomEditor({
 
 
       {/* Main canvas row */}
-      <div className={`relative grid min-h-0 ${workspaceHeightClassName} ${isUserLayout ? (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px] xl:grid-cols-[64px_minmax(0,1fr)_minmax(320px,360px)]") : (hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px]")} gap-5 items-stretch overflow-hidden`}>
+      <div className={`relative grid min-h-0 ${workspaceHeightClassName} ${hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px] xl:grid-cols-[64px_minmax(0,1fr)_minmax(320px,360px)]"} gap-5 items-stretch overflow-hidden`}>
         
         {/* Left toolbar */}
                 <div className="flex h-full flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white py-4 shadow-sm select-none overflow-y-auto">
@@ -909,7 +966,7 @@ export default function WorkspaceCustomEditor({
           <button 
             type="button"
             onClick={handleZoomIn}
-            disabled={zoomIndex === ZOOM_STEPS.length - 1}
+            disabled={zoomIndex === WORKSPACE_ZOOM_STEPS.length - 1}
             className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 transition-all"
             title={`Zoom In (${Math.round(currentZoom * 100)}%)`}
           >
@@ -928,7 +985,7 @@ export default function WorkspaceCustomEditor({
 
           <button 
             type="button"
-            onClick={() => setZoomIndex(2)}
+            onClick={() => setZoomIndex(WORKSPACE_DEFAULT_ZOOM_INDEX)}
             className="p-2.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all"
             title="Reset Zoom to 100%"
           >
@@ -966,11 +1023,11 @@ export default function WorkspaceCustomEditor({
           )}
           <div 
             ref={viewportRef} 
-            className={`min-h-0 min-w-0 flex-1 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex ${centerCanvas ? "items-center justify-center p-4" : "items-start justify-start p-6"} shadow-inner relative`}
+            className="min-h-0 min-w-0 flex-1 bg-[#edf2f7] border border-slate-200 rounded-xl overflow-auto flex items-start justify-start p-6 shadow-inner relative"
           >
             <div 
               ref={containerRef}
-              className={`relative inline-block ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'quad' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
+              className={`relative inline-block ${centerCanvas ? "mx-auto" : ""} ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'quad' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
               style={{ 
                 transform: `scale(${currentZoom})`, 
                 transformOrigin: "top left",
@@ -989,7 +1046,10 @@ export default function WorkspaceCustomEditor({
                     src={previewUrl} 
                     alt="Workspace" 
                     draggable="false" 
-                    onLoad={reportImageMetrics}
+                    onLoad={() => {
+                      fitCurrentImageToViewport();
+                      reportImageMetrics();
+                    }}
                     className="w-full h-auto block select-none pointer-events-none border border-slate-300 shadow-xl rounded bg-white"
                   />
                 )}
@@ -1036,7 +1096,7 @@ export default function WorkspaceCustomEditor({
                       key={`${roi.type || "roi"}-${roi.pageIndex ?? currentIndex}-${roi.id}-${index}`}
                       size={{ width: roi.width, height: roi.height }}
                       position={{ x: roi.x, y: roi.y }}
-                      onMouseDown={(e) => { e.stopPropagation(); setSelectedId(roi.id); }}
+                      onMouseDown={(e) => { e.stopPropagation(); selectRoiFromCanvas(roi.id); }}
                       onDragStop={(e, d) => {
                         if (!readOnly) updateROI(roi.id, { x: d.x, y: d.y });
                       }}
@@ -1083,7 +1143,7 @@ export default function WorkspaceCustomEditor({
 
                         {showLabels && (
                           <span 
-                            onMouseDown={(e) => { e.stopPropagation(); setSelectedId(roi.id); }}
+                            onMouseDown={(e) => { e.stopPropagation(); selectRoiFromCanvas(roi.id); }}
                             className={getRoiLabelClassName?.(roi, selected) || `absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${selectedId === roi.id ? "bg-indigo-600 border-indigo-600 text-white font-extrabold" : "bg-white border-indigo-200 text-indigo-700 font-bold"}`}
                           >
                             {renderTypeIcon(roi.type, 10)}
@@ -1178,12 +1238,12 @@ export default function WorkspaceCustomEditor({
         </div>
 
         {/* Right properties panel */}
-        {!hideRightPanel && <div className={rightPanelClassName || (isUserLayout ? "min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col" : "min-w-0 h-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4")}>
+        {!hideRightPanel && <div className={rightPanelClassName || "min-w-0 h-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col"}>
           {rightPanelRenderer ? (
             rightPanelRenderer({ currentPageRois, selectedId, setSelectedId, updateROI, deleteROI, moveROI, triggerOCRProcessing })
           ) : (
             <>
-              <div className={isUserLayout ? "min-h-0 flex-1 space-y-4 overflow-y-auto p-4" : "contents"}>
+              <div ref={defaultRightPanelScrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               {rightPanelTopContent}
               <button
                 type="button"
@@ -1224,6 +1284,10 @@ export default function WorkspaceCustomEditor({
                   {currentPageRois.map((roi, idx) => (
                     <div 
                       key={roi.id} 
+                      ref={(el) => {
+                        if (el) defaultRightPanelRoiRefs.current.set(roi.id, el);
+                        else defaultRightPanelRoiRefs.current.delete(roi.id);
+                      }}
                       onClick={() => setSelectedId(roi.id)} 
                       draggable={true}
                       onDragStart={(e) => handleDragStart(e, idx)}

@@ -462,7 +462,6 @@ export default function WorkspaceTemplateEditor({
               readOnly
               hideStepProgress
               hideRightPanel
-              workspaceHeightClassName="h-[560px]"
               rootClassName="space-y-3"
               onImageMetricsChange={setImageMetrics}
               getRoiClassName={(roi, selected) => {

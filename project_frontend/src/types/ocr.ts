@@ -87,6 +87,9 @@ export interface Template {
   pageCount: number;
   similarityThreshold: number;
   finalConfidenceThreshold: number;
+  layoutWeight: number;
+  textAnchorWeight: number;
+  imageAnchorWeight: number;
   rejectionReason?: string;
   previewImageUrl?: string;
 }
