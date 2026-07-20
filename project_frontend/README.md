@@ -92,3 +92,14 @@ cd D:\coop\COOP_Project4\project_backend
 $env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
 $env:MODEL_SERVICE_URL="http://127.0.0.1:8010"
 uvicorn main:app
+
+docker start ocr-postgres-dev
+
+.\venv\Scripts\activate
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:55432/ocr_studio" 
+$env:MODEL_SERVICE_URL="http://127.0.0.1:8010"
+uvicorn main:app
+
+.\venv\Scripts\activate
+$env:VISION_EMBEDDING_MODE="dinov2"
+uvicorn model_server:app --host 127.0.0.1 --port 8010
