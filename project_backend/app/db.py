@@ -263,6 +263,25 @@ _POSTGRES_SCHEMA = [
         template_request_id TEXT NOT NULL REFERENCES template_requests(id) ON DELETE CASCADE,
         page_number INTEGER NOT NULL,
         sample_image_url TEXT,
+        image_source TEXT NOT NULL DEFAULT 'user_request',
+        review_status TEXT NOT NULL DEFAULT 'pending',
+        is_canonical INTEGER NOT NULL DEFAULT 0,
+        layout_signature_json TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS template_layout_references (
+        id TEXT NOT NULL PRIMARY KEY,
+        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+        template_page_id TEXT REFERENCES template_pages(id) ON DELETE SET NULL,
+        page_number INTEGER NOT NULL DEFAULT 1,
+        image_url TEXT NOT NULL,
+        image_source TEXT NOT NULL DEFAULT 'user_request',
+        review_status TEXT NOT NULL DEFAULT 'approved',
+        is_canonical INTEGER NOT NULL DEFAULT 0,
+        layout_signature_json TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
@@ -381,6 +400,8 @@ _POSTGRES_SCHEMA = [
     'CREATE INDEX IF NOT EXISTS ignore_regions_template_page_id_page_number_idx ON ignore_regions(template_page_id, page_number)',
     'CREATE UNIQUE INDEX IF NOT EXISTS template_request_pages_template_request_id_page_number_key ON template_request_pages(template_request_id, page_number)',
     'CREATE INDEX IF NOT EXISTS requested_fields_template_request_page_id_page_number_idx ON requested_fields(template_request_page_id, page_number)',
+    'CREATE INDEX IF NOT EXISTS template_layout_references_template_id_idx ON template_layout_references(template_id)',
+    'CREATE INDEX IF NOT EXISTS template_layout_references_template_status_idx ON template_layout_references(template_id, review_status, is_canonical)',
     'CREATE UNIQUE INDEX IF NOT EXISTS document_pages_document_id_page_number_key ON document_pages(document_id, page_number)',
     'CREATE INDEX IF NOT EXISTS extraction_results_document_page_id_page_number_idx ON extraction_results(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS detection_logs_document_page_id_page_number_idx ON detection_logs(document_page_id, page_number)',

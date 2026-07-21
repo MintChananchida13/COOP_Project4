@@ -38,6 +38,8 @@ from .schemas import (
     TemplatePageCreate,
     TemplatePageUpdate,
     TemplateRequestCreate,
+    TemplateRequestImageCreate,
+    TemplateRequestImageUpdate,
     TemplateRequestUpdate,
     TemplateTestRequest,
     TemplateUpdate,
@@ -55,7 +57,7 @@ def _stub_id(prefix: str) -> str:
 def _normalize_extraction_method(value: Optional[str]) -> str:
     if value == "typhoon_ocr":
         return "paddle_thai_ocr"
-    if value in {"ocr_text", "ocr_table", "paddle_thai_ocr", "extract_image"}:
+    if value in {"ocr_text", "ocr_table", "paddle_thai_ocr", "table_recognition_v2", "extract_image"}:
         return value
     return "ocr_text"
 
@@ -69,6 +71,8 @@ def _normalize_data_type(value: Optional[str]) -> str:
 def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
+    _ensure_template_request_page_review_columns(conn)
+    _ensure_template_layout_references_table(conn)
     _ensure_requested_field_metadata_columns(conn)
     _ensure_template_matching_weight_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
@@ -76,6 +80,51 @@ def _connect() -> Any:
     _ensure_embedding_jobs_table(conn)
     _ensure_verification_anchor_embeddings_table(conn)
     return conn
+
+
+def _ensure_template_request_page_review_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(template_request_pages)").fetchall()
+    }
+    if columns and "image_source" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN image_source TEXT DEFAULT 'user_request'")
+    if columns and "review_status" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN review_status TEXT DEFAULT 'pending'")
+    if columns and "is_canonical" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN is_canonical INTEGER DEFAULT 0")
+    if columns and "layout_signature_json" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN layout_signature_json TEXT")
+    conn.commit()
+
+
+def _ensure_template_layout_references_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS template_layout_references (
+            id TEXT NOT NULL PRIMARY KEY,
+            template_id TEXT NOT NULL,
+            template_page_id TEXT,
+            page_number INTEGER NOT NULL DEFAULT 1,
+            image_url TEXT NOT NULL,
+            image_source TEXT NOT NULL DEFAULT 'user_request',
+            review_status TEXT NOT NULL DEFAULT 'approved',
+            is_canonical INTEGER NOT NULL DEFAULT 0,
+            layout_signature_json TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+            FOREIGN KEY (template_page_id) REFERENCES template_pages(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS template_layout_references_template_id_idx ON template_layout_references(template_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS template_layout_references_template_status_idx ON template_layout_references(template_id, review_status, is_canonical)"
+    )
+    conn.commit()
 
 
 def _ensure_requested_field_metadata_columns(conn: sqlite3.Connection) -> None:
@@ -199,6 +248,27 @@ def _page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "template_request_id": item["template_request_id"],
         "page_number": item["page_number"],
         "sample_image_url": item["sample_image_url"],
+        "image_source": item.get("image_source", "user_request"),
+        "review_status": item.get("review_status", "pending"),
+        "is_canonical": bool(item.get("is_canonical", 0)),
+        "layout_signature_json": item.get("layout_signature_json"),
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _template_layout_reference_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+    item = _row_to_dict(row)
+    return {
+        "id": item["id"],
+        "template_id": item["template_id"],
+        "template_page_id": item.get("template_page_id"),
+        "page_number": item["page_number"],
+        "image_url": item["image_url"],
+        "image_source": item.get("image_source", "user_request"),
+        "review_status": item.get("review_status", "approved"),
+        "is_canonical": bool(item.get("is_canonical", 0)),
+        "layout_signature_json": item.get("layout_signature_json"),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
     }
@@ -401,6 +471,11 @@ def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dic
 
 
 def _refresh_template_layout_signatures(conn: sqlite3.Connection, template_id: str) -> List[Dict[str, Any]]:
+    reference_count_row = conn.execute(
+        "SELECT COUNT(*) AS reference_count FROM template_layout_references WHERE template_id = ?",
+        (template_id,),
+    ).fetchone()
+    should_bootstrap_references = bool(reference_count_row and not reference_count_row["reference_count"])
     rows = conn.execute(
         """
         SELECT id, page_number, normalized_image_url, sample_image_url
@@ -433,9 +508,73 @@ def _refresh_template_layout_signatures(conn: sqlite3.Connection, template_id: s
             """,
             (signature_json, row["id"]),
         )
+        if should_bootstrap_references and source:
+            conn.execute(
+                """
+                INSERT INTO template_layout_references (
+                    id, template_id, template_page_id, page_number, image_url,
+                    image_source, review_status, is_canonical, layout_signature_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'admin_upload', 'approved', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    _stub_id("tpl_ref"),
+                    template_id,
+                    row["id"],
+                    row["page_number"],
+                    source,
+                    1 if row["page_number"] == 1 else 0,
+                    signature_json,
+                ),
+            )
         refreshed.append(
             {
                 "template_page_id": row["id"],
+                "page_number": row["page_number"],
+                "status": "generated",
+                "region_count": signature.get("region_count", 0),
+                "model": signature.get("model"),
+            }
+        )
+    return refreshed
+
+
+def _refresh_template_layout_reference_signatures(conn: sqlite3.Connection, template_id: str) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, page_number, image_url
+        FROM template_layout_references
+        WHERE template_id = ? AND review_status = 'approved'
+        ORDER BY is_canonical DESC, page_number ASC, created_at ASC
+        """,
+        (template_id,),
+    ).fetchall()
+    refreshed: List[Dict[str, Any]] = []
+    for row in rows:
+        signature = _generate_layout_signature_for_source(row["image_url"])
+        if signature is None:
+            refreshed.append(
+                {
+                    "template_layout_reference_id": row["id"],
+                    "page_number": row["page_number"],
+                    "status": "failed",
+                    "reason": "reference_image_unavailable_or_invalid",
+                }
+            )
+            continue
+        signature_json = signature_to_json(signature)
+        conn.execute(
+            """
+            UPDATE template_layout_references
+            SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (signature_json, row["id"]),
+        )
+        refreshed.append(
+            {
+                "template_layout_reference_id": row["id"],
                 "page_number": row["page_number"],
                 "status": "generated",
                 "region_count": signature.get("region_count", 0),
@@ -1639,6 +1778,12 @@ class DecisionService:
 
 
 class TemplateRequestService:
+    def _normalize_image_source(self, value: Optional[str]) -> str:
+        return value if value in {"user_request", "admin_upload"} else "admin_upload"
+
+    def _normalize_review_status(self, value: Optional[str]) -> str:
+        return value if value in {"pending", "approved", "rejected"} else "pending"
+
     def create(self, payload: TemplateRequestCreate) -> Dict[str, Any]:
         request_id = _stub_id("tpl_req")
         source_pages = payload.pages or [
@@ -1666,7 +1811,7 @@ class TemplateRequestService:
                     payload.sample_file_url,
                     payload.request_mode,
                     payload.user_note,
-                    payload.page_count,
+                    max(payload.page_count, len(source_pages)),
                 ),
             )
 
@@ -1680,9 +1825,10 @@ class TemplateRequestService:
                 conn.execute(
                     """
                     INSERT INTO template_request_pages (
-                        id, template_request_id, page_number, sample_image_url, created_at, updated_at
+                        id, template_request_id, page_number, sample_image_url,
+                        image_source, review_status, is_canonical, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, 'user_request', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (_stub_id("tpl_req_page"), request_id, page_number, sample_image_url),
                 )
@@ -1796,6 +1942,174 @@ class TemplateRequestService:
                 (request_id,),
             ).fetchall()
         return {"template_request_id": request_id, "pages": [_page_row_to_api(row) for row in rows]}
+
+    def add_image(self, request_id: str, payload: TemplateRequestImageCreate) -> Dict[str, Any]:
+        image_id = _stub_id("tpl_req_page")
+        image_source = self._normalize_image_source(payload.image_source)
+        review_status = self._normalize_review_status(payload.review_status)
+
+        with _connect() as conn:
+            request_row = conn.execute("SELECT * FROM template_requests WHERE id = ?", (request_id,)).fetchone()
+            if request_row is None:
+                raise HTTPException(status_code=404, detail="Template request not found.")
+
+            max_page = conn.execute(
+                "SELECT MAX(page_number) AS max_page_number FROM template_request_pages WHERE template_request_id = ?",
+                (request_id,),
+            ).fetchone()
+            page_number = int(max_page["max_page_number"] if max_page and max_page["max_page_number"] else 0) + 1
+
+            if payload.is_canonical:
+                conn.execute(
+                    "UPDATE template_request_pages SET is_canonical = 0, updated_at = CURRENT_TIMESTAMP WHERE template_request_id = ?",
+                    (request_id,),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO template_request_pages (
+                    id, template_request_id, page_number, sample_image_url,
+                    image_source, review_status, is_canonical, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    image_id,
+                    request_id,
+                    page_number,
+                    payload.sample_image_url,
+                    image_source,
+                    review_status,
+                    1 if payload.is_canonical else 0,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET page_count = (
+                    SELECT COUNT(*) FROM template_request_pages WHERE template_request_id = ?
+                ), updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (request_id, request_id),
+            )
+            conn.commit()
+
+            row = conn.execute("SELECT * FROM template_request_pages WHERE id = ?", (image_id,)).fetchone()
+
+        return _page_row_to_api(row)
+
+    def update_image(self, request_id: str, image_id: str, payload: TemplateRequestImageUpdate) -> Dict[str, Any]:
+        patch = payload.model_dump(exclude_unset=True)
+        if not patch:
+            return self.get(request_id)
+
+        column_values: Dict[str, Any] = {}
+        if "sample_image_url" in patch:
+            column_values["sample_image_url"] = patch["sample_image_url"]
+            column_values["layout_signature_json"] = None
+        if "image_source" in patch:
+            column_values["image_source"] = self._normalize_image_source(patch["image_source"])
+        if "review_status" in patch:
+            column_values["review_status"] = self._normalize_review_status(patch["review_status"])
+        if "is_canonical" in patch:
+            column_values["is_canonical"] = 1 if patch["is_canonical"] else 0
+
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM template_request_pages WHERE id = ? AND template_request_id = ?",
+                (image_id, request_id),
+            ).fetchone()
+            if row is None:
+                request_exists = conn.execute(
+                    "SELECT id FROM template_requests WHERE id = ?",
+                    (request_id,),
+                ).fetchone()
+                image_row = conn.execute(
+                    "SELECT id, template_request_id FROM template_request_pages WHERE id = ?",
+                    (image_id,),
+                ).fetchone()
+                if request_exists is None:
+                    raise HTTPException(status_code=404, detail="Template request not found.")
+                if image_row is None:
+                    raise HTTPException(status_code=404, detail="Template request image not found. Reload the request before trying again.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Template request image belongs to a different request. Reload the request before trying again.",
+                )
+
+            if column_values.get("review_status") == "rejected" and column_values.get("is_canonical", row["is_canonical"]) == 1:
+                raise HTTPException(status_code=409, detail="Rejected images cannot be canonical references.")
+            if column_values.get("is_canonical") == 1:
+                effective_status = column_values.get("review_status", row["review_status"])
+                if effective_status == "rejected":
+                    raise HTTPException(status_code=409, detail="Rejected images cannot be canonical references.")
+                conn.execute(
+                    "UPDATE template_request_pages SET is_canonical = 0, updated_at = CURRENT_TIMESTAMP WHERE template_request_id = ?",
+                    (request_id,),
+                )
+
+            assignments = ", ".join(f"{column} = ?" for column in column_values.keys())
+            conn.execute(
+                f"""
+                UPDATE template_request_pages
+                SET {assignments}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND template_request_id = ?
+                """,
+                [*column_values.values(), image_id, request_id],
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM template_request_pages WHERE id = ?", (image_id,)).fetchone()
+            if updated and updated["review_status"] == "approved" and not updated["layout_signature_json"]:
+                signature = _generate_layout_signature_for_source(updated["sample_image_url"])
+                if signature:
+                    signature_json = signature_to_json(signature)
+                    conn.execute(
+                        """
+                        UPDATE template_request_pages
+                        SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (signature_json, image_id),
+                    )
+                    conn.commit()
+                    updated = conn.execute("SELECT * FROM template_request_pages WHERE id = ?", (image_id,)).fetchone()
+
+        return _page_row_to_api(updated)
+
+    def delete_image(self, request_id: str, image_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM template_request_pages WHERE id = ? AND template_request_id = ?",
+                (image_id, request_id),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Template request image not found.")
+            if row["is_canonical"]:
+                raise HTTPException(status_code=409, detail="Select another canonical image before removing this one.")
+
+            conn.execute("DELETE FROM requested_fields WHERE template_request_page_id = ?", (image_id,))
+            conn.execute("DELETE FROM template_request_pages WHERE id = ? AND template_request_id = ?", (image_id, request_id))
+            remaining = conn.execute(
+                """
+                SELECT id FROM template_request_pages
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+            ).fetchall()
+            for index, page in enumerate(remaining, start=1):
+                conn.execute(
+                    "UPDATE template_request_pages SET page_number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (index, page["id"]),
+                )
+            conn.execute(
+                "UPDATE template_requests SET page_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (len(remaining), request_id),
+            )
+            conn.commit()
+
+        return {"id": image_id, "template_request_id": request_id, "deleted": True}
 
     def add_requested_field(self, request_id: str, payload: RequestedFieldCreate) -> Dict[str, Any]:
         field_id = _stub_id("req_field")
@@ -2033,12 +2347,21 @@ class AdminTemplateService:
                 """,
                 (template_id,),
             ).fetchall()
+            reference_rows = conn.execute(
+                """
+                SELECT * FROM template_layout_references
+                WHERE template_id = ?
+                ORDER BY is_canonical DESC, page_number ASC, created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
 
         return {
             **_template_row_to_api(template_row),
             "pages": [_template_page_row_to_api(row) for row in page_rows],
             "fields": [_template_field_row_to_api(row) for row in field_rows],
             "ignore_regions": [_ignore_region_row_to_api(row) for row in ignore_rows],
+            "layout_references": [_template_layout_reference_row_to_api(row) for row in reference_rows],
         }
 
     def _template_page_image_paths(self, template_id: str, pages: List[Dict[str, Any]]) -> Dict[int, str]:
@@ -2546,7 +2869,8 @@ class AdminTemplateService:
         for field in [item for item in template.get("fields", []) if not item.get("use_for_verification")]:
             page_number = int(field.get("page_number") or 1)
             image_path = page_paths.get(page_number)
-            extraction_method = field.get("extraction_method") or "ocr_text"
+            data_type = field.get("data_type") or "text"
+            extraction_method = field.get("extraction_method") or ("table_recognition_v2" if data_type == "table" else "ocr_text")
             result = {
                 "field_id": field["id"],
                 "field_name": field.get("field_name"),
@@ -2564,7 +2888,7 @@ class AdminTemplateService:
                 results.append(result)
                 continue
             try:
-                if extraction_method == "extract_image" or field.get("data_type") == "image":
+                if extraction_method == "extract_image" or data_type == "image":
                     crop_path = _storage_root() / "template_extraction_test_crops" / template_id / f"{field['id']}.png"
                     cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 0)
                     result.update(
@@ -2575,6 +2899,32 @@ class AdminTemplateService:
                             "confidence": 1.0 if cropped else 0.0,
                             "crop_path": cropped,
                             "failure_reason": None if cropped else "roi_crop_failed",
+                        }
+                    )
+                elif data_type == "table" or extraction_method in {"table_recognition_v2", "ocr_table"}:
+                    ocr_result = ocr_rois(
+                        image_path,
+                        [
+                            {
+                                "id": field["id"],
+                                "roi": field["roi"],
+                                "data_type": data_type,
+                                "extraction_method": extraction_method,
+                            }
+                        ],
+                    ).get(field["id"], {})
+                    text = str(ocr_result.get("text") or "")
+                    confidence = float(ocr_result.get("confidence") or 0.0)
+                    result.update(
+                        {
+                            "passed": bool(text.strip()),
+                            "status": "passed" if text.strip() else "failed",
+                            "ocr_text": text,
+                            "confidence": round(confidence, 4),
+                            "table_rows": ocr_result.get("table_rows"),
+                            "table_html": ocr_result.get("table_html"),
+                            "table_debug": ocr_result.get("table_debug"),
+                            "failure_reason": None if text.strip() else str(ocr_result.get("error") or "table_empty"),
                         }
                     )
                 else:
@@ -3048,6 +3398,15 @@ class AdminTemplateService:
                 """,
                 (request_id,),
             ).fetchall()
+            approved_pages = [page for page in request_pages if page["review_status"] == "approved"]
+            canonical_pages = [page for page in approved_pages if page["is_canonical"]]
+            if len(canonical_pages) != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Select exactly one approved canonical image before converting to a template.",
+                )
+            canonical_page = canonical_pages[0]
+
             requested_fields = conn.execute(
                 """
                 SELECT * FROM requested_fields
@@ -3064,69 +3423,96 @@ class AdminTemplateService:
                     similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, NULL, 'draft', 1, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, NULL, 'draft', 1, 1, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
                     request_row["request_title"],
                     request_row["document_type"],
-                    request_row["page_count"],
                 ),
             )
 
-            if not request_pages:
-                page_id = _stub_id("tpl_page")
-                created_template_page_ids[1] = page_id
+            canonical_signature = _generate_layout_signature_for_source(canonical_page["sample_image_url"])
+            canonical_signature_json = signature_to_json(canonical_signature) if canonical_signature else None
+            if canonical_signature_json:
                 conn.execute(
                     """
-                    INSERT INTO template_pages (
-                        id, template_id, page_number, page_name, sample_image_url,
-                        normalized_image_url, similarity_threshold, final_confidence_threshold,
+                    UPDATE template_request_pages
+                    SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (canonical_signature_json, canonical_page["id"]),
+                )
+
+            page_id = _stub_id("tpl_page")
+            created_template_page_ids[1] = page_id
+            conn.execute(
+                """
+                INSERT INTO template_pages (
+                    id, template_id, page_number, page_name, sample_image_url,
+                    normalized_image_url, layout_signature_json,
+                    similarity_threshold, final_confidence_threshold,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, 1, 'Canonical Page', ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    page_id,
+                    template_id,
+                    canonical_page["sample_image_url"],
+                    canonical_page["sample_image_url"],
+                    canonical_signature_json,
+                ),
+            )
+
+            layout_reference_count = 0
+            for reference_index, page in enumerate(approved_pages, start=1):
+                signature = (
+                    canonical_signature
+                    if page["id"] == canonical_page["id"]
+                    else _generate_layout_signature_for_source(page["sample_image_url"])
+                )
+                signature_json = signature_to_json(signature) if signature else None
+                if signature_json:
+                    conn.execute(
+                        """
+                        UPDATE template_request_pages
+                        SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (signature_json, page["id"]),
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO template_layout_references (
+                        id, template_id, template_page_id, page_number, image_url,
+                        image_source, review_status, is_canonical, layout_signature_json,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, 1, 'Page 1', ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (page_id, template_id, request_row["sample_file_url"], request_row["sample_file_url"]),
+                    (
+                        _stub_id("tpl_ref"),
+                        template_id,
+                        page_id if page["id"] == canonical_page["id"] else None,
+                        reference_index,
+                        page["sample_image_url"],
+                        page["image_source"],
+                        1 if page["id"] == canonical_page["id"] else 0,
+                        signature_json,
+                    ),
                 )
-            else:
-                for page in request_pages:
-                    page_id = _stub_id("tpl_page")
-                    created_template_page_ids[page["page_number"]] = page_id
-                    conn.execute(
-                        """
-                        INSERT INTO template_pages (
-                            id, template_id, page_number, page_name, sample_image_url,
-                            normalized_image_url, similarity_threshold, final_confidence_threshold,
-                            created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """,
-                        (
-                            page_id,
-                            template_id,
-                            page["page_number"],
-                            f"Page {page['page_number']}",
-                            page["sample_image_url"],
-                            page["sample_image_url"],
-                        ),
-                    )
+                layout_reference_count += 1
 
-            for index, field in enumerate(requested_fields):
-                template_page_id = created_template_page_ids.get(field["page_number"])
-                if template_page_id is None:
-                    template_page_id = _stub_id("tpl_page")
-                    created_template_page_ids[field["page_number"]] = template_page_id
-                    conn.execute(
-                        """
-                        INSERT INTO template_pages (
-                            id, template_id, page_number, page_name, sample_image_url,
-                            normalized_image_url, similarity_threshold, final_confidence_threshold,
-                            created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, NULL, NULL, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """,
-                        (template_page_id, template_id, field["page_number"], f"Page {field['page_number']}"),
-                    )
+            canonical_requested_fields = [
+                field
+                for field in requested_fields
+                if field["template_request_page_id"] == canonical_page["id"]
+                or field["page_number"] == canonical_page["page_number"]
+            ]
+
+            for index, field in enumerate(canonical_requested_fields):
+                template_page_id = created_template_page_ids[1]
 
                 conn.execute(
                     """
@@ -3155,7 +3541,7 @@ class AdminTemplateService:
                         _stub_id("tpl_field"),
                         template_id,
                         template_page_id,
-                        field["page_number"],
+                        1,
                         field["field_name"],
                         field["display_label"],
                         field["roi_x_ratio"],
@@ -3188,7 +3574,8 @@ class AdminTemplateService:
             "created_records": {
                 "templates": 1,
                 "template_pages": len(created_template_page_ids),
-                "template_fields": len(requested_fields),
+                "template_fields": len(canonical_requested_fields),
+                "template_layout_references": layout_reference_count,
             },
         }
 

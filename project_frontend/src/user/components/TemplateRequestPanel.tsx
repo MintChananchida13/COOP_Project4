@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { OCRResult, ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
@@ -80,6 +80,7 @@ const toRequestedField = (
 };
 
 export default function TemplateRequestPanel({ imagesList, rois, ocrResults = [], isOpen, onClose }: TemplateRequestPanelProps) {
+  const [requestImages, setRequestImages] = useState<string[]>([]);
   const [requestTitle, setRequestTitle] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [userNote, setUserNote] = useState("");
@@ -97,7 +98,31 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     }, {});
   }, [enabledRois]);
 
-  const canSubmit = imagesList.length > 0 && requestTitle.trim().length > 0 && status !== "submitting";
+  useEffect(() => {
+    if (isOpen) {
+      setRequestImages(imagesList);
+    }
+  }, [imagesList, isOpen]);
+
+  const canSubmit = requestImages.length > 0 && requestTitle.trim().length > 0 && status !== "submitting";
+
+  const handleAddImages = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const dataUrls = await Promise.all(
+      Array.from(files)
+        .filter((file) => file.type.startsWith("image/"))
+        .map(
+          (file) =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result || ""));
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+            })
+        )
+    );
+    setRequestImages((current) => [...current, ...dataUrls.filter(Boolean)]);
+  };
 
   const buildRequestedFields = async () => {
     const imageSizes = await Promise.all(imagesList.map((src) => loadImageSize(src)));
@@ -120,11 +145,11 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
       body: JSON.stringify({
         request_title: requestTitle.trim(),
         document_type: documentType.trim() || null,
-        sample_file_url: imagesList[0] || null,
+        sample_file_url: requestImages[0] || null,
         request_mode: requestMode,
-        page_count: imagesList.length,
+        page_count: requestImages.length,
         user_note: userNote.trim() || null,
-        pages: imagesList.map((src, index) => ({
+        pages: requestImages.map((src, index) => ({
           page_number: index + 1,
           original_image_url: src,
           normalized_image_url: src,
@@ -212,6 +237,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     setStatus("idle");
     setStatusMessage("");
     setSubmittedRequestId("");
+    setRequestImages(imagesList);
     onClose();
   };
 
@@ -246,8 +272,56 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
 
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500">
-              {imagesList.length} หน้า
+              {requestImages.length} หน้า
               {requestMode === "image_with_roi" && `, ROI ที่ส่ง ${enabledRois.length} รายการ`}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Reference Images
+                  </div>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    เพิ่มรูปเอกสารตัวอย่างหลายภาพก่อนส่งให้ผู้ดูแลตรวจสอบ
+                  </p>
+                </div>
+
+                <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100">
+                  Add Image
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      void handleAddImages(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {requestImages.map((src, index) => (
+                  <div key={`${src.slice(0, 32)}_${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                    <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">
+                      <img src={src} alt={`Reference ${index + 1}`} className="h-full w-full object-contain" />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black text-slate-500">Image {index + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => setRequestImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        disabled={status === "submitting" || requestImages.length <= 1}
+                        className="rounded-lg border border-red-100 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-1">

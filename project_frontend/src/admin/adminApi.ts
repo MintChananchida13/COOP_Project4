@@ -15,6 +15,10 @@ interface ApiTemplateRequestPage {
   template_request_id: string;
   page_number: number;
   sample_image_url?: string | null;
+  image_source?: "user_request" | "admin_upload" | null;
+  review_status?: "pending" | "approved" | "rejected" | null;
+  is_canonical?: boolean | number | null;
+  layout_signature_json?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -446,7 +450,7 @@ const mapTemplateStatus = (status: string): TemplateStatus => {
 
 const normalizeExtractionMethod = (value?: string | null) => {
   if (value === "typhoon_ocr") return "paddle_thai_ocr";
-  if (value === "ocr_table" || value === "paddle_thai_ocr" || value === "extract_image") return value;
+  if (value === "ocr_table" || value === "paddle_thai_ocr" || value === "table_recognition_v2" || value === "extract_image") return value;
   return "ocr_text";
 };
 
@@ -472,6 +476,10 @@ export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    imageSource: page.image_source || undefined,
+    reviewStatus: page.review_status || undefined,
+    isCanonical: Boolean(page.is_canonical),
+    layoutSignatureJson: page.layout_signature_json || undefined,
   })),
   requestedFields: (request.requested_fields || []).map((field) => ({
     id: field.id,
@@ -752,7 +760,91 @@ export const fetchTemplateRequestPages = async (requestId: string) => {
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    imageSource: page.image_source || undefined,
+    reviewStatus: page.review_status || undefined,
+    isCanonical: Boolean(page.is_canonical),
+    layoutSignatureJson: page.layout_signature_json || undefined,
   }));
+};
+
+export const addTemplateRequestImage = async (
+  requestId: string,
+  sampleImageUrl: string,
+  imageSource: "user_request" | "admin_upload" = "admin_upload"
+) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sample_image_url: sampleImageUrl,
+      image_source: imageSource,
+      review_status: "pending",
+      is_canonical: false,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(json?.detail || json?.error?.message || `Add image failed with ${response.status}`);
+  }
+  const page = json?.data as ApiTemplateRequestPage;
+  return {
+    id: page.id,
+    templateRequestId: page.template_request_id,
+    pageNumber: page.page_number,
+    sampleImageUrl: page.sample_image_url || undefined,
+    imageSource: page.image_source || undefined,
+    reviewStatus: page.review_status || undefined,
+    isCanonical: Boolean(page.is_canonical),
+    layoutSignatureJson: page.layout_signature_json || undefined,
+  };
+};
+
+export const updateTemplateRequestImage = async (
+  requestId: string,
+  imageId: string,
+  patch: {
+    sampleImageUrl?: string;
+    reviewStatus?: "pending" | "approved" | "rejected";
+    isCanonical?: boolean;
+    imageSource?: "user_request" | "admin_upload";
+  }
+) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sample_image_url: patch.sampleImageUrl,
+      review_status: patch.reviewStatus,
+      is_canonical: patch.isCanonical,
+      image_source: patch.imageSource,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(json?.detail || json?.error?.message || `Update image failed with ${response.status}`);
+  }
+  const page = json?.data as ApiTemplateRequestPage;
+  return {
+    id: page.id,
+    templateRequestId: page.template_request_id,
+    pageNumber: page.page_number,
+    sampleImageUrl: page.sample_image_url || undefined,
+    imageSource: page.image_source || undefined,
+    reviewStatus: page.review_status || undefined,
+    isCanonical: Boolean(page.is_canonical),
+    layoutSignatureJson: page.layout_signature_json || undefined,
+  };
+};
+
+export const deleteTemplateRequestImage = async (requestId: string, imageId: string) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
+    method: "DELETE",
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(json?.detail || json?.error?.message || `Delete image failed with ${response.status}`);
+  }
+  return json?.data;
 };
 
 export const deleteTemplateRequest = async (requestId: string) => {

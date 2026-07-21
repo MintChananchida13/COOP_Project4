@@ -71,10 +71,16 @@ def _post(endpoint: str, payload: Dict[str, Any], timeout: float = 120.0) -> Dic
     return data if isinstance(data, dict) else parsed
 
 
-def remote_analyze_layout(image: np.ndarray) -> Optional[Dict[str, Any]]:
+def remote_analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Optional[Dict[str, Any]]:
     if not _runtime_url():
         return None
-    return _post("/runtime/layout/analyze", {"image": _image_to_data_url(image)})
+    return _post(
+        "/runtime/layout/analyze",
+        {
+            "image": _image_to_data_url(image),
+            "expand_text_rois": expand_text_rois,
+        },
+    )
 
 
 def remote_detect_text_boxes(image_path: str) -> Optional[Dict[str, Any]]:
@@ -95,6 +101,16 @@ def remote_recognize_images(images: List[np.ndarray]) -> Optional[Dict[str, Any]
     return _post(
         "/runtime/ocr/recognize-batch",
         {"images": [_image_to_data_url(image) for image in images]},
+        timeout=240.0,
+    )
+
+
+def remote_recognize_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
+    if not _runtime_url():
+        return None
+    return _post(
+        "/runtime/table/recognize-v2",
+        {"image": _image_to_data_url(image)},
         timeout=240.0,
     )
 

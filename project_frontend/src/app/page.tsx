@@ -234,7 +234,7 @@ const templateFieldsToWorkspaceRois = async (
         : 1000;
 
       const type =
-        field.extractionMethod === "ocr_table" || field.dataType === "table"
+        field.extractionMethod === "ocr_table" || field.extractionMethod === "table_recognition_v2" || field.dataType === "table"
           ? "table"
           : field.extractionMethod === "extract_image" || field.dataType === "image"
             ? "image"
@@ -251,9 +251,14 @@ const templateFieldsToWorkspaceRois = async (
         type,
         dataType: field.dataType || type,
         extractionMethod:
-          field.extractionMethod === "ocr_table" || field.extractionMethod === "paddle_thai_ocr" || field.extractionMethod === "extract_image"
+          field.extractionMethod === "ocr_table" ||
+          field.extractionMethod === "table_recognition_v2" ||
+          field.extractionMethod === "paddle_thai_ocr" ||
+          field.extractionMethod === "extract_image"
             ? field.extractionMethod
-            : "paddle_thai_ocr",
+            : field.dataType === "table"
+              ? "table_recognition_v2"
+              : "paddle_thai_ocr",
         role: "data_extraction",
         enabled: field.defaultSelected !== false,
         roiCoordinateSource: source,
@@ -330,6 +335,37 @@ const tableRowsToObjects = (rows: string[][]) => {
   return bodyRows.map((row) =>
     Object.fromEntries(headers.map((headerName, index) => [headerName, row[index] ?? ""]))
   );
+};
+
+const tableRowsToMarkdown = (rows: string[][]) => {
+  if (!rows.length) return "";
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const normalizedRows = rows.map((row) => [...row.map((cell) => String(cell ?? "")), ...Array(columnCount - row.length).fill("")]);
+  const [header = [], ...bodyRows] = normalizedRows;
+  const safeHeader = header.map((cell, index) => cell || `Column ${index + 1}`);
+  const formatRow = (row: string[]) => `| ${row.map((cell) => cell.replace(/\|/g, "/")).join(" | ")} |`;
+  return [formatRow(safeHeader), formatRow(Array(columnCount).fill("---")), ...bodyRows.map(formatRow)].join("\n");
+};
+
+const parseHtmlTableRows = (value?: string): string[][] | null => {
+  if (!value || !value.toLowerCase().includes("<table")) return null;
+  try {
+    const doc = new DOMParser().parseFromString(value, "text/html");
+    const rows = Array.from(doc.querySelectorAll("tr")).map((row) => {
+      const cells: string[] = [];
+      Array.from(row.querySelectorAll("th,td")).forEach((cell) => {
+        const text = (cell.textContent || "").replace(/\s+/g, " ").trim();
+        const span = Math.max(1, Number(cell.getAttribute("colspan") || 1));
+        cells.push(text);
+        for (let index = 1; index < span; index += 1) cells.push("");
+      });
+      return cells;
+    });
+    const usefulRows = rows.filter((row) => row.some((cell) => cell.trim()));
+    return usefulRows.length > 0 ? usefulRows : rows.filter((row) => row.length > 0);
+  } catch {
+    return null;
+  }
 };
 
 const assignExportField = (fields: Record<string, unknown>, name: string, value: unknown) => {
@@ -600,7 +636,8 @@ export default function Home() {
                     width: roi.width * scaleX,
                     height: roi.height * scaleY,
                     type: roi.type || "text",
-                    extractionMethod: roi.extractionMethod || (roi.type === "image" ? "extract_image" : "paddle_thai_ocr"),
+                    extractionMethod:
+                      roi.extractionMethod || (roi.type === "image" ? "extract_image" : roi.type === "table" ? "table_recognition_v2" : "paddle_thai_ocr"),
                   },
                 ],
               }),
@@ -609,13 +646,18 @@ export default function Home() {
             const aiData = await response.json();
             if (aiData.success && aiData.extracted_data.length > 0) {
               const resItem = aiData.extracted_data[0];
+              const rawTableRows = Array.isArray(resItem.table_rows)
+                ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
+                : parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+              const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
+              const extractedText = String(resItem.text || tableMarkdown || "");
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
                 roiId: roi.id,
                 fieldName: resItem.fieldName,
                 bbox: [],
-                extractedText: resItem.text,
-                originalText: resItem.text,
+                extractedText,
+                originalText: extractedText,
                 confidence: resItem.confidence,
                 saved_path: resItem.saved_path || "",
                 pageIndex: pageIdx,
@@ -624,6 +666,9 @@ export default function Home() {
                 role: roi.role || "data_extraction",
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
                 points: roi.points,
+                tableRows: rawTableRows || undefined,
+                tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
+                tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
               };
             }
           } catch (innerErr) {

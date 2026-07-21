@@ -129,7 +129,7 @@ const layoutRegionToDetectedField = (
       fieldName,
       displayLabel: fieldName,
       dataType,
-      extractionMethod: dataType === "image" ? "extract_image" : "paddle_thai_ocr",
+      extractionMethod: dataType === "image" ? "extract_image" : dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr",
       userSelectable: true,
       defaultSelected: true,
       useForVerification: false,

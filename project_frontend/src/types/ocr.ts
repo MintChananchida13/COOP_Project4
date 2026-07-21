@@ -12,7 +12,7 @@ export interface ROI {
   pageIndex?: number;
   type?: 'text' | 'table' | 'image';
   dataType?: RoiDataType;
-  extractionMethod?: 'ocr_text' | 'ocr_table' | 'paddle_thai_ocr' | 'extract_image';
+  extractionMethod?: 'ocr_text' | 'ocr_table' | 'paddle_thai_ocr' | 'table_recognition_v2' | 'extract_image';
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
@@ -33,6 +33,9 @@ export interface OCRResult {
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
+  tableRows?: string[][];
+  tableHtml?: string;
+  tableDebug?: Record<string, unknown>;
 }
 
 export type TemplateRequestMode = 'image_only' | 'image_with_roi';
@@ -144,6 +147,10 @@ export interface TemplateRequestPage {
   templateRequestId: string;
   pageNumber: number;
   sampleImageUrl?: string;
+  imageSource?: 'user_request' | 'admin_upload';
+  reviewStatus?: 'pending' | 'approved' | 'rejected';
+  isCanonical?: boolean;
+  layoutSignatureJson?: string;
 }
 
 export interface AdminTemplateRequest {

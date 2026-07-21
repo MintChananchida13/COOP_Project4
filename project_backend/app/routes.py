@@ -18,6 +18,8 @@ from .schemas import (
     TemplatePageCreate,
     TemplatePageUpdate,
     TemplateRequestCreate,
+    TemplateRequestImageCreate,
+    TemplateRequestImageUpdate,
     TemplateRequestUpdate,
     TemplateTestRequest,
     TemplateUpdate,
@@ -264,6 +266,38 @@ def admin_delete_template_request(request_id: str) -> ApiResponse:
 @router.post("/admin/template-requests/{request_id}/start-review", response_model=ApiResponse)
 def admin_start_review(request_id: str) -> ApiResponse:
     return ok(admin_templates.start_review(request_id))
+
+
+@router.post("/admin/template-requests/{request_id}/images", response_model=ApiResponse)
+def admin_add_template_request_image(request_id: str, payload: TemplateRequestImageCreate) -> ApiResponse:
+    return ok(template_requests.add_image(request_id, payload))
+
+
+@router.patch("/admin/template-requests/{request_id}/images/{image_id}", response_model=ApiResponse)
+def admin_update_template_request_image(
+    request_id: str, image_id: str, payload: TemplateRequestImageUpdate
+) -> ApiResponse:
+    return ok(template_requests.update_image(request_id, image_id, payload))
+
+
+@router.delete("/admin/template-requests/{request_id}/images/{image_id}", response_model=ApiResponse)
+def admin_delete_template_request_image(request_id: str, image_id: str) -> ApiResponse:
+    return ok(template_requests.delete_image(request_id, image_id))
+
+
+@router.post("/admin/template-requests/{request_id}/images/{image_id}/approve", response_model=ApiResponse)
+def admin_approve_template_request_image(request_id: str, image_id: str) -> ApiResponse:
+    return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="approved")))
+
+
+@router.post("/admin/template-requests/{request_id}/images/{image_id}/reject", response_model=ApiResponse)
+def admin_reject_template_request_image(request_id: str, image_id: str) -> ApiResponse:
+    return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="rejected", is_canonical=False)))
+
+
+@router.post("/admin/template-requests/{request_id}/images/{image_id}/canonical", response_model=ApiResponse)
+def admin_set_template_request_canonical_image(request_id: str, image_id: str) -> ApiResponse:
+    return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="approved", is_canonical=True)))
 
 
 @router.post("/admin/template-requests/{request_id}/convert-to-template", response_model=ApiResponse)

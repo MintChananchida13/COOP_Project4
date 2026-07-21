@@ -71,6 +71,20 @@ class TemplateRequestUpdate(BaseModel):
     page_count: Optional[int] = Field(default=None, ge=1)
 
 
+class TemplateRequestImageCreate(BaseModel):
+    sample_image_url: str
+    image_source: str = "admin_upload"
+    review_status: str = "pending"
+    is_canonical: bool = False
+
+
+class TemplateRequestImageUpdate(BaseModel):
+    sample_image_url: Optional[str] = None
+    image_source: Optional[str] = None
+    review_status: Optional[str] = None
+    is_canonical: Optional[bool] = None
+
+
 class RequestedFieldCreate(BaseModel):
     template_request_page_id: str
     page_number: int = Field(..., ge=1)

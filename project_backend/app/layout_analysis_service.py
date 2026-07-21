@@ -37,6 +37,11 @@ _LAYOUT_MODEL: Any = None
 _TEXT_DETECTOR: Any = None
 _LAYOUT_MODEL_NAME = "PP-DocLayoutV3"
 _TEXT_DETECTION_MODEL_NAME = "PP-OCRv5_server_det"
+AUTO_ROI_EXPAND_TOP_RATIO = float(os.getenv("AUTO_ROI_EXPAND_TOP_RATIO", "0.20"))
+AUTO_ROI_EXPAND_BOTTOM_RATIO = float(os.getenv("AUTO_ROI_EXPAND_BOTTOM_RATIO", "0.15"))
+AUTO_ROI_EXPAND_LEFT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_LEFT_RATIO", "0.05"))
+AUTO_ROI_EXPAND_RIGHT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_RIGHT_RATIO", "0.20"))
+AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO", "0.45"))
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -259,6 +264,104 @@ def _box_area(box: List[float]) -> float:
     return max(0.0, abs(float(box[2]) - float(box[0]))) * max(0.0, abs(float(box[3]) - float(box[1])))
 
 
+def _clip_box_to_image(box: List[float], image_width: int, image_height: int) -> List[float]:
+    left = max(0.0, min(float(image_width), min(float(box[0]), float(box[2]))))
+    top = max(0.0, min(float(image_height), min(float(box[1]), float(box[3]))))
+    right = max(0.0, min(float(image_width), max(float(box[0]), float(box[2]))))
+    bottom = max(0.0, min(float(image_height), max(float(box[1]), float(box[3]))))
+    return [left, top, right, bottom]
+
+
+def _overlap_ratio_against_smaller_box(box_a: List[float], box_b: List[float]) -> float:
+    smaller_area = max(1.0, min(_box_area(box_a), _box_area(box_b)))
+    return _intersection_area(box_a, box_b) / smaller_area
+
+
+def _expand_text_roi_box(box: List[float], image_width: int, image_height: int) -> List[float]:
+    left, top, right, bottom = _clip_box_to_image(box, image_width, image_height)
+    box_width = max(0.0, right - left)
+    box_height = max(0.0, bottom - top)
+    expanded = [
+        left - box_width * AUTO_ROI_EXPAND_LEFT_RATIO,
+        top - box_height * AUTO_ROI_EXPAND_TOP_RATIO,
+        right + box_width * AUTO_ROI_EXPAND_RIGHT_RATIO,
+        bottom + box_height * AUTO_ROI_EXPAND_BOTTOM_RATIO,
+    ]
+    return _clip_box_to_image(expanded, image_width, image_height)
+
+
+def _reduce_box_overlap(
+    original_box: List[float],
+    expanded_box: List[float],
+    neighbor_boxes: List[List[float]],
+) -> List[float]:
+    adjusted = expanded_box[:]
+    for neighbor in neighbor_boxes:
+        if _box_area(neighbor) <= 0:
+            continue
+        if _overlap_ratio_against_smaller_box(adjusted, neighbor) <= AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO:
+            continue
+
+        original_left, original_top, original_right, original_bottom = original_box
+        neighbor_left, neighbor_top, neighbor_right, neighbor_bottom = neighbor
+
+        if original_right <= neighbor_left:
+            adjusted[2] = min(adjusted[2], neighbor_left)
+        elif original_left >= neighbor_right:
+            adjusted[0] = max(adjusted[0], neighbor_right)
+
+        if original_bottom <= neighbor_top:
+            adjusted[3] = min(adjusted[3], neighbor_top)
+        elif original_top >= neighbor_bottom:
+            adjusted[1] = max(adjusted[1], neighbor_bottom)
+
+        if adjusted[2] <= adjusted[0] or adjusted[3] <= adjusted[1]:
+            return original_box[:]
+        if _overlap_ratio_against_smaller_box(adjusted, neighbor) > AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO:
+            return original_box[:]
+    return adjusted
+
+
+def _prepare_auto_roi_box(
+    box: List[float],
+    region_type: str,
+    image_width: int,
+    image_height: int,
+    neighbor_boxes: List[List[float]],
+) -> Dict[str, Any]:
+    original_box = _clip_box_to_image(box, image_width, image_height)
+    if region_type not in {"text", "table"}:
+        return {
+            "box": original_box,
+            "expansion": {
+                "enabled": False,
+                "reason": "non_expandable_region",
+                "original_box": original_box,
+                "expanded_box": original_box,
+            },
+        }
+
+    expanded_box = _expand_text_roi_box(original_box, image_width, image_height)
+    adjusted_box = _reduce_box_overlap(original_box, expanded_box, neighbor_boxes)
+    return {
+        "box": adjusted_box,
+        "expansion": {
+            "enabled": True,
+            "original_box": original_box,
+            "expanded_box": expanded_box,
+            "final_box": adjusted_box,
+            "padding": {
+                "top": AUTO_ROI_EXPAND_TOP_RATIO,
+                "bottom": AUTO_ROI_EXPAND_BOTTOM_RATIO,
+                "left": AUTO_ROI_EXPAND_LEFT_RATIO,
+                "right": AUTO_ROI_EXPAND_RIGHT_RATIO,
+            },
+            "max_neighbor_overlap": AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO,
+            "overlap_adjusted": adjusted_box != expanded_box,
+        },
+    }
+
+
 def _box_center_inside(inner_box: List[float], outer_box: List[float]) -> bool:
     cx = (float(inner_box[0]) + float(inner_box[2])) / 2
     cy = (float(inner_box[1]) + float(inner_box[3])) / 2
@@ -279,12 +382,12 @@ def _text_box_belongs_to_table(text_box: List[float], table_boxes: List[List[flo
     return False
 
 
-def analyze_layout(image: np.ndarray) -> Dict[str, Any]:
+def analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Dict[str, Any]:
     if image is None or image.size == 0:
         raise ValueError("Invalid image for layout analysis.")
 
     try:
-        remote_result = remote_analyze_layout(image)
+        remote_result = remote_analyze_layout(image, expand_text_rois=expand_text_rois)
         if remote_result is not None:
             return remote_result
     except ModelRuntimeUnavailableError as error:
@@ -316,54 +419,75 @@ def analyze_layout(image: np.ndarray) -> Dict[str, Any]:
 
     table_boxes = [item["box"] for item in parsed_items if item["type"] == "table"]
 
-    regions: List[LayoutRegion] = []
+    filtered_items: List[Dict[str, Any]] = []
     for item in parsed_items:
         box = item["box"]
         region_type = item["type"]
         if region_type == "text" and _text_box_belongs_to_table(box, table_boxes):
             continue
 
-        x1, y1, x2, y2 = box
-        left = max(0.0, min(float(width), min(x1, x2)))
-        top = max(0.0, min(float(height), min(y1, y2)))
-        right = max(0.0, min(float(width), max(x1, x2)))
-        bottom = max(0.0, min(float(height), max(y1, y2)))
+        filtered_items.append(item)
+
+    original_boxes = [_clip_box_to_image(item["box"], width, height) for item in filtered_items]
+    regions: List[Dict[str, Any]] = []
+    for item_index, item in enumerate(filtered_items):
+        region_type = item["type"]
+        prepared = (
+            _prepare_auto_roi_box(
+                item["box"],
+                region_type,
+                width,
+                height,
+                [box for index, box in enumerate(original_boxes) if index != item_index],
+            )
+            if expand_text_rois
+            else {
+                "box": original_boxes[item_index],
+                "expansion": {
+                    "enabled": False,
+                    "reason": "disabled",
+                    "original_box": original_boxes[item_index],
+                    "expanded_box": original_boxes[item_index],
+                },
+            }
+        )
+
+        left, top, right, bottom = prepared["box"]
         box_width = right - left
         box_height = bottom - top
         if box_width < 4 or box_height < 4:
             continue
 
         regions.append(
-            LayoutRegion(
-                region_type=region_type,
-                x_ratio=_clamp_ratio(left / max(width, 1)),
-                y_ratio=_clamp_ratio(top / max(height, 1)),
-                width_ratio=_clamp_ratio(box_width / max(width, 1)),
-                height_ratio=_clamp_ratio(box_height / max(height, 1)),
-                confidence=float(item["confidence"]),
-            )
+            {
+                "type": region_type,
+                "confidence": float(item["confidence"]),
+                "roi": {
+                    "x_ratio": _clamp_ratio(left / max(width, 1)),
+                    "y_ratio": _clamp_ratio(top / max(height, 1)),
+                    "width_ratio": _clamp_ratio(box_width / max(width, 1)),
+                    "height_ratio": _clamp_ratio(box_height / max(height, 1)),
+                },
+                "roi_expansion": prepared["expansion"],
+            }
         )
 
-    regions.sort(key=lambda region: (region.y_ratio, region.x_ratio, -region.width_ratio * region.height_ratio))
+    regions.sort(key=lambda region: (region["roi"]["y_ratio"], region["roi"]["x_ratio"], -region["roi"]["width_ratio"] * region["roi"]["height_ratio"]))
 
     return {
         "engine": "paddleocr",
         "model": f"{_LAYOUT_MODEL_NAME}+{_TEXT_DETECTION_MODEL_NAME}",
         "image_width": width,
         "image_height": height,
-        "regions": [
-            {
-                "type": region.region_type,
-                "confidence": region.confidence,
-                "roi": {
-                    "x_ratio": region.x_ratio,
-                    "y_ratio": region.y_ratio,
-                    "width_ratio": region.width_ratio,
-                    "height_ratio": region.height_ratio,
-                },
-            }
-            for region in regions
-        ],
+        "regions": regions,
+        "auto_roi_expansion": {
+            "enabled": expand_text_rois,
+            "top": AUTO_ROI_EXPAND_TOP_RATIO,
+            "bottom": AUTO_ROI_EXPAND_BOTTOM_RATIO,
+            "left": AUTO_ROI_EXPAND_LEFT_RATIO,
+            "right": AUTO_ROI_EXPAND_RIGHT_RATIO,
+            "max_neighbor_overlap": AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO,
+        },
     }
 
 

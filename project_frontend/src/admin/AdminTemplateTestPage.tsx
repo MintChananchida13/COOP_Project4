@@ -141,6 +141,7 @@ const isValidRoi = (roi?: TemplateField["roi"] | IgnoreRegion["roi"]) =>
 
 const expectedMethodForDataType = (dataType?: string) => {
   if (dataType === "image") return "extract_image";
+  if (dataType === "table") return "table_recognition_v2";
   return "paddle_thai_ocr";
 };
 

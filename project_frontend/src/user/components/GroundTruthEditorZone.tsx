@@ -114,6 +114,35 @@ const parseTableText = (value: string): string[][] | null => {
   return parseJsonTable(trimmed) || parseMarkdownTable(trimmed) || parsePlainTextTable(trimmed);
 };
 
+const parseHtmlTable = (value?: string): string[][] | null => {
+  if (!value || !value.toLowerCase().includes("<table")) return null;
+  try {
+    const doc = new DOMParser().parseFromString(value, "text/html");
+    const rows = Array.from(doc.querySelectorAll("tr")).map((row) => {
+      const cells: string[] = [];
+      Array.from(row.querySelectorAll("th,td")).forEach((cell) => {
+        const text = (cell.textContent || "").replace(/\s+/g, " ").trim();
+        const span = Math.max(1, Number(cell.getAttribute("colspan") || 1));
+        cells.push(text);
+        for (let index = 1; index < span; index += 1) cells.push("");
+      });
+      return cells;
+    });
+    const usefulRows = rows.filter((row) => row.some((cell) => cell.trim()));
+    return usefulRows.length > 0 ? usefulRows : rows.filter((row) => row.length > 0);
+  } catch {
+    return null;
+  }
+};
+
+const normalizeTableRows = (rows?: unknown): string[][] | null => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const normalized = rows
+    .filter((row): row is unknown[] => Array.isArray(row))
+    .map((row) => row.map((cell) => String(cell ?? "")));
+  return normalized.length > 0 ? normalized : null;
+};
+
 const tableRowsToMarkdown = (rows: string[][]): string => {
   const cleanedRows = rows.map(row => row.map(cell => cell.trimEnd()));
   const maxColumns = Math.max(...cleanedRows.map(row => row.length), 1);
@@ -128,8 +157,16 @@ const tableRowsToMarkdown = (rows: string[][]): string => {
   ].join("\n");
 };
 
-const TableResultPreview = ({ value }: { value: string }) => {
-  const tableRows = parseTableText(value);
+const tableRowsFromResult = (result: OCRResult & { pageIndex?: number }, value?: string): string[][] | null =>
+  normalizeTableRows(result.tableRows) || parseHtmlTable(result.tableHtml) || parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
+
+const tableTextFromResult = (result: OCRResult & { pageIndex?: number }) => {
+  const rows = tableRowsFromResult(result, result.originalText ?? result.extractedText);
+  return rows ? tableRowsToMarkdown(rows) : getRawOcrText(result);
+};
+
+const TableResultPreview = ({ value, rows }: { value: string; rows?: string[][] | null }) => {
+  const tableRows = rows || parseTableText(value);
 
   if (!tableRows) return <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400">(ไม่พบข้อมูลตาราง)</div>;
 
@@ -164,22 +201,25 @@ const TableResultPreview = ({ value }: { value: string }) => {
 
 const EditableTableResult = ({
   value,
+  rows: sourceRows,
   onChange,
 }: {
   value: string;
-  onChange: (nextValue: string) => void;
+  rows?: string[][] | null;
+  onChange: (nextValue: string, nextRows: string[][]) => void;
 }) => {
-  const parsedRows = parseTableText(value);
+  const parsedRows = sourceRows || parseTableText(value);
+  const parsedRowsKey = JSON.stringify(parsedRows || []);
   const [localRows, setLocalRows] = useState<string[][]>(() => parsedRows || [["Column 1"], [""]]);
 
   useEffect(() => {
     setLocalRows(parsedRows || [["Column 1"], [""]]);
-  }, [value]);
+  }, [parsedRowsKey, value]);
 
   const commitRows = (rows: string[][]) => {
     const normalizedRows = rows.length > 0 ? rows : [["Column 1"], [""]];
     setLocalRows(normalizedRows);
-    onChange(tableRowsToMarkdown(normalizedRows));
+    onChange(tableRowsToMarkdown(normalizedRows), normalizedRows);
   };
 
   const maxColumns = Math.max(...localRows.map(row => row.length), 1);
@@ -428,9 +468,19 @@ export default function GroundTruthEditorZone({
   useEffect(() => {
     let changed = false;
     const updated = ocrResults.map(item => {
-      if (item.originalText === undefined) {
+      const rows = normalizeTableRows(item.tableRows);
+      const tableMarkdown = rows ? tableRowsToMarkdown(rows) : "";
+      const shouldUseTableMarkdown =
+        tableMarkdown && (!item.extractedText.trim() || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(item.extractedText.trim()));
+
+      if (item.originalText === undefined || shouldUseTableMarkdown) {
         changed = true;
-        return { ...item, originalText: item.extractedText };
+        return {
+          ...item,
+          originalText: item.originalText ?? (tableMarkdown || item.extractedText),
+          extractedText: shouldUseTableMarkdown ? tableMarkdown : item.extractedText,
+          tableRows: rows || item.tableRows,
+        };
       }
       return item;
     });
@@ -950,6 +1000,9 @@ export default function GroundTruthEditorZone({
                     <div className="space-y-3 p-3">
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
+                        const rawTableRows = tableRowsFromResult(res, getRawOcrText(res));
+                        const editedTableRows = parseTableText(res.extractedText) || rawTableRows;
+                        const editedTableValue = res.extractedText || (editedTableRows ? tableRowsToMarkdown(editedTableRows) : getRawOcrText(res));
                         return (
                           <article
                             key={res.id}
@@ -988,14 +1041,15 @@ export default function GroundTruthEditorZone({
                             <div className="grid grid-cols-1 gap-4">
                               <div>
                                 <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ผลตารางจาก OCR</p>
-                                <TableResultPreview value={getRawOcrText(res)} />
+                                <TableResultPreview value={tableTextFromResult(res)} rows={rawTableRows} />
                               </div>
 
                               <div onClick={(e) => e.stopPropagation()}>
                                 <EditableTableResult
-                                  value={res.extractedText || getRawOcrText(res)}
-                                  onChange={(nextValue) =>
-                                    setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue } : item))
+                                  value={editedTableValue}
+                                  rows={editedTableRows}
+                                  onChange={(nextValue, nextRows) =>
+                                    setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows } : item))
                                   }
                                 />
                               </div>

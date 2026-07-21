@@ -365,7 +365,9 @@ export default function AdminDetectionLabPage() {
               displayLabel: field.displayLabel || sourceField?.displayLabel || field.fieldName || `Field ${index + 1}`,
               pageNumber: roi.pageNumber || currentPageNumber,
               dataType: sourceField?.dataType || "text",
-              extractionMethod: sourceField?.extractionMethod || "paddle_thai_ocr",
+              extractionMethod:
+                sourceField?.extractionMethod ||
+                (sourceField?.dataType === "table" ? "table_recognition_v2" : sourceField?.dataType === "image" ? "extract_image" : "paddle_thai_ocr"),
               source: "projected_fields",
               roi: {
                 page_number: roi.pageNumber,
@@ -396,10 +398,13 @@ export default function AdminDetectionLabPage() {
             dataType: field.dataType || "text",
             extractionMethod:
               field.extractionMethod === "ocr_table" ||
+              field.extractionMethod === "table_recognition_v2" ||
               field.extractionMethod === "paddle_thai_ocr" ||
               field.extractionMethod === "extract_image"
                 ? field.extractionMethod
-                : "paddle_thai_ocr",
+                : field.dataType === "table"
+                  ? "table_recognition_v2"
+                  : "paddle_thai_ocr",
             source: "template_bundle",
             roi: {
               page_number: field.roi.pageNumber,
@@ -432,7 +437,7 @@ export default function AdminDetectionLabPage() {
         label: field.displayLabel || field.fieldName || `Field ${index + 1}`,
         fieldName: field.fieldName || "",
         dataType: field.dataType || "text",
-        extractionMethod: field.extractionMethod || "paddle_thai_ocr",
+        extractionMethod: field.extractionMethod || (field.dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr"),
         source: roiSourceLabel,
         projection: "admin_template_roi",
         id: stableNumericId(`detection-template-roi:${field.fieldId || field.fieldName || index}`),

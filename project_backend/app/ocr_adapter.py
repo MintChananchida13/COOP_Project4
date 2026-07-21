@@ -5,6 +5,7 @@ import cv2
 
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
 from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
+from .table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 
 
 class OcrUnavailableError(RuntimeError):
@@ -77,6 +78,12 @@ def _crop_roi_from_image(image, roi: Dict[str, Any]):
     return image.crop((x, y, right, bottom))
 
 
+def _is_table_item(item: Dict[str, Any]) -> bool:
+    data_type = str(item.get("data_type") or item.get("dataType") or "").lower()
+    extraction_method = str(item.get("extraction_method") or item.get("extractionMethod") or "").lower()
+    return data_type == "table" or extraction_method in {"table_recognition_v2", "ocr_table"}
+
+
 def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     if not roi_items:
         return {}
@@ -94,8 +101,35 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
         key = str(item.get("id") or item.get("field_id") or index)
         try:
             crop = _crop_roi_from_image(image, item.get("roi") or item)
-            crops.append(cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR))
-            keys.append(key)
+            bgr_crop = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR)
+            if _is_table_item(item):
+                table_result = recognize_table_v2(bgr_crop)
+                results_text = str(table_result.get("text") or "")
+                failed[key] = {
+                    "text": results_text,
+                    "confidence": round(float(table_result.get("confidence") or 0.0), 4),
+                    "preprocessing": table_result.get("preprocessing") or "paddle_table_structure_recognition",
+                    "segments": table_result.get("segments") or [],
+                    "engine": table_result.get("engine") or "table_recognition_v2",
+                    "model": table_result.get("model"),
+                    "table_html": table_result.get("table_html"),
+                    "table_rows": table_result.get("table_rows"),
+                    "table_debug": table_result.get("table_debug"),
+                    "error": table_result.get("error"),
+                }
+            else:
+                crops.append(bgr_crop)
+                keys.append(key)
+        except TableRecognitionV2UnavailableError as error:
+            failed[key] = {
+                "text": "",
+                "confidence": 0.0,
+                "preprocessing": "paddle_table_structure_recognition",
+                "segments": [],
+                "engine": "table_recognition_v2",
+                "model": None,
+                "error": str(error),
+            }
         except Exception as error:
             failed[key] = {
                 "text": "",

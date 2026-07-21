@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.routes import router as blueprint_router
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
+from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 
 # Force UTF-8 console output on Windows.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -324,6 +325,42 @@ def process_table_roi_with_engine(crop_img: np.ndarray) -> Dict[str, Any]:
     }
 
 
+def process_table_roi_v2_with_fallback(crop_img: np.ndarray) -> Dict[str, Any]:
+    try:
+        result = recognize_table_v2(crop_img)
+        if str(result.get("text") or "").strip() or result.get("table_html"):
+            return result
+        fallback = process_table_roi_with_engine(crop_img)
+        fallback["engine"] = "table_recognition_v2_fallback"
+        fallback["preprocessing"] = f"table_recognition_v2_empty_then_{fallback.get('preprocessing', 'fallback')}"
+        fallback["table_debug"] = {
+            **(fallback.get("table_debug") or {}),
+            "table_recognition_v2_status": (result.get("table_debug") or {}).get("status", "empty"),
+            "fallback_engine": "paddle_table_roi",
+        }
+        return fallback
+    except TableRecognitionV2UnavailableError as error:
+        fallback = process_table_roi_with_engine(crop_img)
+        fallback["engine"] = "table_recognition_v2_fallback"
+        fallback["preprocessing"] = f"table_recognition_v2_unavailable_then_{fallback.get('preprocessing', 'fallback')}"
+        fallback["table_debug"] = {
+            **(fallback.get("table_debug") or {}),
+            "table_recognition_v2_error": str(error),
+            "fallback_engine": "paddle_table_roi",
+        }
+        return fallback
+    except Exception as error:
+        fallback = process_table_roi_with_engine(crop_img)
+        fallback["engine"] = "table_recognition_v2_fallback"
+        fallback["preprocessing"] = f"table_recognition_v2_error_then_{fallback.get('preprocessing', 'fallback')}"
+        fallback["table_debug"] = {
+            **(fallback.get("table_debug") or {}),
+            "table_recognition_v2_error": str(error),
+            "fallback_engine": "paddle_table_roi",
+        }
+        return fallback
+
+
 def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, Any]:
     field_type = (roi.type or "text").lower()
     extraction_method = (roi.extractionMethod or "paddle_thai_ocr").lower()
@@ -341,7 +378,10 @@ def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, An
             "model": None,
         }
 
-    if field_type == "table" or extraction_method == "ocr_table":
+    if field_type == "table" or extraction_method == "table_recognition_v2":
+        return process_table_roi_v2_with_fallback(crop_img)
+
+    if extraction_method == "ocr_table":
         return process_table_roi_with_engine(crop_img)
 
     return run_paddle_thai_ocr(crop_img)
@@ -449,6 +489,8 @@ async def process_document(payload: DocumentPayload):
                         "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
                         "ocr_engine": ocr_result.get("engine", "unknown"),
                         "ocr_model": ocr_result.get("model"),
+                        "table_rows": ocr_result.get("table_rows"),
+                        "table_html": ocr_result.get("table_html"),
                         "table_debug": ocr_result.get("table_debug"),
                     }
                 )
@@ -486,11 +528,17 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
     try:
         for page in payload.images:
             _, opencv_img = decode_base64_image(page.image)
-            analysis = analyze_layout(opencv_img)
+            analysis = analyze_layout(opencv_img, expand_text_rois=True)
             regions = []
             for index, region in enumerate(analysis["regions"], start=1):
                 region_type = region["type"]
-                extraction_method = "extract_image" if region_type == "image" else "paddle_thai_ocr"
+                extraction_method = (
+                    "extract_image"
+                    if region_type == "image"
+                    else "table_recognition_v2"
+                    if region_type == "table"
+                    else "paddle_thai_ocr"
+                )
                 regions.append(
                     {
                         "field_name": f"{region_type}_{index}",
@@ -498,6 +546,7 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
                         "data_type": region_type,
                         "extraction_method": extraction_method,
                         "confidence": region.get("confidence", 0.0),
+                        "roi_expansion": region.get("roi_expansion"),
                         "roi": {
                             "page_number": int(page.page_index) + 1,
                             **region["roi"],

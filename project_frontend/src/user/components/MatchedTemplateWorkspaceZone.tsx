@@ -19,6 +19,9 @@ interface MatchedTemplateWorkspaceZoneProps extends WorkspaceCustomEditorProps {
   onSwitchToCustom: () => void;
 }
 
+const isTableRoi = (roi: ROI) =>
+  roi.type === "table" || roi.extractionMethod === "ocr_table" || roi.extractionMethod === "table_recognition_v2";
+
 const typeLabel = (roi: ROI) => {
   if (roi.type === "table" || roi.extractionMethod === "ocr_table") return "ตาราง";
   if (roi.type === "image" || roi.extractionMethod === "extract_image") return "รูปภาพ";
@@ -26,9 +29,15 @@ const typeLabel = (roi: ROI) => {
 };
 
 const typeIcon = (roi: ROI) => {
-  if (roi.type === "table" || roi.extractionMethod === "ocr_table") return <Table size={13} />;
+  if (isTableRoi(roi)) return <Table size={13} />;
   if (roi.type === "image" || roi.extractionMethod === "extract_image") return <ImageIcon size={13} />;
   return <FileText size={13} />;
+};
+
+const readableTypeLabel = (roi: ROI) => {
+  if (isTableRoi(roi)) return "ตาราง";
+  if (roi.type === "image" || roi.extractionMethod === "extract_image") return "รูปภาพ";
+  return "ข้อความ";
 };
 
 export default function MatchedTemplateWorkspaceZone({
@@ -217,7 +226,7 @@ export default function MatchedTemplateWorkspaceZone({
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-semibold">{roi.fieldName || "(Unnamed)"}</span>
-                          <span className="ui-caption mt-0.5 block text-slate-400">{typeLabel(roi)}</span>
+                          <span className="ui-caption mt-0.5 block text-slate-400">{readableTypeLabel(roi)}</span>
                         </span>
                         <StatusBadge status={checked ? "ready" : "disabled"} tone={checked ? "success" : "neutral"} />
                       </label>
@@ -232,7 +241,7 @@ export default function MatchedTemplateWorkspaceZone({
                 <h3 className="ui-label text-slate-700">ข้อมูลที่เลือก</h3>
                 <p className="ui-card-title mt-2 text-slate-900">{selectedRoi.fieldName}</p>
                 <p className="ui-caption mt-1 text-slate-500">
-                  {typeLabel(selectedRoi)} · Page {(selectedRoi.pageIndex ?? 0) + 1}
+                  {readableTypeLabel(selectedRoi)} · Page {(selectedRoi.pageIndex ?? 0) + 1}
                 </p>
               </section>
             )}

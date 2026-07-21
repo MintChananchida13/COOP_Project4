@@ -15,14 +15,14 @@ const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
 const roiTypePatch = (type: 'text' | 'table' | 'image'): Partial<ROI> => ({
   type,
   dataType: type,
-  extractionMethod: type === 'image' ? 'extract_image' : 'paddle_thai_ocr',
+  extractionMethod: type === 'image' ? 'extract_image' : type === 'table' ? 'table_recognition_v2' : 'paddle_thai_ocr',
 });
 
 interface LayoutDetectedRegion {
   field_name?: string;
   type?: "text" | "table" | "image";
   data_type?: "text" | "table" | "image";
-  extraction_method?: "paddle_thai_ocr" | "extract_image" | "ocr_text" | "ocr_table";
+  extraction_method?: "paddle_thai_ocr" | "table_recognition_v2" | "extract_image" | "ocr_text" | "ocr_table";
   confidence?: number;
   roi?: {
     page_number?: number;
@@ -743,7 +743,7 @@ export default function WorkspaceCustomEditor({
     const displayWidth = 750;
     const displayHeight = page.image_width > 0 ? (page.image_height / page.image_width) * displayWidth : 1000;
     const type = region.type === "table" || region.type === "image" ? region.type : "text";
-    const extractionMethod = type === "image" ? "extract_image" : "paddle_thai_ocr";
+    const extractionMethod = type === "image" ? "extract_image" : type === "table" ? "table_recognition_v2" : "paddle_thai_ocr";
 
     const width = widthRatio * displayWidth;
     const height = heightRatio * displayHeight;

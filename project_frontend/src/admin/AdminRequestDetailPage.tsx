@@ -19,10 +19,13 @@ import {
 import { AdminTemplateRequest, TemplateRequestPage } from "../types/ocr";
 import {
   ADMIN_API_BASE_URL,
+  addTemplateRequestImage,
   convertTemplateRequestToTemplate,
   deleteTemplateRequest,
+  deleteTemplateRequestImage,
   fetchTemplateRequest,
   fetchTemplateRequestPages,
+  updateTemplateRequestImage,
 } from "./adminApi";
 import { samplePage } from "./adminMockData";
 import { useAdminState } from "./AdminState";
@@ -87,6 +90,7 @@ export default function AdminRequestDetailPage({
   const [actionError, setActionError] = useState("");
   const [isConverting, setIsConverting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdatingImages, setIsUpdatingImages] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   useEffect(() => {
@@ -158,6 +162,107 @@ export default function AdminRequestDetailPage({
     }, {});
   }, [request?.requestedFields]);
 
+  const reloadImages = async () => {
+    const requestPages = await fetchTemplateRequestPages(requestId);
+    setPages(requestPages);
+    setRequest((current) =>
+      current
+        ? {
+            ...current,
+            pages: requestPages,
+            pageCount: requestPages.length,
+          }
+        : current
+    );
+  };
+
+  const fileToDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const handleAddImages = async (files: FileList | null) => {
+    if (!request || !files || files.length === 0) return;
+    setActionError("");
+    setActionStatus("");
+    setIsUpdatingImages(true);
+    try {
+      const dataUrls = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map(fileToDataUrl));
+      for (const src of dataUrls.filter(Boolean)) {
+        await addTemplateRequestImage(request.id, src, "admin_upload");
+      }
+      await reloadImages();
+      setActionStatus("Reference image added.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Add image failed.");
+    } finally {
+      setIsUpdatingImages(false);
+    }
+  };
+
+  const handleReplaceImage = async (imageId: string, files: FileList | null) => {
+    if (!request || !files?.[0]) return;
+    setActionError("");
+    setActionStatus("");
+    setIsUpdatingImages(true);
+    try {
+      const src = await fileToDataUrl(files[0]);
+      await updateTemplateRequestImage(request.id, imageId, {
+        sampleImageUrl: src,
+        imageSource: "admin_upload",
+        reviewStatus: "pending",
+        isCanonical: false,
+      });
+      await reloadImages();
+      setActionStatus("Reference image replaced and marked pending.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Replace image failed.");
+    } finally {
+      setIsUpdatingImages(false);
+    }
+  };
+
+  const handleUpdateImage = async (
+    imageId: string,
+    patch: {
+      reviewStatus?: "pending" | "approved" | "rejected";
+      isCanonical?: boolean;
+    }
+  ) => {
+    if (!request) return;
+    setActionError("");
+    setActionStatus("");
+    setIsUpdatingImages(true);
+    try {
+      await updateTemplateRequestImage(request.id, imageId, patch);
+      await reloadImages();
+      setActionStatus("Reference image updated.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Update image failed.");
+    } finally {
+      setIsUpdatingImages(false);
+    }
+  };
+
+  const handleRemoveImage = async (imageId: string) => {
+    if (!request) return;
+    setActionError("");
+    setActionStatus("");
+    setIsUpdatingImages(true);
+    try {
+      await deleteTemplateRequestImage(request.id, imageId);
+      await reloadImages();
+      setActionStatus("Reference image removed.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Remove image failed.");
+    } finally {
+      setIsUpdatingImages(false);
+    }
+  };
+
   const handleReject = async () => {
     if (!request) return;
 
@@ -205,6 +310,12 @@ export default function AdminRequestDetailPage({
       setActionError(
         "Cannot convert a demo/fallback request. Reload backend data and try again."
       );
+      return;
+    }
+
+    const canonicalImages = pages.filter((page) => page.reviewStatus === "approved" && page.isCanonical);
+    if (canonicalImages.length !== 1) {
+      setActionError("Select exactly one approved canonical image before converting to a template draft.");
       return;
     }
 
@@ -294,6 +405,8 @@ export default function AdminRequestDetailPage({
     Math.max(workspacePages.length - 1, 0)
   );
   const currentPageFields = fieldsByPage[safeCurrentPage + 1] || [];
+  const canonicalImageCount = pages.filter((page) => page.reviewStatus === "approved" && page.isCanonical).length;
+  const canConvert = loadStatus === "loaded" && canonicalImageCount === 1;
 
   return (
     <section className="space-y-4">
@@ -365,6 +478,141 @@ export default function AdminRequestDetailPage({
         </div>
 
         <aside className="space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  Reference Images
+                </h3>
+                <p className="mt-1 text-[11px] font-semibold text-slate-400">
+                  Approve images and select one canonical image for the editor.
+                </p>
+              </div>
+
+              <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black text-indigo-700 hover:bg-indigo-100">
+                Add
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  disabled={isUpdatingImages}
+                  onChange={(event) => {
+                    void handleAddImages(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+
+            <div className="space-y-3">
+              {pages.length === 0 ? (
+                <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                  No reference images were uploaded.
+                </p>
+              ) : (
+                pages.map((page) => (
+                  <div key={page.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(Math.max(page.pageNumber - 1, 0))}
+                        className="h-20 w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white"
+                      >
+                        <img
+                          src={page.sampleImageUrl || samplePage}
+                          alt={`Reference ${page.pageNumber}`}
+                          className="h-full w-full object-contain"
+                        />
+                      </button>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap gap-1">
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-600">
+                            Image {page.pageNumber}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-600">
+                            {page.imageSource || "user_request"}
+                          </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                              page.reviewStatus === "approved"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : page.reviewStatus === "rejected"
+                                  ? "bg-red-50 text-red-700"
+                                  : "bg-amber-50 text-amber-700"
+                            }`}
+                          >
+                            {page.reviewStatus || "pending"}
+                          </span>
+                          {page.isCanonical && (
+                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                              canonical
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            disabled={isUpdatingImages}
+                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved" })}
+                            className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isUpdatingImages || page.reviewStatus === "rejected"}
+                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved", isCanonical: true })}
+                            className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300"
+                          >
+                            Canonical
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isUpdatingImages}
+                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "rejected", isCanonical: false })}
+                            className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300"
+                          >
+                            Reject
+                          </button>
+                          <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600">
+                            Replace
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              disabled={isUpdatingImages}
+                              onChange={(event) => {
+                                void handleReplaceImage(page.id, event.target.files);
+                                event.target.value = "";
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            disabled={isUpdatingImages || Boolean(page.isCanonical)}
+                            onClick={() => void handleRemoveImage(page.id)}
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {canonicalImageCount !== 1 && (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                Select exactly one approved canonical image before opening the Template Editor.
+              </p>
+            )}
+          </section>
+
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-3 flex h-10 items-center justify-between">
               <div>
@@ -469,10 +717,10 @@ export default function AdminRequestDetailPage({
               <button
                 type="button"
                 onClick={handleConvert}
-                disabled={isConverting || loadStatus !== "loaded"}
+                disabled={isConverting || !canConvert}
                 className="ui-stable-action-lg rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {isConverting ? "Converting..." : "Convert to Template Draft"}
+                {isConverting ? "Converting..." : "Convert Canonical Image to Template Draft"}
               </button>
 
               <button

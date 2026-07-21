@@ -473,7 +473,7 @@ def _run_extraction_test(
             continue
 
         data_type = source_field.get("data_type") or "text"
-        extraction_method = source_field.get("extraction_method") or "paddle_thai_ocr"
+        extraction_method = source_field.get("extraction_method") or ("table_recognition_v2" if data_type == "table" else "paddle_thai_ocr")
         roi_source = "template_roi" if roi_coordinate_space == "template_canvas" else "projected_roi"
         roi = projected.get("template_roi") if roi_source == "template_roi" else projected.get("projected_roi")
         if not roi:
@@ -514,7 +514,7 @@ def _run_extraction_test(
             results.append(base)
             continue
 
-        roi_items.append({"id": field_id, "roi": roi})
+        roi_items.append({"id": field_id, "roi": roi, "data_type": data_type, "extraction_method": extraction_method})
         roi_sources[field_id] = roi_source
         results.append(base)
 
@@ -538,6 +538,9 @@ def _run_extraction_test(
                         "failure_reason": None if text.strip() and not error else str(error or "ocr_empty"),
                         "engine": ocr_result.get("engine"),
                         "model": ocr_result.get("model"),
+                        "table_rows": ocr_result.get("table_rows"),
+                        "table_html": ocr_result.get("table_html"),
+                        "table_debug": ocr_result.get("table_debug"),
                         "roi_source": roi_sources.get(field_id) or item.get("roi_source"),
                     }
                 )

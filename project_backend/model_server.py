@@ -17,11 +17,13 @@ os.environ.setdefault("MODEL_RUNTIME_ROLE", "service")
 
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
+from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 from app.vision_embedding_adapter import encode_images
 
 
 class ImagePayload(BaseModel):
     image: str
+    expand_text_rois: bool = False
 
 
 class ImagesPayload(BaseModel):
@@ -144,6 +146,7 @@ def health() -> Dict[str, Any]:
         "layout_model": "PP-DocLayoutV3",
         "text_detection_model": "PP-OCRv5_server_det",
         "ocr_model": os.getenv("PADDLE_THAI_OCR_MODEL_NAME", "th_PP-OCRv5_mobile_rec"),
+        "table_model": os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus"),
         "vision_embedding_mode": os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower(),
     }
 
@@ -160,7 +163,7 @@ def warmup() -> Dict[str, Any]:
 def runtime_analyze_layout(payload: ImagePayload) -> Dict[str, Any]:
     try:
         _, opencv_img = _decode_image(payload.image)
-        return {"success": True, "data": _json_safe(analyze_layout(opencv_img))}
+        return {"success": True, "data": _json_safe(analyze_layout(opencv_img, expand_text_rois=payload.expand_text_rois))}
     except LayoutAnalysisUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error))
     except Exception as error:
@@ -199,6 +202,17 @@ def runtime_recognize_batch(payload: ImagesPayload) -> Dict[str, Any]:
         images = [_decode_image(image)[1] for image in payload.images]
         return {"success": True, "data": {"results": _json_safe(run_paddle_thai_ocr_batch(images))}}
     except PaddleThaiOcrUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error))
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@app.post("/runtime/table/recognize-v2")
+def runtime_recognize_table_v2(payload: ImagePayload) -> Dict[str, Any]:
+    try:
+        _, opencv_img = _decode_image(payload.image)
+        return {"success": True, "data": _json_safe(recognize_table_v2(opencv_img))}
+    except TableRecognitionV2UnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error))
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
