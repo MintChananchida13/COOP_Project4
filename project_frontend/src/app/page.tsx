@@ -8,7 +8,14 @@ import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWork
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
 import { ROI, OCRResult, TemplateField } from "../types/ocr";
-import { ADMIN_API_BASE_URL, detectTemplateDev, fetchTemplateBundle, type DetectionDevResult } from "../admin/adminApi";
+import {
+  ADMIN_API_BASE_URL,
+  detectTemplateDev,
+  fetchTemplateBundle,
+  type DetectionCandidate,
+  type DetectionDevResult,
+  type DetectionProjectedField,
+} from "../admin/adminApi";
 import { ActionButton, InlineState } from "../shared/ui";
 
 interface PageConfig {
@@ -170,7 +177,42 @@ const loadImageElement = (src: string) =>
     imageObj.src = src;
   });
 
-const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList: string[]) => {
+const findDetectionPageCandidate = (detection: DetectionDevResult | null | undefined, templateId: string, pageNumber: number) => {
+  const page = detection?.pages?.find((item) => item.pageIndex === pageNumber);
+  return (
+    page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
+    (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null) ||
+    null
+  );
+};
+
+const readProjectedRoiRatio = (roi: DetectionProjectedField["projectedRoi"] | undefined | null) => {
+  if (!roi) return null;
+  const xRatio = typeof roi.x_ratio === "number" ? roi.x_ratio : null;
+  const yRatio = typeof roi.y_ratio === "number" ? roi.y_ratio : null;
+  const widthRatio = typeof roi.width_ratio === "number" ? roi.width_ratio : null;
+  const heightRatio = typeof roi.height_ratio === "number" ? roi.height_ratio : null;
+  const pageNumber = typeof roi.page_number === "number" ? roi.page_number : 1;
+  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
+  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
+};
+
+const candidateFieldRoi = (field: TemplateField, pageCandidate: DetectionCandidate | null) => {
+  const coordinateSpace = pageCandidate?.roiCoordinateSpace || "template_canvas";
+  if (coordinateSpace !== "template_canvas") {
+    const projected = pageCandidate?.projectedFields?.find((item) => item.fieldId === field.id || item.fieldName === field.fieldName);
+    const projectedRatio = readProjectedRoiRatio(projected?.projectedRoi);
+    if (projectedRatio) return { roi: projectedRatio, source: "projected_roi" };
+  }
+  return { roi: field.roi, source: "template_roi" };
+};
+
+const templateFieldsToWorkspaceRois = async (
+  fields: TemplateField[],
+  imageList: string[],
+  detection?: DetectionDevResult | null,
+  templateId?: string
+) => {
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
 
   return fields
@@ -182,7 +224,8 @@ const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList:
         left.fieldName.localeCompare(right.fieldName)
     )
     .map((field) => {
-      const roi = field.roi;
+      const pageCandidate = templateId ? findDetectionPageCandidate(detection, templateId, field.pageNumber) : null;
+      const { roi, source } = candidateFieldRoi(field, pageCandidate);
       const pageIndex = Math.max(0, roi.pageNumber - 1);
       const pageImage = pageImages[pageIndex];
       const displayWidth = 750;
@@ -213,7 +256,8 @@ const templateFieldsToWorkspaceRois = async (fields: TemplateField[], imageList:
             : "paddle_thai_ocr",
         role: "data_extraction",
         enabled: field.defaultSelected !== false,
-      } satisfies ROI & { pageIndex?: number };
+        roiCoordinateSource: source,
+      } satisfies ROI & { pageIndex?: number; roiCoordinateSource?: string };
     });
 };
 
@@ -224,7 +268,7 @@ const buildTemplateCanvasImages = async (sourceImages: string[], detection: Dete
     const pageCandidate =
       page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
       (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null);
-    const extractionSrc = backendPreviewSrc(pageCandidate?.alignedImagePreviewUrl || pageCandidate?.extractionImagePreviewUrl);
+    const extractionSrc = backendPreviewSrc(pageCandidate?.extractionImagePreviewUrl || pageCandidate?.alignedImagePreviewUrl);
     if (!extractionSrc) return sourceImage;
     try {
       return await imageUrlToCanvasSafeSrc(extractionSrc);
@@ -449,7 +493,25 @@ export default function Home() {
       setPreviewUrl(templateCanvasImages[currentIndex] || templateCanvasImages[0] || "");
       setImage(templateCanvasImages[currentIndex] || templateCanvasImages[0] || null);
 
-      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages);
+      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId);
+      console.debug("[User OCR Workspace] ROI coordinate check", {
+        templateId,
+        candidate: detection.bestCandidate?.templateName,
+        candidateCoordinateSpace: detection.bestCandidate?.roiCoordinateSpace,
+        extractionImagePreviewUrl: detection.bestCandidate?.extractionImagePreviewUrl,
+        alignedImagePreviewUrl: detection.bestCandidate?.alignedImagePreviewUrl,
+        pageCount: templateCanvasImages.length,
+        firstRoi: detectedRois[0]
+          ? {
+              fieldName: detectedRois[0].fieldName,
+              pageIndex: detectedRois[0].pageIndex,
+              x: detectedRois[0].x,
+              y: detectedRois[0].y,
+              width: detectedRois[0].width,
+              height: detectedRois[0].height,
+            }
+          : null,
+      });
       setMatchedTemplate({
         id: bundle.template.id,
         name: bundle.template.name,

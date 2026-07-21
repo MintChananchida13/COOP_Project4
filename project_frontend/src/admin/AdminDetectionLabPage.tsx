@@ -1,9 +1,37 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
-import { ADMIN_API_BASE_URL, DetectionCandidate, DetectionDevResult, detectTemplateDev } from "./adminApi";
+import {
+  ADMIN_API_BASE_URL,
+  detectTemplateDev,
+  fetchTemplateBundle,
+  type DetectionCandidate,
+  type DetectionDevResult,
+  type DetectionProjectedField,
+} from "./adminApi";
+import RoiLayer from "../shared/workspace/RoiLayer";
+import { WorkspaceRoi } from "../shared/workspace/RoiBox";
+import WorkspaceCanvas from "../shared/workspace/WorkspaceCanvas";
+import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../shared/workspace/roiGeometry";
+import { TemplateField } from "../types/ocr";
 
 const formatScore = (score?: number | null) => (typeof score === "number" && score !== null ? score.toFixed(4) : "N/A");
+const candidateFinalScore = (candidate?: DetectionCandidate | null) =>
+  typeof candidate?.finalScore === "number" ? candidate.finalScore : typeof candidate?.score === "number" ? candidate.score : 0;
+const candidateLayoutScore = (candidate?: DetectionCandidate | null) =>
+  typeof candidate?.layoutScore === "number"
+    ? candidate.layoutScore
+    : typeof candidate?.retrievalScore === "number"
+      ? candidate.retrievalScore
+      : 0;
+const formatScoreDelta = (score?: number | null) => (typeof score === "number" && score !== null ? score.toFixed(4) : "N/A");
+const separationQuality = (delta: number | null) => {
+  if (delta === null) return { label: "N/A", className: "bg-slate-100 text-slate-600" };
+  if (delta >= 0.25) return { label: "แยกได้ชัดเจนมาก", className: "bg-emerald-100 text-emerald-700" };
+  if (delta >= 0.15) return { label: "แยกได้ดี", className: "bg-green-100 text-green-700" };
+  if (delta >= 0.08) return { label: "ใกล้เคียง ต้องตรวจเพิ่ม", className: "bg-amber-100 text-amber-700" };
+  return { label: "เสี่ยงสับสน", className: "bg-red-100 text-red-700" };
+};
 const readText = (value: unknown) => (typeof value === "string" && value.trim() ? value : "N/A");
 const readValue = (value: unknown) => (typeof value === "number" || typeof value === "boolean" ? String(value) : readText(value));
 const readScore = (value: unknown) => (typeof value === "number" ? formatScore(value) : "N/A");
@@ -125,29 +153,35 @@ const alignmentBadgeClass = (candidate?: DetectionCandidate | null) => {
   return "bg-red-100 text-red-700";
 };
 const readBool = (value: unknown) => (value === true ? "true" : value === false ? "false" : "N/A");
-const ratioStyle = (roi: Record<string, unknown> | null | undefined) => {
-  if (!roi) return null;
-  const x = typeof roi.x_ratio === "number" ? roi.x_ratio : 0;
-  const y = typeof roi.y_ratio === "number" ? roi.y_ratio : 0;
-  const width = typeof roi.width_ratio === "number" ? roi.width_ratio : 0;
-  const height = typeof roi.height_ratio === "number" ? roi.height_ratio : 0;
-  return {
-    left: `${Math.max(0, Math.min(1, x)) * 100}%`,
-    top: `${Math.max(0, Math.min(1, y)) * 100}%`,
-    width: `${Math.max(0, Math.min(1, width)) * 100}%`,
-    height: `${Math.max(0, Math.min(1, height)) * 100}%`,
-  };
+const readRatioNumber = (roi: Record<string, unknown>, snakeKey: string, camelKey: string) => {
+  const snakeValue = roi[snakeKey];
+  if (typeof snakeValue === "number") return snakeValue;
+  const camelValue = roi[camelKey];
+  if (typeof camelValue === "number") return camelValue;
+  return null;
 };
-
-type OverlayLayerKey = "template" | "projected" | "adaptive" | "words" | "anchors";
-
-const overlayLayerOptions: { key: OverlayLayerKey; label: string; className: string }[] = [
-  { key: "template", label: "Template ROI", className: "border-red-500 bg-red-500/10" },
-  { key: "projected", label: "Projected ROI", className: "border-orange-500 bg-orange-500/10" },
-  { key: "adaptive", label: "Adaptive ROI", className: "border-emerald-500 bg-emerald-500/10" },
-  { key: "words", label: "OCR Word Boxes", className: "border-sky-500 bg-sky-500/10" },
-  { key: "anchors", label: "Verification Anchors", className: "border-purple-500 bg-purple-500/10" },
-];
+const roiRatioFromRecord = (roi: Record<string, unknown> | null | undefined) => {
+  if (!roi) return null;
+  const xRatio = readRatioNumber(roi, "x_ratio", "xRatio");
+  const yRatio = readRatioNumber(roi, "y_ratio", "yRatio");
+  const widthRatio = readRatioNumber(roi, "width_ratio", "widthRatio");
+  const heightRatio = readRatioNumber(roi, "height_ratio", "heightRatio");
+  const pageNumber = readRatioNumber(roi, "page_number", "pageNumber") || 1;
+  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
+  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
+};
+const projectedRoiRatio = (roi: DetectionProjectedField["projectedRoi"] | undefined | null) => {
+  if (!roi) return null;
+  const xRatio = typeof roi.x_ratio === "number" ? roi.x_ratio : null;
+  const yRatio = typeof roi.y_ratio === "number" ? roi.y_ratio : null;
+  const widthRatio = typeof roi.width_ratio === "number" ? roi.width_ratio : null;
+  const heightRatio = typeof roi.height_ratio === "number" ? roi.height_ratio : null;
+  const pageNumber = typeof roi.page_number === "number" ? roi.page_number : 1;
+  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
+  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
+};
+const stableNumericId = (value: string) =>
+  Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 11));
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -156,14 +190,11 @@ export default function AdminDetectionLabPage() {
   const [pageIndex, setPageIndex] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState("");
-  const [overlayLayers, setOverlayLayers] = useState<Record<OverlayLayerKey, boolean>>({
-    template: false,
-    projected: true,
-    adaptive: true,
-    words: false,
-    anchors: false,
-  });
-
+  const [roiPreviewImageMetrics, setRoiPreviewImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
+  const [selectedPreviewRoiId, setSelectedPreviewRoiId] = useState<number | null>(null);
+  const [workspaceTemplateId, setWorkspaceTemplateId] = useState<string | null>(null);
+  const [workspaceTemplateFields, setWorkspaceTemplateFields] = useState<TemplateField[]>([]);
+  const [workspaceTemplateError, setWorkspaceTemplateError] = useState("");
   useEffect(() => {
     if (!file || file.type === "application/pdf") {
       setPreviewUrl("");
@@ -178,8 +209,56 @@ export default function AdminDetectionLabPage() {
   const currentPage = pages[pageIndex] || pages[0] || null;
   const bestCandidate = result?.bestCandidate || null;
   const visibleCandidates = currentPage?.candidates.length ? currentPage.candidates : result?.candidates || [];
-  const verificationCandidate = bestCandidate || currentPage?.bestCandidate || visibleCandidates[0] || null;
-  const alignmentCandidate = currentPage?.bestCandidate || bestCandidate || visibleCandidates[0] || null;
+  const sortedVisibleCandidates = [...visibleCandidates].sort((left, right) => candidateFinalScore(right) - candidateFinalScore(left));
+  const topFinalScore = sortedVisibleCandidates.length > 0 ? candidateFinalScore(sortedVisibleCandidates[0]) : null;
+  const secondFinalScore = sortedVisibleCandidates.length > 1 ? candidateFinalScore(sortedVisibleCandidates[1]) : null;
+  const finalScoreGap = topFinalScore !== null && secondFinalScore !== null ? topFinalScore - secondFinalScore : null;
+  const finalScoreGapQuality = separationQuality(finalScoreGap);
+  const topLayoutScore = sortedVisibleCandidates.length > 0 ? candidateLayoutScore(sortedVisibleCandidates[0]) : null;
+  const secondLayoutScore = sortedVisibleCandidates.length > 1 ? candidateLayoutScore(sortedVisibleCandidates[1]) : null;
+  const layoutScoreGap = topLayoutScore !== null && secondLayoutScore !== null ? topLayoutScore - secondLayoutScore : null;
+  const layoutScoreGapQuality = separationQuality(layoutScoreGap);
+  const finalTemplateId = bestCandidate?.templateId || currentPage?.bestCandidate?.templateId || null;
+  const pageDisplayCandidate =
+    finalTemplateId && currentPage
+      ? currentPage.candidates.find((candidate) => candidate.templateId === finalTemplateId) ||
+        (currentPage.bestCandidate?.templateId === finalTemplateId ? currentPage.bestCandidate : null) ||
+        bestCandidate ||
+        null
+      : currentPage?.bestCandidate || sortedVisibleCandidates[0] || bestCandidate || null;
+  const verificationCandidate = pageDisplayCandidate;
+  const alignmentCandidate = pageDisplayCandidate;
+  const candidateTemplateId = alignmentCandidate?.templateId || null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setWorkspaceTemplateError("");
+    setSelectedPreviewRoiId(null);
+
+    if (!candidateTemplateId) {
+      setWorkspaceTemplateId(null);
+      setWorkspaceTemplateFields([]);
+      return;
+    }
+
+    setWorkspaceTemplateId(candidateTemplateId);
+    fetchTemplateBundle(candidateTemplateId)
+      .then((bundle) => {
+        if (cancelled) return;
+        setWorkspaceTemplateFields(bundle.fields || []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("Unable to load template bundle for detection lab workspace preview.", err);
+        setWorkspaceTemplateFields([]);
+        setWorkspaceTemplateError(err instanceof Error ? err.message : "Unable to load template ROI bundle.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [candidateTemplateId]);
+
   const currentAlignment = alignmentOf(alignmentCandidate);
   const currentAlignmentDebug = alignmentDebugOf(alignmentCandidate);
   const currentAlignmentStatus = alignmentStatus(alignmentCandidate);
@@ -204,6 +283,8 @@ export default function AdminDetectionLabPage() {
     currentPage?.normalizedImagePreviewUrl || (currentPage?.debug?.normalized_image_preview_url as string | undefined) || currentPage?.imagePreviewDataUrl
   );
   const extractionImagePreviewUrl = previewSrc(alignmentCandidate?.extractionImagePreviewUrl);
+  const extractionTest = alignmentCandidate?.extractionTest || null;
+  const userFlowWorkspaceImageUrl = extractionImagePreviewUrl || alignedImagePreviewUrl || originalImagePreviewUrl;
   const effectivePreviewUrl =
     currentAlignmentStatus === "aligned" && alignedImagePreviewUrl ? alignedImagePreviewUrl : normalizedImagePreviewUrl || currentPage?.imagePreviewDataUrl || "";
   const effectivePreviewLabel = currentAlignmentStatus === "aligned" && alignedImagePreviewUrl ? "Aligned Image" : "Normalized Image";
@@ -217,6 +298,13 @@ export default function AdminDetectionLabPage() {
           : currentAlignmentStatus === "failed"
             ? "Alignment failed: normalized image used"
             : "Pipeline image";
+  const roiPreviewImageUrl = userFlowWorkspaceImageUrl;
+  const roiPreviewLabel = "Template Workspace Image";
+  const roiPreviewBadge = extractionImagePreviewUrl
+    ? "Same as user flow: final extraction image selected by the backend"
+    : alignedImagePreviewUrl
+      ? "Same as user flow fallback: aligned image was available but extraction image was missing"
+      : "Same as user flow fallback: uploaded/source image";
   const currentVerificationFields = verificationFields(verificationCandidate);
   const isPdf = file?.type === "application/pdf";
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
@@ -255,16 +343,141 @@ export default function AdminDetectionLabPage() {
     },
     {
       title: "Final ROI/OCR Image",
-      description: "The final image shown with ROI overlays. Extraction and verification are interpreted against this image.",
-      src: extractionImagePreviewUrl || effectivePreviewUrl,
+      description: "The final image follows the same source selection used by the user workspace.",
+      src: userFlowWorkspaceImageUrl,
       status: verificationSourceUsed === "aligned" ? "aligned" : "normalized",
     },
   ];
-  const projectionCandidate = verificationCandidate || alignmentCandidate;
-  const projectedOverlayFields = projectionCandidate?.projectedFields || [];
-  const matchedAnchors = Array.isArray(projectionCandidate?.projection?.matched_anchors)
-    ? (projectionCandidate?.projection?.matched_anchors as Record<string, unknown>[])
-    : [];
+  const currentPageNumber = currentPage?.pageIndex || 1;
+  const selectedRoiCoordinateSpace = alignmentCandidate?.roiCoordinateSpace || "template_canvas";
+  const templateFieldById = new Map(workspaceTemplateFields.map((field) => [field.id, field]));
+  const projectedCandidateRoiFields =
+    selectedRoiCoordinateSpace !== "template_canvas"
+      ? (alignmentCandidate?.projectedFields || [])
+          .filter((field) => (field.pageNumber || currentPageNumber) === currentPageNumber)
+          .map((field, index) => {
+            const sourceField = field.fieldId ? templateFieldById.get(field.fieldId) : undefined;
+            const roi = projectedRoiRatio(field.projectedRoi);
+            if (!roi) return null;
+            return {
+              fieldId: field.fieldId || sourceField?.id || `projected-${index}`,
+              fieldName: field.fieldName || sourceField?.fieldName || `field_${index + 1}`,
+              displayLabel: field.displayLabel || sourceField?.displayLabel || field.fieldName || `Field ${index + 1}`,
+              pageNumber: roi.pageNumber || currentPageNumber,
+              dataType: sourceField?.dataType || "text",
+              extractionMethod: sourceField?.extractionMethod || "paddle_thai_ocr",
+              source: "projected_fields",
+              roi: {
+                page_number: roi.pageNumber,
+                x_ratio: roi.xRatio,
+                y_ratio: roi.yRatio,
+                width_ratio: roi.widthRatio,
+                height_ratio: roi.heightRatio,
+              },
+            };
+          })
+          .filter((field): field is NonNullable<typeof field> => Boolean(field))
+      : [];
+  const bundleTemplateRoiFields =
+    selectedRoiCoordinateSpace === "template_canvas" && workspaceTemplateId === candidateTemplateId
+      ? workspaceTemplateFields
+          .filter((field) => !field.useForVerification && field.pageNumber === currentPageNumber)
+          .sort(
+            (left, right) =>
+              left.pageNumber - right.pageNumber ||
+              (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+              left.fieldName.localeCompare(right.fieldName)
+          )
+          .map((field) => ({
+            fieldId: field.id,
+            fieldName: field.fieldName,
+            displayLabel: field.displayLabel,
+            pageNumber: field.pageNumber,
+            dataType: field.dataType || "text",
+            extractionMethod:
+              field.extractionMethod === "ocr_table" ||
+              field.extractionMethod === "paddle_thai_ocr" ||
+              field.extractionMethod === "extract_image"
+                ? field.extractionMethod
+                : "paddle_thai_ocr",
+            source: "template_bundle",
+            roi: {
+              page_number: field.roi.pageNumber,
+              x_ratio: field.roi.xRatio,
+              y_ratio: field.roi.yRatio,
+              width_ratio: field.roi.widthRatio,
+              height_ratio: field.roi.heightRatio,
+            },
+          }))
+      : [];
+  const templateRoiFields =
+    projectedCandidateRoiFields.length > 0
+      ? projectedCandidateRoiFields
+      : bundleTemplateRoiFields.length > 0
+        ? bundleTemplateRoiFields
+        : alignmentCandidate?.templateRois || [];
+  const roiSourceLabel =
+    projectedCandidateRoiFields.length > 0
+      ? "Projected ROI from backend"
+      : bundleTemplateRoiFields.length > 0
+        ? "Template Bundle ROI (same as user flow)"
+        : "Detection response template ROI fallback";
+  const roiPreviewItems = templateRoiFields
+    .map((field, index) => {
+      const ratio = roiRatioFromRecord(field.roi || null);
+      if (!ratio) return null;
+      const box = ratioToImageBox(ratio, roiPreviewImageMetrics);
+      return {
+        key: `${field.fieldId || field.fieldName || "admin-template-roi"}-${index}`,
+        label: field.displayLabel || field.fieldName || `Field ${index + 1}`,
+        fieldName: field.fieldName || "",
+        dataType: field.dataType || "text",
+        extractionMethod: field.extractionMethod || "paddle_thai_ocr",
+        source: roiSourceLabel,
+        projection: "admin_template_roi",
+        id: stableNumericId(`detection-template-roi:${field.fieldId || field.fieldName || index}`),
+        roi: field.roi as Record<string, unknown> | null | undefined,
+        workspaceRoi: {
+          id: stableNumericId(`detection-template-roi:${field.fieldId || field.fieldName || index}`),
+          fieldName: field.displayLabel || field.fieldName || `Field ${index + 1}`,
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          pageIndex: Math.max(0, (field.pageNumber || currentPage?.pageIndex || 1) - 1),
+          type: field.dataType === "table" ? "table" : field.dataType === "image" ? "image" : "text",
+          kind: "extraction_field",
+          enabled: true,
+        } as WorkspaceRoi & { kind: string },
+      };
+    })
+    .filter((field): field is NonNullable<typeof field> => Boolean(field));
+  const roiPreviewRois = roiPreviewItems.map((item) => item.workspaceRoi);
+
+  useEffect(() => {
+    if (!alignmentCandidate || !roiPreviewImageUrl) return;
+    console.debug("[Admin Detection Lab] ROI coordinate check", {
+      templateId: alignmentCandidate.templateId,
+      templateName: alignmentCandidate.templateName,
+      roiCoordinateSpace: alignmentCandidate.roiCoordinateSpace,
+      roiSourceLabel,
+      extractionImagePreviewUrl: alignmentCandidate.extractionImagePreviewUrl,
+      alignedImagePreviewUrl: alignmentCandidate.alignedImagePreviewUrl,
+      workspaceImageUrl: roiPreviewImageUrl,
+      backendCoordinateDebug: alignmentCandidate.coordinateDebug,
+      imageMetrics: roiPreviewImageMetrics,
+      firstRoi: roiPreviewRois[0]
+        ? {
+            fieldName: roiPreviewRois[0].fieldName,
+            pageIndex: roiPreviewRois[0].pageIndex,
+            x: roiPreviewRois[0].x,
+            y: roiPreviewRois[0].y,
+            width: roiPreviewRois[0].width,
+            height: roiPreviewRois[0].height,
+          }
+        : null,
+    });
+  }, [alignmentCandidate, roiPreviewImageUrl, roiSourceLabel, roiPreviewImageMetrics, roiPreviewRois]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] || null;
@@ -306,6 +519,66 @@ export default function AdminDetectionLabPage() {
       setIsRunning(false);
     }
   };
+
+  const extractionDetailsPanel = (
+    <details>
+      <summary className="cursor-pointer text-xs font-black uppercase tracking-wider text-slate-700">
+        Extraction Details (Test Extraction)
+      </summary>
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+        <DebugMetric label="Candidate" value={readText(alignmentCandidate?.templateName)} />
+        <DebugMetric label="Image Used" value={roiPreviewLabel} />
+        <DebugMetric label="ROI Source" value={roiSourceLabel} />
+        <DebugMetric
+          label="Coordinate Space"
+          value={readText(extractionTest?.roiCoordinateSpace || alignmentCandidate?.roiCoordinateSpace || "template_canvas")}
+        />
+      </div>
+      {extractionTest ? (
+        <>
+          <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{extractionTest.testedCount} tested</span>
+            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">{extractionTest.passedCount} passed</span>
+            <span className="rounded-full bg-red-100 px-2.5 py-1 text-red-700">{extractionTest.failedCount} failed</span>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {(extractionTest.fields || []).map((field, index) => (
+              <div key={`${field.fieldId || index}-detection-extraction`} className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-black text-slate-800">{field.displayLabel || field.fieldName || "Field"}</div>
+                    <div className="mt-0.5 text-[9px] font-bold uppercase text-slate-400">
+                      Page {field.pageNumber ?? "N/A"} - {field.dataType || "text"} - {field.extractionMethod || "paddle_thai_ocr"}
+                    </div>
+                  </div>
+                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${field.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                    {field.passed ? "PASS" : "FAIL"}
+                  </span>
+                </div>
+                <div className="mt-2 rounded-lg border border-slate-100 bg-white p-2">
+                  <div className="text-[9px] font-black uppercase text-slate-400">OCR Result</div>
+                  <p className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words text-xs font-semibold leading-5 text-slate-700">
+                    {field.ocrText || field.actualText || "(no text)"}
+                  </p>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1 text-[9px] font-black uppercase">
+                  {field.confidence !== null && field.confidence !== undefined && (
+                    <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">Conf {field.confidence.toFixed(2)}</span>
+                  )}
+                  {field.roiSource && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">{field.roiSource}</span>}
+                  {field.failureReason && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">{field.failureReason}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+          Extraction test result is not available for this candidate.
+        </p>
+      )}
+    </details>
+  );
 
   return (
     <section className="space-y-4">
@@ -452,7 +725,7 @@ export default function AdminDetectionLabPage() {
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px]">
+              <div className="mt-3">
                 <div>
                   <section className="mb-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -480,67 +753,37 @@ export default function AdminDetectionLabPage() {
                     </div>
                   </section>
 
-                  {effectivePreviewUrl && (
+                  {roiPreviewImageUrl && (
                     <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                       <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
-                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">{effectivePreviewLabel}</div>
-                          <div className="mt-1 text-xs font-semibold text-slate-600">{effectivePreviewBadge}</div>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">{roiPreviewLabel}</div>
+                          <div className="mt-1 text-xs font-semibold text-slate-600">{roiPreviewBadge}</div>
+                          {workspaceTemplateError && (
+                            <div className="mt-1 text-xs font-bold text-amber-700">
+                              Template bundle could not be loaded, so this preview is using detection response ROI fallback.
+                            </div>
+                          )}
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          {overlayLayerOptions.map((layer) => (
-                            <button
-                              key={layer.key}
-                              type="button"
-                              onClick={() => setOverlayLayers((current) => ({ ...current, [layer.key]: !current[layer.key] }))}
-                              className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-black uppercase ${
-                                overlayLayers[layer.key] ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-slate-50 text-slate-500"
-                              }`}
-                            >
-                              {layer.label}
-                            </button>
-                          ))}
-                        </div>
+                        <span className="w-fit rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-black uppercase text-indigo-700">
+                          Admin ROI {roiPreviewRois.length}
+                        </span>
                       </div>
-                      <div className="relative mx-auto max-h-[460px] w-full">
-                        <img src={effectivePreviewUrl} alt={`${effectivePreviewLabel} page ${currentPage?.pageIndex || 1}`} className="max-h-[460px] w-full object-contain" />
-                        <div className="pointer-events-none absolute inset-0">
-                          {overlayLayers.template &&
-                            projectedOverlayFields.map((field, index) => {
-                              const style = ratioStyle(field.templateRoi);
-                              return style ? <div key={`template-${field.fieldId}-${index}`} className="absolute border-2 border-red-500 bg-red-500/10" style={style} /> : null;
-                            })}
-                          {overlayLayers.projected &&
-                            projectedOverlayFields.map((field, index) => {
-                              const style = ratioStyle(field.projectedRoi as Record<string, unknown>);
-                              return style ? <div key={`projected-${field.fieldId}-${index}`} className="absolute border-2 border-orange-500 bg-orange-500/10" style={style} /> : null;
-                            })}
-                          {overlayLayers.adaptive &&
-                            projectedOverlayFields.map((field, index) => {
-                              const style = ratioStyle(field.adaptiveRoi as Record<string, unknown>);
-                              return style ? <div key={`adaptive-${field.fieldId}-${index}`} className="absolute border-2 border-emerald-500 bg-emerald-500/10" style={style} /> : null;
-                            })}
-                          {overlayLayers.words &&
-                            projectedOverlayFields.flatMap((field, fieldIndex) =>
-                              (field.adaptiveWordBoxes || []).map((box, wordIndex) => {
-                                const style = ratioStyle((box.bbox as Record<string, unknown> | undefined) || null);
-                                return style ? <div key={`word-${fieldIndex}-${wordIndex}`} className="absolute border border-sky-500 bg-sky-500/10" style={style} /> : null;
-                              })
-                            )}
-                          {overlayLayers.anchors &&
-                            matchedAnchors.map((anchor, index) => {
-                              const style = ratioStyle(anchor.expected_bbox as Record<string, unknown> | undefined);
-                              return style ? <div key={`anchor-${index}`} className="absolute border-2 border-purple-500 bg-purple-500/10" style={style} /> : null;
-                            })}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2 border-t border-slate-200 bg-white p-3 text-[10px] font-black uppercase text-slate-500">
-                        {overlayLayerOptions.map((layer) => (
-                          <span key={`legend-${layer.key}`} className="inline-flex items-center gap-1.5">
-                            <span className={`h-3 w-3 rounded border ${layer.className}`} />
-                            {layer.label}
-                          </span>
-                        ))}
+                      <div className="bg-white p-4">
+                        <WorkspaceCanvas
+                          imageSrc={roiPreviewImageUrl}
+                          className="h-[560px]"
+                          onImageMetricsChange={setRoiPreviewImageMetrics}
+                        >
+                          <RoiLayer
+                            rois={roiPreviewRois}
+                            currentPage={Math.max(0, (currentPage?.pageIndex || 1) - 1)}
+                            selectedId={selectedPreviewRoiId}
+                            readonly
+                            showLabels
+                            onSelect={setSelectedPreviewRoiId}
+                          />
+                        </WorkspaceCanvas>
                       </div>
                     </div>
                   )}
@@ -657,7 +900,7 @@ export default function AdminDetectionLabPage() {
                   </details>
                 </div>
 
-                <div className="max-h-[540px] space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+                <div className="hidden">
                   {pages.map((page, index) => (
                     <button
                       key={`detection-page-thumb-${page.pageIndex}`}
@@ -687,6 +930,12 @@ export default function AdminDetectionLabPage() {
 
           {result && (
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              {extractionDetailsPanel}
+            </section>
+          )}
+
+          {result && (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <details>
                 <summary className="cursor-pointer text-xs font-black uppercase tracking-wider text-slate-700">
                   Verification Details
@@ -702,97 +951,6 @@ export default function AdminDetectionLabPage() {
                     <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-600">
                       Candidate: {verificationCandidate.templateName || "N/A"} · Decision: {verificationCandidate.decisionPath || verificationCandidate.decisionReason || "N/A"}
                     </div>
-                    {verificationCandidate.projection && (
-                      <details className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                        <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-emerald-800">
-                          ROI Projection
-                        </summary>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                          <DebugMetric label="Status" value={readText(verificationCandidate.projection.status)} />
-                          <DebugMetric label="Method" value={readText(verificationCandidate.projection.method)} />
-                          <DebugMetric label="Anchors Matched" value={readText(verificationCandidate.projection.anchors_matched)} />
-                          <DebugMetric label="Confidence" value={readScore(verificationCandidate.projection.confidence)} />
-                          <DebugMetric label="Inliers" value={readText(verificationCandidate.projection.inliers)} />
-                          <DebugMetric label="Reprojection Error" value={readScore(verificationCandidate.projection.reprojection_error)} />
-                          <DebugMetric label="Projected Fields" value={readText(verificationCandidate.projectedFields?.length ?? 0)} />
-                          <DebugMetric
-                            label="Adaptive Refined"
-                            value={readText((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_refined)}
-                          />
-                          <DebugMetric
-                            label="Adaptive Fallback"
-                            value={readText((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.text_fields_fallback)}
-                          />
-                          <DebugMetric
-                            label="Avg Adaptive Confidence"
-                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_adaptive_confidence)}
-                          />
-                          <DebugMetric
-                            label="Avg Coverage"
-                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_coverage)}
-                          />
-                          <DebugMetric
-                            label="Avg OCR Confidence"
-                            value={readScore((verificationCandidate.projection.adaptive_refinement as Record<string, unknown> | undefined)?.average_ocr_confidence)}
-                          />
-                          <DebugMetric label="Fallback Reason" value={readText(verificationCandidate.projection.fallback_reason)} />
-                        </div>
-                        {verificationCandidate.projectedFields && verificationCandidate.projectedFields.length > 0 && (
-                          <div className="mt-3 overflow-hidden rounded-xl border border-emerald-100 bg-white">
-                            <table className="w-full text-left text-xs">
-                              <thead className="bg-emerald-50 text-[10px] font-black uppercase tracking-wider text-emerald-800">
-                                <tr>
-                                  <th className="px-3 py-2">Field</th>
-                                  <th className="px-3 py-2">Projection</th>
-                                  <th className="px-3 py-2">Before Clip</th>
-                                  <th className="px-3 py-2">After Clip</th>
-                                  <th className="px-3 py-2">Validation</th>
-                                  <th className="px-3 py-2">Adaptive</th>
-                                  <th className="px-3 py-2">Confidence</th>
-                                  <th className="px-3 py-2">Coverage</th>
-                                  <th className="px-3 py-2">Word Boxes</th>
-                                  <th className="px-3 py-2">Reason</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-emerald-50 font-semibold text-slate-700">
-                                {verificationCandidate.projectedFields.map((field, index) => (
-                                  <tr key={`${field.fieldId || "projected"}-${index}`}>
-                                    <td className="px-3 py-2">{field.displayLabel || field.fieldName || "N/A"}</td>
-                                    <td className="px-3 py-2">{field.projectionMethod || "N/A"}</td>
-                                    <td className="px-3 py-2">
-                                      {field.projectedRoiBeforeClip
-                                        ? `${formatScore(field.projectedRoiBeforeClip.x_ratio)} / ${formatScore(field.projectedRoiBeforeClip.y_ratio)} / ${formatScore(field.projectedRoiBeforeClip.width_ratio)} / ${formatScore(field.projectedRoiBeforeClip.height_ratio)}`
-                                        : "N/A"}
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      {field.projectedRoi
-                                        ? `${formatScore(field.projectedRoi.x_ratio)} / ${formatScore(field.projectedRoi.y_ratio)} / ${formatScore(field.projectedRoi.width_ratio)} / ${formatScore(field.projectedRoi.height_ratio)}`
-                                        : "N/A"}
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      {field.projectionValidationResult
-                                        ? `${field.projectionValidationResult.passed === true ? "passed" : "failed"} ${
-                                            Array.isArray(field.projectionValidationResult.errors) && field.projectionValidationResult.errors.length
-                                              ? `(${field.projectionValidationResult.errors.join(", ")})`
-                                              : Array.isArray(field.projectionValidationResult.warnings) && field.projectionValidationResult.warnings.length
-                                                ? `(${field.projectionValidationResult.warnings.join(", ")})`
-                                                : ""
-                                          }`
-                                        : "N/A"}
-                                    </td>
-                                    <td className="px-3 py-2">{field.adaptiveStatus || "N/A"}</td>
-                                    <td className="px-3 py-2">{formatScore(field.adaptiveConfidence)}</td>
-                                    <td className="px-3 py-2">{formatScore(field.adaptiveCoverage)}</td>
-                                    <td className="px-3 py-2">{field.adaptiveWordBoxes?.length ?? 0}</td>
-                                    <td className="px-3 py-2">{field.adaptiveFallbackReason || "N/A"}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </details>
-                    )}
                     <div className="overflow-hidden rounded-xl border border-slate-200">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -870,7 +1028,28 @@ export default function AdminDetectionLabPage() {
           )}
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Candidates</h3>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Candidates</h3>
+                <p className="mt-1 text-[11px] font-semibold text-slate-500">เรียงตามคะแนน Final จากมากไปน้อย</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Final Diff</div>
+                  <div className="mt-0.5 text-sm font-black tabular-nums text-slate-900">{formatScoreDelta(finalScoreGap)}</div>
+                  <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black ${finalScoreGapQuality.className}`}>
+                    {finalScoreGapQuality.label}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Layout Diff</div>
+                  <div className="mt-0.5 text-sm font-black tabular-nums text-slate-900">{formatScoreDelta(layoutScoreGap)}</div>
+                  <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black ${layoutScoreGapQuality.className}`}>
+                    {layoutScoreGapQuality.label}
+                  </span>
+                </div>
+              </div>
+            </div>
             <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -880,24 +1059,32 @@ export default function AdminDetectionLabPage() {
                     <th className="px-3 py-2">Final</th>
                     <th className="px-3 py-2">Layout</th>
                     <th className="px-3 py-2">Verification</th>
+                    <th className="px-3 py-2">Final Diff</th>
+                    <th className="px-3 py-2">Layout Diff</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
-                  {visibleCandidates.length === 0 ? (
+                  {sortedVisibleCandidates.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                      <td colSpan={7} className="px-3 py-4 text-center text-slate-500">
                         No candidates to display.
                       </td>
                     </tr>
                   ) : (
-                    visibleCandidates.map((candidate, index) => (
+                    sortedVisibleCandidates.map((candidate, index) => (
                       <tr key={`${candidate.vectorId || "candidate"}-${index}`}>
                         <td className="px-3 py-2">{index + 1}</td>
                         <td className="px-3 py-2">{candidate.templateName || "N/A"}</td>
-                        <td className="px-3 py-2">{formatScore(candidate.finalScore ?? candidate.score)}</td>
-                        <td className="px-3 py-2">{formatScore(candidate.layoutScore ?? candidate.retrievalScore)}</td>
+                        <td className="px-3 py-2 font-black text-slate-900">{formatScore(candidateFinalScore(candidate))}</td>
+                        <td className="px-3 py-2">{formatScore(candidateLayoutScore(candidate))}</td>
                         <td className="px-3 py-2">
                           {formatScore(candidate.verificationScore)}
+                        </td>
+                        <td className="px-3 py-2 tabular-nums">
+                          {index === 0 ? "Top" : formatScoreDelta((topFinalScore ?? 0) - candidateFinalScore(candidate))}
+                        </td>
+                        <td className="px-3 py-2 tabular-nums">
+                          {index === 0 ? "Top" : formatScoreDelta((topLayoutScore ?? 0) - candidateLayoutScore(candidate))}
                         </td>
                       </tr>
                     ))

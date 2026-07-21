@@ -17,6 +17,7 @@ from .layout_analysis_service import analyze_layout
 from .layout_alignment_service import LayoutAlignmentService
 from .layout_signature_service import build_layout_signature
 from .layout_template_matcher import search_layout_candidates
+from .ocr_adapter import OcrUnavailableError, ocr_rois
 from .pipeline_core import get_pipeline_core_config
 from .services import DecisionService, VerificationService
 
@@ -26,7 +27,7 @@ PIPELINE_CONFIG = get_pipeline_core_config()
 DETECTION_VERSION = PIPELINE_CONFIG.version
 PDF_RENDER_SCALE = 2.0
 DETECTION_RETRIEVAL_LIMIT = max(1, int(os.getenv("DETECTION_RETRIEVAL_LIMIT", "5")))
-DETECTION_FULL_EVAL_LIMIT = max(1, int(os.getenv("DETECTION_FULL_EVAL_LIMIT", "2")))
+DETECTION_FULL_EVAL_LIMIT = max(1, int(os.getenv("DETECTION_FULL_EVAL_LIMIT", str(DETECTION_RETRIEVAL_LIMIT))))
 DETECTION_ALIGNMENT_LIMIT = max(0, int(os.getenv("DETECTION_ALIGNMENT_LIMIT", "1")))
 verification_service = VerificationService()
 decision_service = DecisionService()
@@ -131,6 +132,44 @@ def _fetch_template_fields(template_id: str) -> List[Dict[str, Any]]:
 def _image_to_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _image_dimensions(path_value: Optional[str]) -> Optional[List[int]]:
+    if not path_value:
+        return None
+    try:
+        image = cv2.imread(str(path_value))
+        if image is None:
+            return None
+        height, width = image.shape[:2]
+        return [int(width), int(height)]
+    except Exception:
+        return None
+
+
+def _image_source_dimensions(source: Optional[str]) -> Optional[List[int]]:
+    if not source:
+        return None
+    try:
+        if source.startswith("data:image"):
+            _, encoded = source.split(",", 1)
+            data = base64.b64decode(encoded)
+            array = np.frombuffer(data, dtype=np.uint8)
+            image = cv2.imdecode(array, cv2.IMREAD_COLOR)
+        else:
+            source_path = Path(source)
+            if not source_path.is_absolute() and not source_path.exists():
+                backend_root = Path(__file__).resolve().parents[1]
+                candidate = backend_root / source_path
+                if candidate.exists():
+                    source_path = candidate
+            image = cv2.imread(str(source_path))
+        if image is None:
+            return None
+        height, width = image.shape[:2]
+        return [int(width), int(height)]
+    except Exception:
+        return None
 
 
 def _layout_signature_for_image_path(image_path: str) -> Dict[str, Any]:
@@ -387,6 +426,145 @@ def _template_canvas_projection(
     }
 
 
+def _template_roi_items(fields: List[Dict[str, Any]], page_number: int) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for field in fields:
+        if field.get("use_for_verification"):
+            continue
+        if int(field.get("page_number") or 1) != int(page_number):
+            continue
+        roi = field.get("roi")
+        if not roi:
+            continue
+        items.append(
+            {
+                "field_id": field.get("id"),
+                "field_name": field.get("field_name"),
+                "display_label": field.get("display_label"),
+                "page_number": field.get("page_number"),
+                "data_type": field.get("data_type"),
+                "extraction_method": field.get("extraction_method"),
+                "roi": roi,
+                "source": "admin_template_roi",
+            }
+        )
+    return items
+
+
+def _run_extraction_test(
+    template_id: str,
+    fields: List[Dict[str, Any]],
+    projected_fields: List[Dict[str, Any]],
+    image_path: str,
+    page_number: int,
+    roi_coordinate_space: str,
+) -> Dict[str, Any]:
+    fields_by_id = {str(field.get("id")): field for field in fields}
+    results: List[Dict[str, Any]] = []
+    roi_items: List[Dict[str, Any]] = []
+    roi_sources: Dict[str, str] = {}
+
+    for projected in projected_fields:
+        field_id = str(projected.get("field_id") or "")
+        source_field = fields_by_id.get(field_id) or {}
+        if source_field.get("use_for_verification"):
+            continue
+        if int(source_field.get("page_number") or projected.get("page_number") or 1) != int(page_number):
+            continue
+
+        data_type = source_field.get("data_type") or "text"
+        extraction_method = source_field.get("extraction_method") or "paddle_thai_ocr"
+        roi_source = "template_roi" if roi_coordinate_space == "template_canvas" else "projected_roi"
+        roi = projected.get("template_roi") if roi_source == "template_roi" else projected.get("projected_roi")
+        if not roi:
+            roi = projected.get("projected_roi") or projected.get("template_roi")
+            roi_source = "projected_roi" if projected.get("projected_roi") else "template_roi"
+
+        base = {
+            "field_id": field_id,
+            "field_name": source_field.get("field_name") or projected.get("field_name"),
+            "display_label": source_field.get("display_label") or projected.get("display_label"),
+            "page_number": page_number,
+            "data_type": data_type,
+            "extraction_method": extraction_method,
+            "roi_source": roi_source,
+            "roi": roi,
+            "passed": False,
+            "status": "failed",
+            "ocr_text": "",
+            "confidence": 0.0,
+            "failure_reason": None,
+        }
+
+        if data_type == "image" or extraction_method == "extract_image":
+            base.update(
+                {
+                    "passed": bool(roi),
+                    "status": "passed" if roi else "failed",
+                    "ocr_text": "(image crop)",
+                    "confidence": 1.0 if roi else 0.0,
+                    "failure_reason": None if roi else "roi_missing",
+                }
+            )
+            results.append(base)
+            continue
+
+        if not roi:
+            base["failure_reason"] = "roi_missing"
+            results.append(base)
+            continue
+
+        roi_items.append({"id": field_id, "roi": roi})
+        roi_sources[field_id] = roi_source
+        results.append(base)
+
+    if roi_items:
+        try:
+            ocr_results = ocr_rois(image_path, roi_items)
+            for item in results:
+                field_id = str(item.get("field_id") or "")
+                if field_id not in ocr_results:
+                    continue
+                ocr_result = ocr_results[field_id]
+                text = str(ocr_result.get("text") or "")
+                confidence = float(ocr_result.get("confidence") or 0.0)
+                error = ocr_result.get("error")
+                item.update(
+                    {
+                        "passed": bool(text.strip()) and not error,
+                        "status": "passed" if text.strip() and not error else "failed",
+                        "ocr_text": text,
+                        "confidence": round(confidence, 4),
+                        "failure_reason": None if text.strip() and not error else str(error or "ocr_empty"),
+                        "engine": ocr_result.get("engine"),
+                        "model": ocr_result.get("model"),
+                        "roi_source": roi_sources.get(field_id) or item.get("roi_source"),
+                    }
+                )
+        except OcrUnavailableError as error:
+            for item in results:
+                if item.get("data_type") == "image" or item.get("extraction_method") == "extract_image":
+                    continue
+                item.update({"status": "failed", "passed": False, "failure_reason": "ocr_unavailable", "error": str(error)})
+        except Exception as error:
+            for item in results:
+                if item.get("data_type") == "image" or item.get("extraction_method") == "extract_image":
+                    continue
+                item.update({"status": "failed", "passed": False, "failure_reason": "ocr_error", "error": str(error)})
+
+    return {
+        "template_id": template_id,
+        "status": "completed",
+        "tested_count": len(results),
+        "passed_count": sum(1 for item in results if item.get("passed")),
+        "failed_count": sum(1 for item in results if not item.get("passed")),
+        "image_path": image_path,
+        "image_preview_url": _detection_debug_url(image_path),
+        "roi_coordinate_space": roi_coordinate_space,
+        "fields": results,
+    }
+
+
 def _align_candidate_page(
     template_id: str,
     page_number: int,
@@ -602,6 +780,18 @@ def _candidate_from_result(
     extraction_image_preview_url = _detection_debug_url(extraction_image_path)
     roi_coordinate_space = "template_canvas" if alignment_status in {"aligned", "skipped"} else "projected"
 
+    template_fields: List[Dict[str, Any]] = []
+    template_rois: List[Dict[str, Any]] = []
+    extraction_test = {
+        "template_id": template_id,
+        "status": "not_run",
+        "tested_count": 0,
+        "passed_count": 0,
+        "failed_count": 0,
+        "fields": [],
+        "reason": "candidate_did_not_pass_final_decision",
+    }
+
     projection = {
         "template_id": template_id,
         "status": "skipped",
@@ -620,6 +810,7 @@ def _candidate_from_result(
     }
     if template_id and decision["final_passed"]:
         template_fields = _fetch_template_fields(template_id)
+        template_rois = _template_roi_items(template_fields, page_index)
         if roi_coordinate_space == "template_canvas":
             projection = _template_canvas_projection(
                 template_id,
@@ -659,6 +850,35 @@ def _candidate_from_result(
                     "extraction_image_path": extraction_image_path,
                     "extraction_image_preview_url": extraction_image_preview_url,
                 }
+        extraction_test = _run_extraction_test(
+            template_id,
+            template_fields,
+            projection.get("projected_fields", []),
+            extraction_image_path,
+            page_index,
+            str(projection.get("roi_coordinate_space") or roi_coordinate_space),
+        )
+
+    template_image_source = _fetch_template_page_image_source(template_id, page_index) if template_id else None
+    first_template_roi = template_rois[0].get("roi") if template_rois else None
+    first_projected_field = (projection.get("projected_fields") or [None])[0]
+    coordinate_debug = {
+        "page_number": page_index,
+        "roi_coordinate_space": projection.get("roi_coordinate_space") or roi_coordinate_space,
+        "verification_source_used": verification_source_used,
+        "template_image_size": _image_source_dimensions(template_image_source),
+        "normalized_image_size": _image_dimensions(query_image_path),
+        "aligned_image_size": _image_dimensions(alignment.get("aligned_image_path")),
+        "extraction_image_size": _image_dimensions(extraction_image_path),
+        "first_template_roi": first_template_roi,
+        "first_projected_roi": first_projected_field.get("projected_roi") if isinstance(first_projected_field, dict) else None,
+    }
+    print(
+        "[detection-coordinate] "
+        f"template={template_id} page={page_index} space={coordinate_debug['roi_coordinate_space']} "
+        f"source={verification_source_used} template_size={coordinate_debug['template_image_size']} "
+        f"extraction_size={coordinate_debug['extraction_image_size']} first_template_roi={first_template_roi}"
+    )
 
     return {
         "template_id": template_id,
@@ -718,8 +938,11 @@ def _candidate_from_result(
         "required_failed_fields": decision.get("required_failed_fields", []),
         "final_confidence_threshold": decision["final_confidence_threshold"],
         "layout_similarity_threshold": layout_threshold,
+        "template_rois": template_rois,
         "projection": projection,
         "projected_fields": projection.get("projected_fields", []),
+        "extraction_test": extraction_test,
+        "coordinate_debug": coordinate_debug,
         "metadata": metadata,
         "evaluation_status": "full",
         "alignment_evaluated": bool(allow_alignment),
@@ -836,8 +1059,12 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
     query_signature = _layout_signature_for_image_path(normalized_image_path)
     raw_results = search_layout_candidates(query_signature, page_number=page_index, limit=DETECTION_RETRIEVAL_LIMIT)
     candidates = []
+    full_evaluation_count = 0
+    early_accept_rank = None
     for index, result in enumerate(raw_results, start=1):
-        if index <= DETECTION_FULL_EVAL_LIMIT:
+        should_fully_evaluate = early_accept_rank is None and full_evaluation_count < DETECTION_FULL_EVAL_LIMIT
+        if should_fully_evaluate:
+            full_evaluation_count += 1
             candidate = _candidate_from_result(
                 result,
                 page_image_paths,
@@ -851,6 +1078,8 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
         if candidate is not None:
             candidate["retrieval_rank"] = index
             candidates.append(candidate)
+            if should_fully_evaluate and candidate["final_passed"] and early_accept_rank is None:
+                early_accept_rank = index
 
     candidates = sorted(
         candidates,
@@ -891,8 +1120,12 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             "active_candidate_count": len(candidates),
             "retrieval_limit": DETECTION_RETRIEVAL_LIMIT,
             "full_evaluation_limit": DETECTION_FULL_EVAL_LIMIT,
+            "full_evaluation_count": full_evaluation_count,
+            "early_accept_enabled": True,
+            "early_accept_rank": early_accept_rank,
+            "early_accept_reason": "top_candidate_final_passed" if early_accept_rank else None,
             "alignment_limit": DETECTION_ALIGNMENT_LIMIT,
-            "fast_path_enabled": DETECTION_FULL_EVAL_LIMIT < DETECTION_RETRIEVAL_LIMIT or DETECTION_ALIGNMENT_LIMIT < DETECTION_FULL_EVAL_LIMIT,
+            "fast_path_enabled": early_accept_rank is not None or DETECTION_FULL_EVAL_LIMIT < DETECTION_RETRIEVAL_LIMIT or DETECTION_ALIGNMENT_LIMIT < DETECTION_FULL_EVAL_LIMIT,
             "aligned_candidate_paths": [
                 candidate["alignment"]["aligned_image_path"]
                 for candidate in candidates
@@ -990,8 +1223,11 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "required_failed_fields": decision.get("required_failed_fields", []),
             "final_confidence_threshold": decision["final_confidence_threshold"],
             "layout_similarity_threshold": best_page_cand.get("layout_similarity_threshold"),
+            "template_rois": best_page_cand.get("template_rois", []),
             "projection": best_page_cand.get("projection"),
             "projected_fields": best_page_cand.get("projected_fields", []),
+            "extraction_test": best_page_cand.get("extraction_test"),
+            "coordinate_debug": best_page_cand.get("coordinate_debug"),
             "metadata": best_page_cand.get("metadata", {}),
         })
 

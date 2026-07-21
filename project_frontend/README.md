@@ -98,6 +98,7 @@ docker start ocr-postgres-dev
 .\venv\Scripts\activate
 $env:DATABASE_URL="postgresql://postgres:postgres@localhost:55432/ocr_studio" 
 $env:MODEL_SERVICE_URL="http://127.0.0.1:8010"
+docker start ocr-postgres-dev
 uvicorn main:app
 
 .\venv\Scripts\activate

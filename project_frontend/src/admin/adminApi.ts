@@ -186,9 +186,23 @@ export interface DetectionCandidate {
   normalizedImagePreviewUrl?: string | null;
   extractionImagePreviewUrl?: string | null;
   roiCoordinateSpace?: "template_canvas" | "projected" | string | null;
+  templateRois?: DetectionTemplateRoi[];
   projection?: Record<string, unknown>;
   projectedFields?: DetectionProjectedField[];
+  extractionTest?: TemplateStepTestResult | null;
+  coordinateDebug?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+}
+
+export interface DetectionTemplateRoi {
+  fieldId?: string | null;
+  fieldName?: string | null;
+  displayLabel?: string | null;
+  pageNumber?: number | null;
+  dataType?: string | null;
+  extractionMethod?: string | null;
+  source?: string | null;
+  roi?: Record<string, unknown>;
 }
 
 export interface DetectionProjectedField {
@@ -350,7 +364,10 @@ export interface TemplateStepTestItem {
   fieldName?: string | null;
   displayLabel?: string | null;
   pageNumber?: number | null;
+  dataType?: string | null;
   extractionMethod?: string | null;
+  roiSource?: string | null;
+  roi?: Record<string, unknown> | null;
   ocrText?: string | null;
   actualText?: string | null;
   expectedText?: string | null;
@@ -378,6 +395,8 @@ export interface TemplateStepTestResult {
   testedCount: number;
   passedCount: number;
   failedCount: number;
+  imagePreviewUrl?: string | null;
+  roiCoordinateSpace?: string | null;
   fields?: TemplateStepTestItem[];
   anchors?: TemplateStepTestItem[];
 }
@@ -535,6 +554,17 @@ const mapProjectedField = (field: Record<string, unknown>): DetectionProjectedFi
   fallbackUsed: typeof field.fallback_used === "boolean" ? field.fallback_used : null,
 });
 
+const mapDetectionTemplateRoi = (field: Record<string, unknown>): DetectionTemplateRoi => ({
+  fieldId: (field.field_id as string | null | undefined) ?? null,
+  fieldName: (field.field_name as string | null | undefined) ?? null,
+  displayLabel: (field.display_label as string | null | undefined) ?? null,
+  pageNumber: typeof field.page_number === "number" ? field.page_number : null,
+  dataType: (field.data_type as string | null | undefined) ?? null,
+  extractionMethod: (field.extraction_method as string | null | undefined) ?? null,
+  source: (field.source as string | null | undefined) ?? null,
+  roi: (field.roi as Record<string, unknown> | undefined) || undefined,
+});
+
 const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCandidate => ({
   templateId: (candidate.template_id as string | null | undefined) ?? null,
   vectorId: (candidate.vector_id as string | null | undefined) ?? null,
@@ -595,10 +625,15 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   normalizedImagePreviewUrl: (candidate.normalized_image_preview_url as string | null | undefined) ?? null,
   extractionImagePreviewUrl: (candidate.extraction_image_preview_url as string | null | undefined) ?? null,
   roiCoordinateSpace: (candidate.roi_coordinate_space as string | null | undefined) ?? null,
+  templateRois: Array.isArray(candidate.template_rois)
+    ? (candidate.template_rois as Record<string, unknown>[]).map(mapDetectionTemplateRoi)
+    : [],
   projection: (candidate.projection as Record<string, unknown> | undefined) || undefined,
   projectedFields: Array.isArray(candidate.projected_fields)
     ? (candidate.projected_fields as Record<string, unknown>[]).map(mapProjectedField)
     : [],
+  extractionTest: candidate.extraction_test ? mapTemplateStepTestResult(candidate.extraction_test as Record<string, unknown>) : null,
+  coordinateDebug: (candidate.coordinate_debug as Record<string, unknown> | undefined) || undefined,
   metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
 });
 
@@ -1119,7 +1154,10 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   fieldName: (item.field_name as string | null | undefined) ?? null,
   displayLabel: (item.display_label as string | null | undefined) ?? null,
   pageNumber: typeof item.page_number === "number" ? item.page_number : null,
+  dataType: (item.data_type as string | null | undefined) ?? null,
   extractionMethod: (item.extraction_method as string | null | undefined) ?? null,
+  roiSource: (item.roi_source as string | null | undefined) ?? null,
+  roi: (item.roi as Record<string, unknown> | undefined) || null,
   ocrText: (item.ocr_text as string | null | undefined) ?? null,
   actualText: (item.actual_text as string | null | undefined) ?? null,
   expectedText: (item.expected_text as string | null | undefined) ?? null,
@@ -1147,6 +1185,8 @@ const mapTemplateStepTestResult = (data: Record<string, unknown>): TemplateStepT
   testedCount: Number(data.tested_count || 0),
   passedCount: Number(data.passed_count || 0),
   failedCount: Number(data.failed_count || 0),
+  imagePreviewUrl: (data.image_preview_url as string | null | undefined) ?? null,
+  roiCoordinateSpace: (data.roi_coordinate_space as string | null | undefined) ?? null,
   fields: Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
   anchors: Array.isArray(data.anchors) ? (data.anchors as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
 });
