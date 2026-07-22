@@ -2085,8 +2085,6 @@ class TemplateRequestService:
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Template request image not found.")
-            if row["is_canonical"]:
-                raise HTTPException(status_code=409, detail="Select another canonical image before removing this one.")
 
             conn.execute("DELETE FROM requested_fields WHERE template_request_page_id = ?", (image_id,))
             conn.execute("DELETE FROM template_request_pages WHERE id = ? AND template_request_id = ?", (image_id, request_id))
@@ -2633,6 +2631,26 @@ class AdminTemplateService:
         if not query_page_paths:
             raise HTTPException(status_code=409, detail="Unable to prepare template page images for verification simulation")
         query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
+        layout_signature_pages: List[Dict[str, Any]] = []
+        pages_by_number = {int(page.get("page_number") or index + 1): page for index, page in enumerate(pages)}
+        for page_number in sorted(query_page_paths):
+            page = pages_by_number.get(int(page_number), {})
+            signature = query_signature if int(page_number) == 1 else self._layout_signature_for_page_paths(query_page_paths, int(page_number))
+            page_status = "generated" if signature else "failed"
+            layout_signature_pages.append(
+                {
+                    "template_page_id": page.get("id"),
+                    "page_number": int(page_number),
+                    "status": page_status,
+                    "engine": "layout_signature",
+                    "version": signature.get("version") if signature else None,
+                    "model_name": signature.get("model") if signature else None,
+                    "label_count": len(signature.get("boxes") or []) if signature else 0,
+                    "image_url": page.get("normalized_image_url") or page.get("sample_image_url"),
+                    "persisted": False,
+                    "reason": None if signature else "layout_signature_unavailable",
+                }
+            )
 
         active_candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
@@ -2707,7 +2725,9 @@ class AdminTemplateService:
                 "generated_at": _now(),
                 "persisted": False,
                 "note": "Temporary layout signature was used only for this pre-publish simulation.",
+                "layout_signature_pages": layout_signature_pages,
             },
+            "layout_signature_pages": layout_signature_pages,
             "candidates": candidates,
             "verification_anchor_results": draft_candidate.get("verification_details", []),
             "separation_analysis": {
@@ -3399,13 +3419,22 @@ class AdminTemplateService:
                 (request_id,),
             ).fetchall()
             approved_pages = [page for page in request_pages if page["review_status"] == "approved"]
-            canonical_pages = [page for page in approved_pages if page["is_canonical"]]
-            if len(canonical_pages) != 1:
+            pending_pages = [page for page in request_pages if page["review_status"] == "pending"]
+            if pending_pages:
                 raise HTTPException(
                     status_code=409,
-                    detail="Select exactly one approved canonical image before converting to a template.",
+                    detail="Review every page before converting this request to a template.",
                 )
-            canonical_page = canonical_pages[0]
+            if not approved_pages:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Approve at least one document page before converting to a template.",
+                )
+            if any(not page["sample_image_url"] for page in approved_pages):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Approved document pages must include an image before converting to a template.",
+                )
 
             requested_fields = conn.execute(
                 """
@@ -3423,55 +3452,23 @@ class AdminTemplateService:
                     similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, NULL, 'draft', 1, 1, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, NULL, 'draft', 1, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
                     request_row["request_title"],
                     request_row["document_type"],
-                ),
-            )
-
-            canonical_signature = _generate_layout_signature_for_source(canonical_page["sample_image_url"])
-            canonical_signature_json = signature_to_json(canonical_signature) if canonical_signature else None
-            if canonical_signature_json:
-                conn.execute(
-                    """
-                    UPDATE template_request_pages
-                    SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (canonical_signature_json, canonical_page["id"]),
-                )
-
-            page_id = _stub_id("tpl_page")
-            created_template_page_ids[1] = page_id
-            conn.execute(
-                """
-                INSERT INTO template_pages (
-                    id, template_id, page_number, page_name, sample_image_url,
-                    normalized_image_url, layout_signature_json,
-                    similarity_threshold, final_confidence_threshold,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, 1, 'Canonical Page', ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                (
-                    page_id,
-                    template_id,
-                    canonical_page["sample_image_url"],
-                    canonical_page["sample_image_url"],
-                    canonical_signature_json,
+                    len(approved_pages),
                 ),
             )
 
             layout_reference_count = 0
-            for reference_index, page in enumerate(approved_pages, start=1):
-                signature = (
-                    canonical_signature
-                    if page["id"] == canonical_page["id"]
-                    else _generate_layout_signature_for_source(page["sample_image_url"])
-                )
+            request_page_to_template_page: Dict[str, Dict[str, Any]] = {}
+            request_page_number_to_template_page: Dict[int, Dict[str, Any]] = {}
+            has_explicit_canonical = any(page["is_canonical"] for page in approved_pages)
+
+            for page_index, page in enumerate(approved_pages, start=1):
+                signature = _generate_layout_signature_for_source(page["sample_image_url"])
                 signature_json = signature_to_json(signature) if signature else None
                 if signature_json:
                     conn.execute(
@@ -3482,6 +3479,39 @@ class AdminTemplateService:
                         """,
                         (signature_json, page["id"]),
                     )
+
+                page_id = _stub_id("tpl_page")
+                created_template_page_ids[page_index] = page_id
+                page_is_canonical = bool(page["is_canonical"]) if has_explicit_canonical else page_index == 1
+                conn.execute(
+                    """
+                    INSERT INTO template_pages (
+                        id, template_id, page_number, page_name, sample_image_url,
+                        normalized_image_url, layout_signature_json,
+                        similarity_threshold, final_confidence_threshold,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        page_id,
+                        template_id,
+                        page_index,
+                        f"Page {page_index}",
+                        page["sample_image_url"],
+                        page["sample_image_url"],
+                        signature_json,
+                    ),
+                )
+                page_mapping = {
+                    "template_page_id": page_id,
+                    "template_page_number": page_index,
+                    "request_page_id": page["id"],
+                    "request_page_number": page["page_number"],
+                }
+                request_page_to_template_page[page["id"]] = page_mapping
+                request_page_number_to_template_page[int(page["page_number"])] = page_mapping
+
                 conn.execute(
                     """
                     INSERT INTO template_layout_references (
@@ -3494,25 +3524,29 @@ class AdminTemplateService:
                     (
                         _stub_id("tpl_ref"),
                         template_id,
-                        page_id if page["id"] == canonical_page["id"] else None,
-                        reference_index,
+                        page_id,
+                        page_index,
                         page["sample_image_url"],
                         page["image_source"],
-                        1 if page["id"] == canonical_page["id"] else 0,
+                        1 if page_is_canonical else 0,
                         signature_json,
                     ),
                 )
                 layout_reference_count += 1
 
-            canonical_requested_fields = [
+            converted_requested_fields = [
                 field
                 for field in requested_fields
-                if field["template_request_page_id"] == canonical_page["id"]
-                or field["page_number"] == canonical_page["page_number"]
+                if field["template_request_page_id"] in request_page_to_template_page
+                or int(field["page_number"]) in request_page_number_to_template_page
             ]
+            sort_order_by_page: Dict[int, int] = {}
 
-            for index, field in enumerate(canonical_requested_fields):
-                template_page_id = created_template_page_ids[1]
+            for field in converted_requested_fields:
+                page_mapping = request_page_to_template_page.get(field["template_request_page_id"]) or request_page_number_to_template_page[int(field["page_number"])]
+                template_page_id = page_mapping["template_page_id"]
+                template_page_number = int(page_mapping["template_page_number"])
+                sort_order_by_page[template_page_number] = sort_order_by_page.get(template_page_number, 0) + 1
 
                 conn.execute(
                     """
@@ -3541,7 +3575,7 @@ class AdminTemplateService:
                         _stub_id("tpl_field"),
                         template_id,
                         template_page_id,
-                        1,
+                        template_page_number,
                         field["field_name"],
                         field["display_label"],
                         field["roi_x_ratio"],
@@ -3550,7 +3584,7 @@ class AdminTemplateService:
                         field["roi_height_ratio"],
                         _normalize_data_type(field["data_type"]),
                         _normalize_extraction_method(field["extraction_method"]),
-                        index + 1,
+                        sort_order_by_page[template_page_number],
                     ),
                 )
 
@@ -3574,7 +3608,7 @@ class AdminTemplateService:
             "created_records": {
                 "templates": 1,
                 "template_pages": len(created_template_page_ids),
-                "template_fields": len(canonical_requested_fields),
+                "template_fields": len(converted_requested_fields),
                 "template_layout_references": layout_reference_count,
             },
         }

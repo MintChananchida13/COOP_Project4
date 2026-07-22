@@ -1,8 +1,8 @@
 ﻿"use client";
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
-import { ROI, OCRResult } from '../../types/ocr';
+import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2 } from 'lucide-react';
+import { ROI, OCRResult, TableMergedCell } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
@@ -160,183 +160,578 @@ const tableRowsToMarkdown = (rows: string[][]): string => {
 const tableRowsFromResult = (result: OCRResult & { pageIndex?: number }, value?: string): string[][] | null =>
   normalizeTableRows(result.tableRows) || parseHtmlTable(result.tableHtml) || parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
 
-const tableTextFromResult = (result: OCRResult & { pageIndex?: number }) => {
-  const rows = tableRowsFromResult(result, result.originalText ?? result.extractedText);
-  return rows ? tableRowsToMarkdown(rows) : getRawOcrText(result);
+type TableSelection = {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
 };
 
-const TableResultPreview = ({ value, rows }: { value: string; rows?: string[][] | null }) => {
-  const tableRows = rows || parseTableText(value);
+type TableEditorSnapshot = {
+  rows: string[][];
+  mergedCells: TableMergedCell[];
+};
 
-  if (!tableRows) return <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400">(ไม่พบข้อมูลตาราง)</div>;
+type TableContextMenuState = {
+  x: number;
+  y: number;
+};
 
-  const [header, ...bodyRows] = tableRows;
-  return (
-    <div className="max-h-72 overflow-auto rounded-xl border border-slate-300 bg-white shadow-sm">
-      <table className="min-w-full text-[11px] text-left border-collapse">
-        <thead className="sticky top-0 bg-slate-100 text-slate-800">
-          <tr>
-            {header.map((cell, index) => (
-              <th key={index} className="border border-slate-300 px-2.5 py-2 font-bold whitespace-nowrap bg-slate-100">
-                {cell || `Column ${index + 1}`}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {bodyRows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/70">
-              {header.map((_, cellIndex) => (
-                <td key={cellIndex} className="border border-slate-300 px-2.5 py-2 align-top text-slate-700 whitespace-pre-wrap">
-                  {row[cellIndex] || ""}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+const normalizeEditableRows = (rows?: string[][] | null): string[][] => {
+  const usefulRows = rows && rows.length > 0 ? rows : [["Column 1"], [""]];
+  const maxColumns = Math.max(...usefulRows.map(row => row.length), 1);
+  return usefulRows.map(row => [...row.map(cell => String(cell ?? "")), ...Array(maxColumns - row.length).fill("")]);
+};
+
+const cloneMergedCells = (cells?: TableMergedCell[]): TableMergedCell[] =>
+  (cells || []).map(cell => ({
+    ...cell,
+    originalCells: cell.originalCells?.map(row => [...row]),
+  }));
+
+const tableCellKey = (row: number, col: number) => `${row}:${col}`;
+
+const getSelectionBounds = (selection: TableSelection | null) => {
+  if (!selection) return null;
+  return {
+    top: Math.min(selection.startRow, selection.endRow),
+    bottom: Math.max(selection.startRow, selection.endRow),
+    left: Math.min(selection.startCol, selection.endCol),
+    right: Math.max(selection.startCol, selection.endCol),
+  };
+};
+
+const isCellInSelection = (row: number, col: number, selection: TableSelection | null) => {
+  const bounds = getSelectionBounds(selection);
+  if (!bounds) return false;
+  return row >= bounds.top && row <= bounds.bottom && col >= bounds.left && col <= bounds.right;
+};
+
+const getMergeAtAnchor = (mergedCells: TableMergedCell[], row: number, col: number) =>
+  mergedCells.find(cell => cell.row === row && cell.col === col);
+
+const getMergeContainingCell = (mergedCells: TableMergedCell[], row: number, col: number) =>
+  mergedCells.find(cell =>
+    row >= cell.row &&
+    row < cell.row + cell.rowSpan &&
+    col >= cell.col &&
+    col < cell.col + cell.colSpan
   );
+
+const isCoveredByMergedCell = (mergedCells: TableMergedCell[], row: number, col: number) => {
+  const merge = getMergeContainingCell(mergedCells, row, col);
+  return Boolean(merge && (merge.row !== row || merge.col !== col));
+};
+
+const mergeIntersectsBounds = (merge: TableMergedCell, bounds: NonNullable<ReturnType<typeof getSelectionBounds>>) =>
+  merge.row <= bounds.bottom &&
+  merge.row + merge.rowSpan - 1 >= bounds.top &&
+  merge.col <= bounds.right &&
+  merge.col + merge.colSpan - 1 >= bounds.left;
+
+const sanitizeTableSnapshot = (snapshot: TableEditorSnapshot): TableEditorSnapshot => {
+  const rows = normalizeEditableRows(snapshot.rows);
+  const rowCount = rows.length;
+  const colCount = rows[0]?.length || 1;
+  const occupied = new Set<string>();
+  const mergedCells: TableMergedCell[] = [];
+
+  cloneMergedCells(snapshot.mergedCells).forEach(cell => {
+    const row = Math.max(0, Math.min(cell.row, rowCount - 1));
+    const col = Math.max(0, Math.min(cell.col, colCount - 1));
+    const rowSpan = Math.max(1, Math.min(cell.rowSpan, rowCount - row));
+    const colSpan = Math.max(1, Math.min(cell.colSpan, colCount - col));
+    if (rowSpan === 1 && colSpan === 1) return;
+
+    const keys: string[] = [];
+    for (let r = row; r < row + rowSpan; r += 1) {
+      for (let c = col; c < col + colSpan; c += 1) {
+        keys.push(tableCellKey(r, c));
+      }
+    }
+    if (keys.some(key => occupied.has(key))) return;
+    keys.forEach(key => occupied.add(key));
+    mergedCells.push({
+      ...cell,
+      row,
+      col,
+      rowSpan,
+      colSpan,
+      originalCells: cell.originalCells?.slice(0, rowSpan).map(sourceRow => [
+        ...sourceRow.slice(0, colSpan),
+        ...Array(Math.max(0, colSpan - sourceRow.length)).fill(""),
+      ]),
+    });
+  });
+
+  return { rows, mergedCells };
+};
+
+const snapshotToKey = (snapshot: TableEditorSnapshot) => JSON.stringify(snapshot);
+
+const getSpreadsheetColumnLabel = (index: number) => {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
 };
 
 const EditableTableResult = ({
   value,
   rows: sourceRows,
+  mergedCells,
   onChange,
 }: {
   value: string;
   rows?: string[][] | null;
-  onChange: (nextValue: string, nextRows: string[][]) => void;
+  mergedCells?: TableMergedCell[];
+  onChange: (nextValue: string, nextRows: string[][], nextMergedCells: TableMergedCell[]) => void;
 }) => {
-  const parsedRows = sourceRows || parseTableText(value);
-  const parsedRowsKey = JSON.stringify(parsedRows || []);
-  const [localRows, setLocalRows] = useState<string[][]>(() => parsedRows || [["Column 1"], [""]]);
+  const sourceSnapshot = useMemo(
+    () => sanitizeTableSnapshot({
+      rows: normalizeEditableRows(sourceRows || parseTableText(value)),
+      mergedCells: cloneMergedCells(mergedCells),
+    }),
+    [sourceRows, value, mergedCells]
+  );
+  const sourceKey = snapshotToKey(sourceSnapshot);
+  const [snapshot, setSnapshot] = useState<TableEditorSnapshot>(sourceSnapshot);
+  const [history, setHistory] = useState<TableEditorSnapshot[]>([sourceSnapshot]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const [selection, setSelection] = useState<TableSelection | null>(null);
+  const [contextMenu, setContextMenu] = useState<TableContextMenuState | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setLocalRows(parsedRows || [["Column 1"], [""]]);
-  }, [parsedRowsKey, value]);
+    if (sourceKey === snapshotToKey(snapshot)) return;
+    setSnapshot(sourceSnapshot);
+    setHistory([sourceSnapshot]);
+    setHistoryIndex(0);
+    setSelection(null);
+  }, [sourceKey]);
 
-  const commitRows = (rows: string[][]) => {
-    const normalizedRows = rows.length > 0 ? rows : [["Column 1"], [""]];
-    setLocalRows(normalizedRows);
-    onChange(tableRowsToMarkdown(normalizedRows), normalizedRows);
+  const commitSnapshot = (nextSnapshot: TableEditorSnapshot) => {
+    const sanitized = sanitizeTableSnapshot(nextSnapshot);
+    const nextHistory = [...history.slice(0, historyIndex + 1), sanitized];
+    setSnapshot(sanitized);
+    setHistory(nextHistory);
+    setHistoryIndex(nextHistory.length - 1);
+    onChange(tableRowsToMarkdown(sanitized.rows), sanitized.rows, sanitized.mergedCells);
   };
 
-  const maxColumns = Math.max(...localRows.map(row => row.length), 1);
-  const rows = localRows.map(row => [...row, ...Array(maxColumns - row.length).fill("")]);
-  const [header, ...bodyRows] = rows;
+  const restoreSnapshot = (nextIndex: number) => {
+    const nextSnapshot = history[nextIndex];
+    if (!nextSnapshot) return;
+    setSnapshot(nextSnapshot);
+    setHistoryIndex(nextIndex);
+    onChange(tableRowsToMarkdown(nextSnapshot.rows), nextSnapshot.rows, nextSnapshot.mergedCells);
+  };
+
+  const handleKeyboardShortcuts = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const key = event.key.toLowerCase();
+    const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === "z";
+    const isRedo =
+      ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "z") ||
+      (event.ctrlKey && !event.shiftKey && key === "y");
+
+    if (isUndo && historyIndex > 0) {
+      event.preventDefault();
+      restoreSnapshot(historyIndex - 1);
+      return;
+    }
+
+    if (isRedo && historyIndex < history.length - 1) {
+      event.preventDefault();
+      restoreSnapshot(historyIndex + 1);
+    }
+  };
+
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (contextMenuRef.current?.contains(event.target as Node)) return;
+      setContextMenu(null);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
+
+  const selectCell = (row: number, col: number, extend: boolean) => {
+    setSelection(prev =>
+      extend && prev
+        ? { ...prev, endRow: row, endCol: col }
+        : { startRow: row, startCol: col, endRow: row, endCol: col }
+    );
+  };
+
+  const rows = snapshot.rows;
+  const merged = snapshot.mergedCells;
+  const maxColumns = rows[0]?.length || 1;
+  const bounds = getSelectionBounds(selection);
+  const selectedMerge = bounds ? getMergeContainingCell(merged, bounds.top, bounds.left) : null;
+  const hasRangeSelection = Boolean(bounds && (bounds.top !== bounds.bottom || bounds.left !== bounds.right));
+  const canMergeSelection = Boolean(
+    bounds &&
+    hasRangeSelection &&
+    !merged.some(cell => mergeIntersectsBounds(cell, bounds))
+  );
+
+  const selectRow = (rowIndex: number) => {
+    setSelection({ startRow: rowIndex, endRow: rowIndex, startCol: 0, endCol: maxColumns - 1 });
+  };
+
+  const selectColumn = (cellIndex: number) => {
+    setSelection({ startRow: 0, endRow: rows.length - 1, startCol: cellIndex, endCol: cellIndex });
+  };
+
+  const selectAllTable = () => {
+    setSelection({ startRow: 0, endRow: rows.length - 1, startCol: 0, endCol: maxColumns - 1 });
+  };
+
+  const openContextMenu = (event: React.MouseEvent, rowIndex: number, cellIndex: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectCell(rowIndex, cellIndex, false);
+    const menuWidth = 224;
+    const menuHeight = 250;
+    const padding = 8;
+    const x = Math.max(padding, Math.min(event.clientX, window.innerWidth - menuWidth - padding));
+    const y = Math.max(padding, Math.min(event.clientY, window.innerHeight - menuHeight - padding));
+    setContextMenu({ x, y });
+  };
+
+  const runContextAction = (action: () => void) => {
+    action();
+    setContextMenu(null);
+  };
 
   const updateCell = (rowIndex: number, cellIndex: number, nextValue: string) => {
     const nextRows = rows.map(row => [...row]);
     nextRows[rowIndex][cellIndex] = nextValue;
-    commitRows(nextRows);
+    commitSnapshot({ rows: nextRows, mergedCells: merged });
   };
 
-  const addRow = () => {
-    commitRows([...rows, Array(maxColumns).fill("")]);
+  const insertRow = (where: "above" | "below") => {
+    if (!bounds) return;
+    const insertIndex = where === "above" ? bounds.top : bounds.bottom + 1;
+    const nextRows = rows.map(row => [...row]);
+    nextRows.splice(insertIndex, 0, Array(maxColumns).fill(""));
+    const nextMerged = cloneMergedCells(merged).map(cell => {
+      if (insertIndex <= cell.row) return { ...cell, row: cell.row + 1 };
+      if (insertIndex > cell.row && insertIndex < cell.row + cell.rowSpan) {
+        const originalCells = cell.originalCells?.map(row => [...row]) || [];
+        originalCells.splice(insertIndex - cell.row, 0, Array(cell.colSpan).fill(""));
+        return { ...cell, rowSpan: cell.rowSpan + 1, originalCells };
+      }
+      return cell;
+    });
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    setSelection({ startRow: insertIndex, endRow: insertIndex, startCol: 0, endCol: 0 });
   };
 
-  const addColumn = () => {
-    commitRows(rows.map((row, index) => [...row, index === 0 ? `Column ${maxColumns + 1}` : ""]));
+  const deleteRows = () => {
+    if (!bounds || rows.length <= 1) return;
+    const deleteTop = bounds.top;
+    const deleteBottom = Math.min(bounds.bottom, rows.length - 1);
+    const nextRows = rows.filter((_, index) => index < deleteTop || index > deleteBottom);
+    const deletedCount = deleteBottom - deleteTop + 1;
+    const nextMerged = cloneMergedCells(merged).flatMap(cell => {
+      const cellBottom = cell.row + cell.rowSpan - 1;
+      if (cellBottom < deleteTop) return [cell];
+      if (cell.row > deleteBottom) return [{ ...cell, row: cell.row - deletedCount }];
+
+      const overlapTop = Math.max(cell.row, deleteTop);
+      const overlapBottom = Math.min(cellBottom, deleteBottom);
+      const overlapCount = overlapBottom - overlapTop + 1;
+      const nextRowSpan = cell.rowSpan - overlapCount;
+      if (nextRowSpan <= 0 || (nextRowSpan === 1 && cell.colSpan === 1)) return [];
+
+      const originalCells = cell.originalCells?.map(row => [...row]) || [];
+      if (originalCells.length > 0) {
+        originalCells.splice(overlapTop - cell.row, overlapCount);
+      }
+      return [{
+        ...cell,
+        row: cell.row >= deleteTop ? deleteTop : cell.row,
+        rowSpan: nextRowSpan,
+        originalCells,
+      }];
+    });
+    commitSnapshot({ rows: nextRows.length > 0 ? nextRows : [["Column 1"]], mergedCells: nextMerged });
+    setSelection({ startRow: Math.min(deleteTop, Math.max(0, nextRows.length - 1)), endRow: Math.min(deleteTop, Math.max(0, nextRows.length - 1)), startCol: 0, endCol: 0 });
   };
 
-  const removeRow = (rowIndex: number) => {
-    if (rows.length <= 2) return;
-    commitRows(rows.filter((_, index) => index !== rowIndex));
+  const insertColumn = (where: "left" | "right") => {
+    if (!bounds) return;
+    const insertIndex = where === "left" ? bounds.left : bounds.right + 1;
+    const nextRows = rows.map((row, rowIndex) => {
+      const nextRow = [...row];
+      nextRow.splice(insertIndex, 0, rowIndex === 0 ? `Column ${insertIndex + 1}` : "");
+      return nextRow;
+    });
+    const nextMerged = cloneMergedCells(merged).map(cell => {
+      if (insertIndex <= cell.col) return { ...cell, col: cell.col + 1 };
+      if (insertIndex > cell.col && insertIndex < cell.col + cell.colSpan) {
+        const originalCells = cell.originalCells?.map(row => {
+          const nextRow = [...row];
+          nextRow.splice(insertIndex - cell.col, 0, "");
+          return nextRow;
+        });
+        return { ...cell, colSpan: cell.colSpan + 1, originalCells };
+      }
+      return cell;
+    });
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    setSelection({ startRow: 0, endRow: 0, startCol: insertIndex, endCol: insertIndex });
   };
 
-  const removeColumn = (cellIndex: number) => {
-    if (maxColumns <= 1) return;
-    commitRows(rows.map(row => row.filter((_, index) => index !== cellIndex)));
+  const deleteColumns = () => {
+    if (!bounds || maxColumns <= 1) return;
+    const deleteLeft = bounds.left;
+    const deleteRight = Math.min(bounds.right, maxColumns - 1);
+    const deletedCount = deleteRight - deleteLeft + 1;
+    const nextRows = rows.map(row => row.filter((_, index) => index < deleteLeft || index > deleteRight));
+    const nextMerged = cloneMergedCells(merged).flatMap(cell => {
+      const cellRight = cell.col + cell.colSpan - 1;
+      if (cellRight < deleteLeft) return [cell];
+      if (cell.col > deleteRight) return [{ ...cell, col: cell.col - deletedCount }];
+
+      const overlapLeft = Math.max(cell.col, deleteLeft);
+      const overlapRight = Math.min(cellRight, deleteRight);
+      const overlapCount = overlapRight - overlapLeft + 1;
+      const nextColSpan = cell.colSpan - overlapCount;
+      if (nextColSpan <= 0 || (cell.rowSpan === 1 && nextColSpan === 1)) return [];
+
+      const originalCells = cell.originalCells?.map(row => {
+        const nextRow = [...row];
+        nextRow.splice(overlapLeft - cell.col, overlapCount);
+        return nextRow;
+      });
+      return [{
+        ...cell,
+        col: cell.col >= deleteLeft ? deleteLeft : cell.col,
+        colSpan: nextColSpan,
+        originalCells,
+      }];
+    });
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    setSelection({ startRow: 0, endRow: 0, startCol: Math.min(deleteLeft, Math.max(0, maxColumns - deletedCount - 1)), endCol: Math.min(deleteLeft, Math.max(0, maxColumns - deletedCount - 1)) });
   };
+
+  const mergeSelection = () => {
+    if (!bounds || !canMergeSelection) return;
+    const originalCells = rows
+      .slice(bounds.top, bounds.bottom + 1)
+      .map(row => row.slice(bounds.left, bounds.right + 1));
+    const nextRows = rows.map(row => [...row]);
+    const mergedText = originalCells.flat().map(cell => cell.trim()).filter(Boolean).join(" ");
+    for (let row = bounds.top; row <= bounds.bottom; row += 1) {
+      for (let col = bounds.left; col <= bounds.right; col += 1) {
+        nextRows[row][col] = row === bounds.top && col === bounds.left ? mergedText : "";
+      }
+    }
+    commitSnapshot({
+      rows: nextRows,
+      mergedCells: [
+        ...merged,
+        {
+          id: `merged_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          row: bounds.top,
+          col: bounds.left,
+          rowSpan: bounds.bottom - bounds.top + 1,
+          colSpan: bounds.right - bounds.left + 1,
+          originalCells,
+        },
+      ],
+    });
+    setSelection({ startRow: bounds.top, startCol: bounds.left, endRow: bounds.top, endCol: bounds.left });
+  };
+
+  const splitSelectedCell = () => {
+    if (!selectedMerge) return;
+    const nextRows = rows.map(row => [...row]);
+    selectedMerge.originalCells?.forEach((sourceRow, rowOffset) => {
+      sourceRow.forEach((cellValue, colOffset) => {
+        const rowIndex = selectedMerge.row + rowOffset;
+        const colIndex = selectedMerge.col + colOffset;
+        if (nextRows[rowIndex] && colIndex < nextRows[rowIndex].length) {
+          nextRows[rowIndex][colIndex] = cellValue;
+        }
+      });
+    });
+    commitSnapshot({
+      rows: nextRows,
+      mergedCells: merged.filter(cell => cell.id !== selectedMerge.id),
+    });
+    setSelection({ startRow: selectedMerge.row, startCol: selectedMerge.col, endRow: selectedMerge.row, endCol: selectedMerge.col });
+  };
+
+  const renderEditableCell = (rowIndex: number, cellIndex: number) => {
+    if (isCoveredByMergedCell(merged, rowIndex, cellIndex)) return null;
+    const merge = getMergeAtAnchor(merged, rowIndex, cellIndex);
+    const selected = isCellInSelection(rowIndex, cellIndex, selection);
+    const Tag = rowIndex === 0 ? "th" : "td";
+    return (
+      <Tag
+        key={`${rowIndex}-${cellIndex}`}
+        rowSpan={merge?.rowSpan}
+        colSpan={merge?.colSpan}
+        className={`min-w-32 border p-1.5 align-top ${
+          selected ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400" : rowIndex === 0 ? "border-slate-300 bg-slate-100" : "border-slate-300 bg-white"
+        }`}
+        onClick={(event) => selectCell(rowIndex, cellIndex, event.shiftKey)}
+        onContextMenu={(event) => openContextMenu(event, rowIndex, cellIndex)}
+      >
+        <textarea
+          value={rows[rowIndex]?.[cellIndex] ?? ""}
+          onFocus={() =>
+            setSelection(prev => prev ?? { startRow: rowIndex, startCol: cellIndex, endRow: rowIndex, endCol: cellIndex })
+          }
+          onClick={(event) => selectCell(rowIndex, cellIndex, event.shiftKey)}
+          onChange={(event) => updateCell(rowIndex, cellIndex, event.target.value)}
+          className={`min-h-9 w-full resize-y rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
+            rowIndex === 0 ? "bg-white/80 font-black" : "bg-transparent font-medium"
+          }`}
+          rows={merge ? Math.max(1, merge.rowSpan) : 1}
+          placeholder={rowIndex === 0 ? `Column ${cellIndex + 1}` : ""}
+          spellCheck={false}
+          translate="no"
+        />
+      </Tag>
+    );
+  };
+
+  const toolbarButtonClass = "inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40";
+  const rowHeaderClass = "sticky left-0 z-20 w-12 min-w-12 border border-slate-300 bg-slate-100 px-2 py-2 text-center text-[10px] font-black text-slate-500";
+  const isFullRowSelected = (rowIndex: number) =>
+    Boolean(bounds && bounds.top <= rowIndex && bounds.bottom >= rowIndex && bounds.left === 0 && bounds.right === maxColumns - 1);
+  const isFullColumnSelected = (cellIndex: number) =>
+    Boolean(bounds && bounds.left <= cellIndex && bounds.right >= cellIndex && bounds.top === 0 && bounds.bottom === rows.length - 1);
+  const allSelected = Boolean(bounds && bounds.top === 0 && bounds.left === 0 && bounds.bottom === rows.length - 1 && bounds.right === maxColumns - 1);
 
   return (
-    <div className="rounded-xl border border-slate-300 bg-white shadow-sm">
-      <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">ตารางที่แก้ไขได้</p>
-          <p className="mt-0.5 text-[10px] font-medium text-slate-400">แก้ไขข้อมูลในแต่ละช่องได้โดยตรง</p>
-        </div>
-        <div className="flex gap-1.5">
-          <button
-            type="button"
-            onClick={addRow}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
-          >
-            <Plus size={12} /> เพิ่มแถว
-          </button>
-          <button
-            type="button"
-            onClick={addColumn}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
-          >
-            <Plus size={12} /> เพิ่มคอลัมน์
-          </button>
+    <div
+      className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm"
+      onKeyDown={handleKeyboardShortcuts}
+      tabIndex={0}
+    >
+      <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">ตารางที่แก้ไขได้</p>
+            <p className="mt-0.5 text-[10px] font-medium text-slate-400">คลิกขวาที่เซลล์เพื่อจัดการแถว/คอลัมน์ คลิกหัวแถวหรือหัวคอลัมน์เพื่อเลือกทั้งแถว/คอลัมน์</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => restoreSnapshot(historyIndex - 1)} disabled={historyIndex <= 0} className={toolbarButtonClass}>
+              <Undo2 size={12} /> Undo
+            </button>
+            <button type="button" onClick={() => restoreSnapshot(historyIndex + 1)} disabled={historyIndex >= history.length - 1} className={toolbarButtonClass}>
+              <Redo2 size={12} /> Redo
+            </button>
+            <button type="button" onClick={mergeSelection} disabled={!canMergeSelection} className={toolbarButtonClass}>
+              รวมเซลล์
+            </button>
+            <button type="button" onClick={splitSelectedCell} disabled={!selectedMerge} className={toolbarButtonClass}>
+              แยกเซลล์
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="max-h-80 overflow-auto">
+      <div className="max-h-[420px] overflow-auto">
         <table className="min-w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 z-10 bg-slate-100">
+          <thead className="sticky top-0 z-30">
             <tr>
-              {header.map((cell, cellIndex) => (
-                <th key={cellIndex} className="min-w-28 border border-slate-300 bg-slate-100 p-0 align-top">
-                  <div className="flex items-center gap-1 p-1.5">
-                    <input
-                      value={cell}
-                      onChange={(event) => updateCell(0, cellIndex, event.target.value)}
-                      className="min-h-8 w-full rounded-md border border-transparent bg-white/70 px-2 py-1 text-xs font-black text-slate-800 outline-none focus:border-indigo-400 focus:bg-white"
-                      placeholder={`Column ${cellIndex + 1}`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeColumn(cellIndex)}
-                      disabled={maxColumns <= 1}
-                      className="rounded-md p-1 text-slate-300 hover:bg-white hover:text-red-500 disabled:opacity-25"
-                      title="ลบคอลัมน์"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
+              <th
+                className={`${rowHeaderClass} ${allSelected ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""}`}
+                onClick={selectAllTable}
+                title="เลือกทั้งตาราง"
+              >
+                ทั้งหมด
+              </th>
+              {Array.from({ length: maxColumns }).map((_, cellIndex) => (
+                <th
+                  key={cellIndex}
+                  className={`min-w-32 border border-slate-300 bg-slate-100 px-2 py-2 text-left text-[10px] font-black text-slate-600 ${
+                    isFullColumnSelected(cellIndex) ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""
+                  }`}
+                  onClick={() => selectColumn(cellIndex)}
+                  title="เลือกทั้งคอลัมน์"
+                >
+                  {getSpreadsheetColumnLabel(cellIndex)}
                 </th>
               ))}
-              <th className="w-10 border border-slate-300 bg-slate-100" />
             </tr>
           </thead>
           <tbody>
-            {bodyRows.map((row, bodyIndex) => {
-              const rowIndex = bodyIndex + 1;
-              return (
-                <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/70">
-                  {row.map((cell, cellIndex) => (
-                    <td key={cellIndex} className="min-w-28 border border-slate-300 p-1.5 align-top">
-                      <textarea
-                        value={cell}
-                        onChange={(event) => updateCell(rowIndex, cellIndex, event.target.value)}
-                        className="min-h-9 w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1 text-xs font-medium leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white"
-                        rows={1}
-                        spellCheck={false}
-                        translate="no"
-                      />
-                    </td>
-                  ))}
-                  <td className="w-10 border border-slate-300 p-1 text-center align-middle">
-                    <button
-                      type="button"
-                      onClick={() => removeRow(rowIndex)}
-                      disabled={rows.length <= 2}
-                      className="rounded-md p-1 text-slate-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-25"
-                      title="ลบแถว"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/60">
+                <th
+                  className={`${rowHeaderClass} ${isFullRowSelected(rowIndex) ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""}`}
+                  onClick={() => selectRow(rowIndex)}
+                  title="เลือกทั้งแถว"
+                >
+                  {rowIndex + 1}
+                </th>
+                {row.map((_, cellIndex) => renderEditableCell(rowIndex, cellIndex))}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-[9999] w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-xs font-semibold text-slate-700 shadow-2xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+        >
+          <button type="button" className="block w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => runContextAction(() => insertRow("above"))}>
+            แทรกแถวด้านบน
+          </button>
+          <button type="button" className="block w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => runContextAction(() => insertRow("below"))}>
+            แทรกแถวด้านล่าง
+          </button>
+          <button
+            type="button"
+            disabled={rows.length <= 1}
+            className="block w-full px-3 py-2 text-left hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+            onClick={() => runContextAction(deleteRows)}
+          >
+            ลบแถว
+          </button>
+          <div className="my-1 border-t border-slate-100" />
+          <button type="button" className="block w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => runContextAction(() => insertColumn("left"))}>
+            แทรกคอลัมน์ด้านซ้าย
+          </button>
+          <button type="button" className="block w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => runContextAction(() => insertColumn("right"))}>
+            แทรกคอลัมน์ด้านขวา
+          </button>
+          <button
+            type="button"
+            disabled={maxColumns <= 1}
+            className="block w-full px-3 py-2 text-left hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+            onClick={() => runContextAction(deleteColumns)}
+          >
+            ลบคอลัมน์
+          </button>
+        </div>
+      )}
     </div>
   );
 };
@@ -1001,7 +1396,7 @@ export default function GroundTruthEditorZone({
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         const rawTableRows = tableRowsFromResult(res, getRawOcrText(res));
-                        const editedTableRows = parseTableText(res.extractedText) || rawTableRows;
+                        const editedTableRows = normalizeTableRows(res.tableRows) || parseTableText(res.extractedText) || rawTableRows;
                         const editedTableValue = res.extractedText || (editedTableRows ? tableRowsToMarkdown(editedTableRows) : getRawOcrText(res));
                         return (
                           <article
@@ -1038,21 +1433,15 @@ export default function GroundTruthEditorZone({
                               </span>
                             </div>
 
-                            <div className="grid grid-cols-1 gap-4">
-                              <div>
-                                <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ผลตารางจาก OCR</p>
-                                <TableResultPreview value={tableTextFromResult(res)} rows={rawTableRows} />
-                              </div>
-
-                              <div onClick={(e) => e.stopPropagation()}>
-                                <EditableTableResult
-                                  value={editedTableValue}
-                                  rows={editedTableRows}
-                                  onChange={(nextValue, nextRows) =>
-                                    setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows } : item))
-                                  }
-                                />
-                              </div>
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <EditableTableResult
+                                value={editedTableValue}
+                                rows={editedTableRows}
+                                mergedCells={res.tableMergedCells}
+                                onChange={(nextValue, nextRows, nextMergedCells) =>
+                                  setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells } : item))
+                                }
+                              />
                             </div>
                           </article>
                         );

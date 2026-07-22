@@ -1078,6 +1078,23 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     { step: 3, label: "New Document Test", enabled: simulationPassed, done: Boolean(detectionTest) },
     { step: 4, label: "Publish Review", enabled: Boolean(detectionTest), done: overallReady },
   ];
+  const layoutSignaturePages =
+    simulation?.layoutSignaturePages?.length
+      ? simulation.layoutSignaturePages
+      : simulation?.temporaryEmbedding.layoutSignaturePages?.length
+        ? simulation.temporaryEmbedding.layoutSignaturePages
+        : safePages.map((page) => ({
+            templatePageId: page.id,
+            pageNumber: page.pageNumber,
+            status: simulationAction === "run" ? "running" : "pending",
+            engine: "layout_signature",
+            version: null,
+            modelName: null,
+            labelCount: null,
+            imageUrl: page.normalizedImageUrl || page.sampleImageUrl || samplePage,
+            persisted: false,
+            reason: null,
+          }));
   const goToValidationStep = (step: number) => {
     const target = validationSteps.find((item) => item.step === step);
     if (!target?.enabled) return;
@@ -1666,6 +1683,64 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
               </div>
             );
           })}
+          </div>
+        </div>
+        <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Layout Reference Images</h4>
+              <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                ภาพแต่ละหน้าจะถูกแปลงเป็น Layout Signature ชั่วคราวเพื่อใช้ทดสอบก่อน Publish
+              </p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
+              {layoutSignaturePages.filter((page) => page.status === "generated").length}/{layoutSignaturePages.length} generated
+            </span>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {layoutSignaturePages.map((page) => {
+              const status = page.status || "pending";
+              const isGenerated = status === "generated";
+              const isRunning = status === "running";
+              const isFailed = status === "failed";
+              return (
+                <div key={`${page.templatePageId || "page"}-${page.pageNumber}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                  <div className="flex items-start gap-3">
+                    <div className="h-20 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                      {page.imageUrl ? (
+                        <img src={page.imageUrl} alt={`Page ${page.pageNumber}`} className="h-full w-full object-contain" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-slate-400">No Image</div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-black text-slate-900">Page {page.pageNumber}</div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                            isGenerated
+                              ? "bg-emerald-100 text-emerald-700"
+                              : isRunning
+                                ? "bg-indigo-100 text-indigo-700"
+                                : isFailed
+                                  ? "bg-red-100 text-red-700"
+                                  : "bg-slate-200 text-slate-600"
+                          }`}
+                        >
+                          {isGenerated ? "Generated" : isRunning ? "Running" : isFailed ? "Failed" : "Pending"}
+                        </span>
+                      </div>
+                      <div className="mt-2 space-y-1 text-[10px] font-semibold text-slate-500">
+                        <p>Engine: {page.engine || "layout_signature"}</p>
+                        <p>Model: {page.modelName || "N/A"}</p>
+                        <p>Layout boxes: {page.labelCount ?? "N/A"}</p>
+                        {page.reason && <p className="text-red-600">Reason: {page.reason}</p>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
         {simulation?.temporaryEmbedding && (

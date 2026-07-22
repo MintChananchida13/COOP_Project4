@@ -326,7 +326,9 @@ export interface PrepublishSimulationResult {
     generatedAt?: string;
     persisted: boolean;
     note?: string;
+    layoutSignaturePages?: PrepublishLayoutSignaturePage[];
   };
+  layoutSignaturePages?: PrepublishLayoutSignaturePage[];
   candidates: PrepublishCandidate[];
   verificationAnchorResults: Record<string, unknown>[];
   separationAnalysis: {
@@ -337,6 +339,19 @@ export interface PrepublishSimulationResult {
     conflictTemplates: PrepublishCandidate[];
     message?: string;
   };
+}
+
+export interface PrepublishLayoutSignaturePage {
+  templatePageId?: string | null;
+  pageNumber: number;
+  status: string;
+  engine?: string | null;
+  version?: string | null;
+  modelName?: string | null;
+  labelCount?: number | null;
+  imageUrl?: string | null;
+  persisted?: boolean;
+  reason?: string | null;
 }
 
 export interface PrepublishDetectionTestResult {
@@ -378,6 +393,9 @@ export interface TemplateStepTestItem {
   confidence?: number | null;
   score?: number | null;
   fieldScore?: number | null;
+  tableRows?: string[][] | null;
+  tableHtml?: string | null;
+  tableDebug?: Record<string, unknown> | null;
   passed: boolean;
   status?: string | null;
   failureReason?: string | null;
@@ -1126,6 +1144,19 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
     : [],
 });
 
+const mapPrepublishLayoutSignaturePage = (page: Record<string, unknown>): PrepublishLayoutSignaturePage => ({
+  templatePageId: (page.template_page_id as string | null | undefined) ?? null,
+  pageNumber: Number(page.page_number || 0),
+  status: String(page.status || "pending"),
+  engine: (page.engine as string | null | undefined) ?? null,
+  version: (page.version as string | null | undefined) ?? null,
+  modelName: (page.model_name as string | null | undefined) ?? null,
+  labelCount: typeof page.label_count === "number" ? page.label_count : null,
+  imageUrl: (page.image_url as string | null | undefined) ?? null,
+  persisted: Boolean(page.persisted),
+  reason: (page.reason as string | null | undefined) ?? null,
+});
+
 export const runPrepublishSimulation = async (templateId: string): Promise<PrepublishSimulationResult> => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-simulation`, {
     method: "POST",
@@ -1141,6 +1172,9 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
   const summary = (data?.draft_summary as Record<string, unknown> | undefined) || {};
   const temp = (data?.temporary_embedding as Record<string, unknown> | undefined) || {};
   const separation = (data?.separation_analysis as Record<string, unknown> | undefined) || {};
+  const layoutSignaturePages = Array.isArray(data?.layout_signature_pages)
+    ? (data.layout_signature_pages as Record<string, unknown>[]).map(mapPrepublishLayoutSignaturePage)
+    : [];
   const candidates = Array.isArray(data?.candidates)
     ? (data.candidates as Record<string, unknown>[]).map(mapPrepublishCandidate)
     : [];
@@ -1174,7 +1208,11 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
       generatedAt: (temp.generated_at as string | undefined) || undefined,
       persisted: Boolean(temp.persisted),
       note: (temp.note as string | undefined) || undefined,
+      layoutSignaturePages: Array.isArray(temp.layout_signature_pages)
+        ? (temp.layout_signature_pages as Record<string, unknown>[]).map(mapPrepublishLayoutSignaturePage)
+        : layoutSignaturePages,
     },
+    layoutSignaturePages,
     candidates,
     verificationAnchorResults: Array.isArray(data?.verification_anchor_results)
       ? (data.verification_anchor_results as Record<string, unknown>[])
@@ -1256,6 +1294,16 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   confidence: typeof item.confidence === "number" ? item.confidence : typeof item.ocr_confidence === "number" ? item.ocr_confidence : null,
   score: typeof item.score === "number" ? item.score : null,
   fieldScore: typeof item.field_score === "number" ? item.field_score : null,
+  tableRows: Array.isArray(item.table_rows)
+    ? (item.table_rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+    : Array.isArray(item.tableRows)
+      ? (item.tableRows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+      : null,
+  tableHtml: (item.table_html as string | null | undefined) ?? (item.tableHtml as string | null | undefined) ?? null,
+  tableDebug:
+    (item.table_debug as Record<string, unknown> | null | undefined) ??
+    (item.tableDebug as Record<string, unknown> | null | undefined) ??
+    null,
   passed: Boolean(item.passed),
   status: (item.status as string | null | undefined) ?? null,
   failureReason: (item.failure_reason as string | null | undefined) ?? null,

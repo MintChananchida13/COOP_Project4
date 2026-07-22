@@ -280,7 +280,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Reference Images
+                    Document Pages
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
                     เพิ่มรูปเอกสารตัวอย่างหลายภาพก่อนส่งให้ผู้ดูแลตรวจสอบ
@@ -288,7 +288,7 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                 </div>
 
                 <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100">
-                  Add Image
+                  Add Page Image
                   <input
                     type="file"
                     accept="image/*"
@@ -306,10 +306,10 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                 {requestImages.map((src, index) => (
                   <div key={`${src.slice(0, 32)}_${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
                     <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">
-                      <img src={src} alt={`Reference ${index + 1}`} className="h-full w-full object-contain" />
+                      <img src={src} alt={`Document page ${index + 1}`} className="h-full w-full object-contain" />
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-black text-slate-500">Image {index + 1}</span>
+                      <span className="text-[10px] font-black text-slate-500">Page {index + 1}</span>
                       <button
                         type="button"
                         onClick={() => setRequestImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditorV2";
+import AdjustZone from "../user/components/AdjustZone";
 import { samplePage } from "./adminMockData";
 import { useAdminState } from "./AdminState";
 import {
@@ -22,6 +23,30 @@ import {
 import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage } from "../types/ocr";
 
 type LoadStatus = "loading" | "loaded" | "fallback" | "error";
+type AdminEditorStage = "adjust" | "roi";
+
+interface AdminAdjustPageConfig {
+  rotation: number;
+  brightness: number;
+  contrast: number;
+  sharpness: number;
+  perspectiveV: number;
+  perspectiveH: number;
+  flipH: boolean;
+  flipV: boolean;
+  cropBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    renderedWidth?: number;
+    renderedHeight?: number;
+  } | null;
+  cropCorners: { x: number; y: number }[] | null;
+  isCropActive: boolean;
+  isCropped: boolean;
+  croppedLocalUrl: string | null;
+}
 
 interface AutoDetectedTemplateField {
   roi: RoiRatio;
@@ -34,6 +59,22 @@ const defaultRoi = (pageNumber: number): RoiRatio => ({
   yRatio: 0.2,
   widthRatio: 0.32,
   heightRatio: 0.06,
+});
+
+const defaultAdjustPageConfig = (): AdminAdjustPageConfig => ({
+  rotation: 0,
+  brightness: 100,
+  contrast: 100,
+  sharpness: 0,
+  perspectiveV: 0,
+  perspectiveH: 0,
+  flipH: false,
+  flipV: false,
+  cropBox: null,
+  cropCorners: null,
+  isCropActive: false,
+  isCropped: false,
+  croppedLocalUrl: null,
 });
 
 export default function AdminTemplateEditPage({ templateId }: { templateId: string }) {
@@ -59,6 +100,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [saveStatus, setSaveStatus] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
+  const [editorStage, setEditorStage] = useState<AdminEditorStage>("adjust");
+  const [adjustPageConfigs, setAdjustPageConfigs] = useState<AdminAdjustPageConfig[]>([]);
   const localFieldSequenceRef = useRef(0);
 
   const applyBundle = (bundle: { template: Template; pages: TemplatePage[]; fields: TemplateField[]; ignoreRegions: IgnoreRegion[] }) => {
@@ -106,6 +149,13 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     label: page.pageName || `Page ${page.pageNumber}`,
   }));
 
+  useEffect(() => {
+    setAdjustPageConfigs((current) => {
+      if (current.length === selectedTemplatePages.length) return current;
+      return selectedTemplatePages.map((_, index) => current[index] || defaultAdjustPageConfig());
+    });
+  }, [selectedTemplatePages.length]);
+
   const safeCurrentPage = Math.min(currentPage, Math.max(selectedTemplatePages.length - 1, 0));
   const currentTemplatePage = selectedTemplatePages[safeCurrentPage];
   const extractionFieldCount = selectedTemplateFields.filter((field) => !field.useForVerification).length;
@@ -114,6 +164,41 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const setSaved = (message: string) => setSaveStatus(message);
   const setLocalOnly = (message: string) => setSaveStatus(`${message} Backend unavailable; kept local edit.`);
   const canPersistToBackend = loadStatus === "loaded";
+
+  const handleConfirmAdjustedImages = async (finalImages: string[]) => {
+    if (finalImages.length === 0) return;
+
+    const previousPages = selectedTemplatePages;
+    const nextPages = selectedTemplatePages.map((page, index) => ({
+      ...page,
+      normalizedImageUrl: finalImages[index] || page.normalizedImageUrl || page.sampleImageUrl || samplePage,
+    }));
+    setSelectedTemplatePages(nextPages);
+    setCurrentPage(0);
+    setEditorStage("roi");
+
+    if (!canPersistToBackend) {
+      setLocalOnly("Adjusted images saved locally.");
+      return;
+    }
+
+    try {
+      let latestBundle: Awaited<ReturnType<typeof updateTemplatePageApi>> | null = null;
+      for (const page of nextPages) {
+        if (!page.id.startsWith("local_page_")) {
+          latestBundle = await updateTemplatePageApi(templateId, page.id, {
+            normalizedImageUrl: page.normalizedImageUrl,
+          });
+        }
+      }
+      if (latestBundle) applyBundle(latestBundle);
+      setSaved("Adjusted images saved. Workspace ROI is ready.");
+    } catch (error) {
+      console.warn("Adjusted image save failed.", error);
+      setSelectedTemplatePages(nextPages.length > 0 ? nextPages : previousPages);
+      setLocalOnly("Adjusted images saved locally.");
+    }
+  };
 
   const persistTemplatePatch = async (patch: Partial<Template>) => {
     if (!selectedTemplate) return;
@@ -539,29 +624,85 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
         </div>
       </div>
 
+      {selectedTemplatePages.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: "adjust", label: "2.0 ปรับภาพ", description: "ตรวจภาพและครอปเอกสาร" },
+                { id: "roi", label: "2.1 Workspace ROI", description: "ลากกรอบและกำหนดข้อมูล" },
+              ].map((item) => {
+                const isActive = editorStage === item.id;
+                const isDone = item.id === "adjust" && editorStage === "roi";
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setEditorStage(item.id as AdminEditorStage)}
+                    className={`min-h-[56px] rounded-xl border px-4 py-2 text-left transition-colors ${
+                      isActive
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                        : isDone
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : "border-slate-200 bg-slate-50 text-slate-600"
+                    }`}
+                  >
+                    <span className="block text-xs font-black">{item.label}</span>
+                    <span className="block text-[11px] font-semibold opacity-75">{item.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {editorStage === "roi" && (
+              <button
+                type="button"
+                onClick={() => setEditorStage("adjust")}
+                className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 hover:bg-slate-50"
+              >
+                กลับไปปรับภาพ
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {selectedTemplatePages.length > 0 && currentTemplatePage && (
         <div className="space-y-4">
-          <WorkspaceTemplateEditor
-            templateId={templateId}
-            pages={workspacePages}
-            currentPage={safeCurrentPage}
-            onPageChange={setCurrentPage}
-            fields={selectedTemplateFields}
-            ignoreRegions={selectedIgnoreRegions}
-            onAddField={handleAddField}
-            onUpdateField={handleUpdateField}
-            onReorderFields={handleReorderFields}
-            onReplacePageExtractionFields={handleReplacePageExtractionFields}
-            onDeleteField={handleDeleteField}
-            onAddIgnoreRegion={handleAddIgnoreRegion}
-            onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
-            onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
-            onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
-            onRunTestMode={() => {
-              markTesting(templateId);
-              router.push(`/admin/templates/${templateId}/test`);
-            }}
-          />
+          {editorStage === "adjust" ? (
+            <AdjustZone
+              imagesList={imageList}
+              currentIndex={safeCurrentPage}
+              onIndexChange={setCurrentPage}
+              pagesConfig={adjustPageConfigs}
+              setPagesConfig={setAdjustPageConfigs}
+              onBatchConfirm={(finalImages) => {
+                void handleConfirmAdjustedImages(finalImages);
+              }}
+            />
+          ) : (
+            <WorkspaceTemplateEditor
+              templateId={templateId}
+              pages={workspacePages}
+              currentPage={safeCurrentPage}
+              onPageChange={setCurrentPage}
+              fields={selectedTemplateFields}
+              ignoreRegions={selectedIgnoreRegions}
+              onAddField={handleAddField}
+              onUpdateField={handleUpdateField}
+              onReorderFields={handleReorderFields}
+              onReplacePageExtractionFields={handleReplacePageExtractionFields}
+              onDeleteField={handleDeleteField}
+              onAddIgnoreRegion={handleAddIgnoreRegion}
+              onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
+              onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
+              onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
+              onRunTestMode={() => {
+                markTesting(templateId);
+                router.push(`/admin/templates/${templateId}/test`);
+              }}
+            />
+          )}
         </div>
       )}
     </section>

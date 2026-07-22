@@ -13,14 +13,6 @@ interface TemplateFieldBasicFormProps {
 const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
 
-const dataTypes: { label: string; value: RoiDataType }[] = [
-  { label: "Text", value: "text" },
-  { label: "Number", value: "number" },
-  { label: "Date", value: "date" },
-  { label: "Table", value: "table" },
-  { label: "Image", value: "image" },
-];
-
 const roiTypes = [
   { label: "Text", value: "text" as const, icon: FileText },
   { label: "Table", value: "table" as const, icon: Table },
@@ -50,12 +42,11 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: Te
 
       <label className="space-y-1 block">
         <span className="text-[9px] font-black uppercase text-slate-400">Field Name</span>
-        <input className={inputClass} value={field.fieldName} onChange={(event) => onUpdate(field.id, { fieldName: event.target.value })} />
-      </label>
-
-      <label className="space-y-1 block">
-        <span className="text-[9px] font-black uppercase text-slate-400">Display Label</span>
-        <input className={inputClass} value={field.displayLabel} onChange={(event) => onUpdate(field.id, { displayLabel: event.target.value })} />
+        <input
+          className={inputClass}
+          value={field.fieldName}
+          onChange={(event) => onUpdate(field.id, { fieldName: event.target.value, displayLabel: event.target.value })}
+        />
       </label>
 
       <div className="space-y-1">
@@ -78,17 +69,6 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: Te
           ))}
         </div>
       </div>
-
-      <label className="space-y-1 block">
-        <span className="text-[9px] font-black uppercase text-slate-400">Data Type</span>
-        <select className={inputClass} value={selectedDataType} onChange={(event) => updateDataType(event.target.value as RoiDataType)}>
-          {dataTypes.map((type) => (
-            <option key={type.value} value={type.value}>
-              {type.label}
-            </option>
-          ))}
-        </select>
-      </label>
 
       <div className="grid grid-cols-2 gap-2">
         <button type="button" onClick={handleSave} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white">

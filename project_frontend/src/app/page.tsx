@@ -876,7 +876,7 @@ export default function Home() {
       const rawValue = result.extractedText || "";
 
       if (fieldType === "table") {
-        const tableRows = parseExportTable(rawValue);
+        const tableRows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(rawValue);
         assignExportField(page.fields, fieldName, tableRows ? tableRowsToObjects(tableRows) : rawValue);
         return;
       }

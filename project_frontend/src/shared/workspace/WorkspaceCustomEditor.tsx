@@ -111,6 +111,7 @@ export interface WorkspaceCustomEditorProps {
   getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
   getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
+  allowedRoiTypes?: Array<"text" | "table" | "image">;
   onImageMetricsChange?: (metrics: WorkspaceImageMetrics) => void;
   onCanvasRoiSelect?: (roiId: number) => void;
 }
@@ -152,6 +153,7 @@ export default function WorkspaceCustomEditor({
   getRoiClassName,
   getRoiLabelClassName,
   getRoiBadges,
+  allowedRoiTypes = ["text", "table", "image"],
   onImageMetricsChange,
   onCanvasRoiSelect,
 }: WorkspaceCustomEditorProps) {
@@ -181,7 +183,8 @@ export default function WorkspaceCustomEditor({
 
   // Standard zoom levels.
   const [zoomIndex, setZoomIndex] = useState<number>(WORKSPACE_DEFAULT_ZOOM_INDEX);
-  const currentZoom = WORKSPACE_ZOOM_STEPS[zoomIndex];
+  const [fitZoom, setFitZoom] = useState<number | null>(null);
+  const currentZoom = fitZoom ?? WORKSPACE_ZOOM_STEPS[zoomIndex];
   const [isAutoDetectingRoi, setIsAutoDetectingRoi] = useState(false);
   const [autoDetectMessage, setAutoDetectMessage] = useState("");
 
@@ -220,13 +223,9 @@ export default function WorkspaceCustomEditor({
     if (!Number.isFinite(baseWidth) || !Number.isFinite(baseHeight) || baseWidth <= 0 || baseHeight <= 0) return;
 
     const availableWidth = Math.max(120, viewport.clientWidth - 32);
-    const availableHeight = Math.max(120, viewport.clientHeight - 32);
-    const targetZoom = Math.min(WORKSPACE_MAX_FIT_ZOOM, availableWidth / baseWidth, availableHeight / baseHeight);
-    let nextIndex = 0;
-    for (let index = 0; index < WORKSPACE_ZOOM_STEPS.length; index += 1) {
-      if (WORKSPACE_ZOOM_STEPS[index] <= targetZoom + 0.001) nextIndex = index;
-    }
-    setZoomIndex((prev) => (prev === nextIndex ? prev : nextIndex));
+    const targetZoom = Math.min(WORKSPACE_MAX_FIT_ZOOM, availableWidth / baseWidth);
+    const nextZoom = Math.max(WORKSPACE_ZOOM_STEPS[0], targetZoom);
+    setFitZoom((prev) => (prev !== null && Math.abs(prev - nextZoom) < 0.001 ? prev : nextZoom));
   }, [fitImageToViewport]);
 
   // Toggle field labels and keep undo/redo history.
@@ -435,11 +434,25 @@ export default function WorkspaceCustomEditor({
   );
 
   const handleZoomIn = () => {
-    if (zoomIndex < WORKSPACE_ZOOM_STEPS.length - 1) setZoomIndex(prev => prev + 1);
+    const nextIndex = WORKSPACE_ZOOM_STEPS.findIndex((step) => step > currentZoom + 0.001);
+    if (nextIndex >= 0) {
+      setFitZoom(null);
+      setZoomIndex(nextIndex);
+    }
   };
 
   const handleZoomOut = () => {
-    if (zoomIndex > 0) setZoomIndex(prev => prev - 1);
+    let nextIndex = -1;
+    for (let index = WORKSPACE_ZOOM_STEPS.length - 1; index >= 0; index -= 1) {
+      if (WORKSPACE_ZOOM_STEPS[index] < currentZoom - 0.001) {
+        nextIndex = index;
+        break;
+      }
+    }
+    if (nextIndex >= 0) {
+      setFitZoom(null);
+      setZoomIndex(nextIndex);
+    }
   };
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -966,7 +979,7 @@ export default function WorkspaceCustomEditor({
           <button 
             type="button"
             onClick={handleZoomIn}
-            disabled={zoomIndex === WORKSPACE_ZOOM_STEPS.length - 1}
+            disabled={currentZoom >= WORKSPACE_ZOOM_STEPS[WORKSPACE_ZOOM_STEPS.length - 1] - 0.001}
             className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 transition-all"
             title={`Zoom In (${Math.round(currentZoom * 100)}%)`}
           >
@@ -976,7 +989,7 @@ export default function WorkspaceCustomEditor({
           <button 
             type="button"
             onClick={handleZoomOut}
-            disabled={zoomIndex === 0}
+            disabled={currentZoom <= WORKSPACE_ZOOM_STEPS[0] + 0.001}
             className="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 transition-all"
             title={`Zoom Out (${Math.round(currentZoom * 100)}%)`}
           >
@@ -985,9 +998,9 @@ export default function WorkspaceCustomEditor({
 
           <button 
             type="button"
-            onClick={() => setZoomIndex(WORKSPACE_DEFAULT_ZOOM_INDEX)}
+            onClick={fitCurrentImageToViewport}
             className="p-2.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all"
-            title="Reset Zoom to 100%"
+            title="Fit image to width"
           >
             <Maximize2 size={16} />
           </button>
@@ -1112,7 +1125,7 @@ export default function WorkspaceCustomEditor({
                       enableResizing={!readOnly && selectedId === roi.id}
                       disableDragging={readOnly}
                     >
-                      <div className={`w-full h-full relative ${activeTool !== 'pan' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
+                      <div className={`w-full h-full relative ${selectedId === roi.id || activeTool === 'pan' ? 'pointer-events-auto' : 'pointer-events-none'}`}>
                         {/* SVG Polygon overlay for Quad/Polygon ROIs */}
                         {roi.points && roi.points.length > 0 && (
                           <svg className="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-visible">
@@ -1170,11 +1183,11 @@ export default function WorkspaceCustomEditor({
                           
                           <div className="flex flex-col gap-1">
                             <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-left">ประเภท ROI</label>
-                            <div className="grid grid-cols-3 gap-1">
+                            <div className={`grid gap-1 ${allowedRoiTypes.length <= 2 ? "grid-cols-2" : "grid-cols-3"}`}>
                               <button
                                 type="button"
                                 onClick={() => updateROI(roi.id, roiTypePatch('text'))}
-                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
+                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("table") ? "hidden" : ""} ${
                                   (roi.type || 'text') === 'text' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
@@ -1185,7 +1198,7 @@ export default function WorkspaceCustomEditor({
                               <button
                                 type="button"
                                 onClick={() => updateROI(roi.id, roiTypePatch('table'))}
-                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
+                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("image") ? "hidden" : ""} ${
                                   roi.type === 'table' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'

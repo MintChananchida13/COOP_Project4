@@ -313,9 +313,14 @@ export default function AdminRequestDetailPage({
       return;
     }
 
-    const canonicalImages = pages.filter((page) => page.reviewStatus === "approved" && page.isCanonical);
-    if (canonicalImages.length !== 1) {
-      setActionError("Select exactly one approved canonical image before converting to a template draft.");
+    const pendingPages = pages.filter((page) => (page.reviewStatus || "pending") === "pending");
+    const approvedPages = pages.filter((page) => page.reviewStatus === "approved");
+    if (pendingPages.length > 0) {
+      setActionError("กรุณาตรวจสอบทุกหน้าก่อนสร้าง Template");
+      return;
+    }
+    if (approvedPages.length === 0) {
+      setActionError("ต้องอนุมัติอย่างน้อย 1 หน้า ก่อนสร้าง Template");
       return;
     }
 
@@ -405,8 +410,9 @@ export default function AdminRequestDetailPage({
     Math.max(workspacePages.length - 1, 0)
   );
   const currentPageFields = fieldsByPage[safeCurrentPage + 1] || [];
-  const canonicalImageCount = pages.filter((page) => page.reviewStatus === "approved" && page.isCanonical).length;
-  const canConvert = loadStatus === "loaded" && canonicalImageCount === 1;
+  const approvedPageCount = pages.filter((page) => page.reviewStatus === "approved").length;
+  const pendingPageCount = pages.filter((page) => (page.reviewStatus || "pending") === "pending").length;
+  const canConvert = loadStatus === "loaded" && pages.length > 0 && pendingPageCount === 0 && approvedPageCount > 0;
 
   return (
     <section className="space-y-4">
@@ -482,10 +488,10 @@ export default function AdminRequestDetailPage({
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Reference Images
+                  Document Pages
                 </h3>
                 <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                  Approve images and select one canonical image for the editor.
+                  Review each page. Approved pages become one multi-page Template.
                 </p>
               </div>
 
@@ -547,7 +553,7 @@ export default function AdminRequestDetailPage({
                           </span>
                           {page.isCanonical && (
                             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
-                              canonical
+                              primary
                             </span>
                           )}
                         </div>
@@ -567,7 +573,7 @@ export default function AdminRequestDetailPage({
                             onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved", isCanonical: true })}
                             className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300"
                           >
-                            Canonical
+                            Primary
                           </button>
                           <button
                             type="button"
@@ -592,7 +598,7 @@ export default function AdminRequestDetailPage({
                           </label>
                           <button
                             type="button"
-                            disabled={isUpdatingImages || Boolean(page.isCanonical)}
+                            disabled={isUpdatingImages}
                             onClick={() => void handleRemoveImage(page.id)}
                             className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300"
                           >
@@ -606,9 +612,9 @@ export default function AdminRequestDetailPage({
               )}
             </div>
 
-            {canonicalImageCount !== 1 && (
+            {!canConvert && (
               <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                Select exactly one approved canonical image before opening the Template Editor.
+                ตรวจสอบทุกหน้าให้เรียบร้อยก่อนสร้าง Template หน้าที่อนุมัติจะถูกใช้เป็น Template เดียวหลายหน้า
               </p>
             )}
           </section>
@@ -720,7 +726,7 @@ export default function AdminRequestDetailPage({
                 disabled={isConverting || !canConvert}
                 className="ui-stable-action-lg rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {isConverting ? "Converting..." : "Convert Canonical Image to Template Draft"}
+                {isConverting ? "Converting..." : "Convert Approved Pages to Template Draft"}
               </button>
 
               <button

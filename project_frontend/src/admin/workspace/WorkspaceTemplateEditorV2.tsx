@@ -6,7 +6,7 @@ import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../../shared/workspace/roiGeometry";
 import { IgnoreRegion, ROI, RoiRatio, TemplateField } from "../../types/ocr";
-import { TemplateStepTestResult, testTemplateExtractionFields, testTemplateVerificationAnchors } from "../adminApi";
+import { TemplateStepTestItem, TemplateStepTestResult, testTemplateExtractionFields, testTemplateVerificationAnchors } from "../adminApi";
 import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
 import TemplateVerificationAnchorForm from "./TemplateVerificationAnchorForm";
 
@@ -71,6 +71,50 @@ interface LayoutAnalysisResponse {
 const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
 
+const normalizeTableRows = (rows?: unknown): string[][] | null => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const normalized = rows
+    .filter((row): row is unknown[] => Array.isArray(row))
+    .map((row) => row.map((cell) => String(cell ?? "").trim()));
+  return normalized.some((row) => row.some(Boolean)) ? normalized : null;
+};
+
+const parseMarkdownTable = (value?: string | null): string[][] | null => {
+  if (!value || !value.includes("|")) return null;
+  const rows = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.includes("|"))
+    .map((line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()))
+    .filter((row) => !row.every((cell) => /^:?-{3,}:?$/.test(cell)));
+  return normalizeTableRows(rows);
+};
+
+const parseHtmlTable = (value?: string | null): string[][] | null => {
+  if (!value || typeof DOMParser === "undefined") return null;
+  try {
+    const doc = new DOMParser().parseFromString(value, "text/html");
+    const rows = Array.from(doc.querySelectorAll("tr")).map((row) =>
+      Array.from(row.querySelectorAll("th,td")).map((cell) => cell.textContent?.trim() || "")
+    );
+    return normalizeTableRows(rows);
+  } catch {
+    return null;
+  }
+};
+
+const getTableRowsFromTestItem = (item: TemplateStepTestItem): string[][] | null =>
+  normalizeTableRows(item.tableRows) ||
+  parseHtmlTable(item.tableHtml) ||
+  parseMarkdownTable(item.ocrText) ||
+  parseMarkdownTable(item.actualText);
+
+const isTableTestItem = (item: TemplateStepTestItem) =>
+  item.dataType === "table" ||
+  item.extractionMethod === "table_recognition_v2" ||
+  item.extractionMethod === "ocr_table" ||
+  Boolean(item.tableRows?.length || item.tableHtml || getTableRowsFromTestItem(item));
+
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
 
@@ -79,9 +123,21 @@ const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
 const isAnchor = (field: TemplateField) => field.useForVerification;
 
 const fieldToRoiType = (field: TemplateField): ROI["type"] => {
+  if (isAnchor(field) && field.dataType === "table") return "text";
   if (field.dataType === "table") return "table";
   if (field.dataType === "image") return "image";
   return "text";
+};
+
+const roiTypeToFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
+  if (type === "table") return { dataType: "table", extractionMethod: "table_recognition_v2" };
+  if (type === "image") return { dataType: "image", extractionMethod: "extract_image" };
+  return { dataType: "text", extractionMethod: "paddle_thai_ocr" };
+};
+
+const roiTypeToAnchorFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
+  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", expectedText: "" };
+  return { dataType: "text", extractionMethod: "ocr_text" };
 };
 
 const roiToRatio = (roi: ROI, pageNumber: number, metrics: WorkspaceImageMetrics): RoiRatio => ({
@@ -238,6 +294,16 @@ export default function WorkspaceTemplateEditorV2({
   const selectedExtractionField = selectedField && !isAnchor(selectedField)
     ? selectedField
     : currentPageExtractionFields[0] || extractionFields[0] || null;
+  const textAnchorsMissingExpected = verificationAnchors.filter(
+    (anchor) => anchor.dataType !== "image" && !String(anchor.expectedText || "").trim()
+  );
+  const verificationAnchorsReady = verificationAnchors.length > 0 && textAnchorsMissingExpected.length === 0;
+  const verificationBlockedMessage =
+    verificationAnchors.length === 0
+      ? "ต้องสร้าง Verification Anchor อย่างน้อย 1 รายการก่อนเข้าสู่ Test Mode"
+      : textAnchorsMissingExpected.length > 0
+        ? `กรุณากรอก Expected Text ให้ครบ (${textAnchorsMissingExpected.length} รายการ)`
+        : "";
 
   const selectField = (field: TemplateField) => {
     setSelectedId(stableNumericId(`${isAnchor(field) ? "anchor" : "field"}:${field.id}`));
@@ -306,6 +372,15 @@ export default function WorkspaceTemplateEditorV2({
           onUpdateIgnoreRegion(previous.sourceId, { roi: ratio });
         }
       }
+
+      if ((previous.workspaceKind === "extraction_fields" || previous.workspaceKind === "verification_anchors") && previous.sourceId) {
+        if (previous.fieldName !== roi.fieldName) {
+          onUpdateField(previous.sourceId, { fieldName: roi.fieldName, displayLabel: roi.fieldName });
+        }
+        if (previous.type !== roi.type) {
+          onUpdateField(previous.sourceId, previous.workspaceKind === "verification_anchors" ? roiTypeToAnchorFieldPatch(roi.type) : roiTypeToFieldPatch(roi.type));
+        }
+      }
     });
 
     activeRois.forEach((roi) => {
@@ -336,6 +411,18 @@ export default function WorkspaceTemplateEditorV2({
     nextOrder.splice(nextIndex, 0, field);
     onReorderFields(nextOrder.map((item) => item.id));
     selectField(field);
+  };
+
+  const moveAnchorOrder = (anchorId: string, direction: -1 | 1) => {
+    const currentIndex = currentPageAnchors.findIndex((anchor) => anchor.id === anchorId);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentPageAnchors.length) return;
+
+    const nextOrder = [...currentPageAnchors];
+    const [anchor] = nextOrder.splice(currentIndex, 1);
+    nextOrder.splice(nextIndex, 0, anchor);
+    onReorderFields(nextOrder.map((item) => item.id));
+    selectField(anchor);
   };
 
   const handleAutoDetectExtractionRoi = async () => {
@@ -402,6 +489,10 @@ export default function WorkspaceTemplateEditorV2({
   };
 
   const runStepTest = async (kind: "extraction" | "verification") => {
+    if (kind === "verification" && !verificationAnchorsReady) {
+      setTestError(verificationBlockedMessage || "Verification anchors are not ready.");
+      return;
+    }
     setTestAction(kind);
     setTestError("");
     setTestStatus(kind === "extraction" ? "Testing extraction fields..." : "Testing verification anchors...");
@@ -421,12 +512,50 @@ export default function WorkspaceTemplateEditorV2({
     }
   };
 
+  const renderTablePreview = (item: TemplateStepTestItem) => {
+    const rows = getTableRowsFromTestItem(item);
+    const tableDebugStatus = typeof item.tableDebug?.status === "string" ? item.tableDebug.status : null;
+    if (!rows || rows.length === 0) {
+      return (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">
+          ไม่พบโครงสร้างตารางจากผลทดสอบ{tableDebugStatus ? ` (${tableDebugStatus})` : ""}
+        </div>
+      );
+    }
+
+    return (
+      <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-100 bg-slate-50 px-2.5 py-1.5 text-[9px] font-black uppercase text-slate-500">
+          Table Result
+        </div>
+        <div className="max-h-48 overflow-auto">
+          <table className="min-w-full border-collapse text-left text-[11px] font-semibold text-slate-700">
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`table-row-${rowIndex}`} className={rowIndex === 0 ? "bg-slate-50 font-black text-slate-800" : "bg-white"}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`table-cell-${rowIndex}-${cellIndex}`} className="border border-slate-200 px-2 py-1.5 align-top">
+                      {cell || <span className="text-slate-300">-</span>}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   const renderTestResults = (items: TemplateStepTestResult["fields"] | TemplateStepTestResult["anchors"]) => (
     <div className="mt-4 space-y-3">
       {items && items.length > 0 && (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {items.map((item, index) => (
-            <div key={`${item.fieldId || item.anchorId || index}-test-result`} className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs">
+            <div
+              key={`${item.fieldId || item.anchorId || index}-test-result`}
+              className={`rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs ${isTableTestItem(item) ? "md:col-span-2 xl:col-span-3" : ""}`}
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate font-black text-slate-800">{item.displayLabel || item.fieldName || "Field"}</div>
@@ -458,7 +587,8 @@ export default function WorkspaceTemplateEditorV2({
                   </div>
                 </div>
               )}
-              {(item.ocrText || item.actualText || item.expectedText) && (
+              {isTableTestItem(item) && renderTablePreview(item)}
+              {!isTableTestItem(item) && (item.ocrText || item.actualText || item.expectedText) && (
                 <div className="mt-2 space-y-1 font-semibold text-slate-600">
                   {item.expectedText && <p>Expected: {item.expectedText}</p>}
                   {(item.ocrText || item.actualText) && <p>Result: {item.ocrText || item.actualText}</p>}
@@ -539,6 +669,7 @@ export default function WorkspaceTemplateEditorV2({
         rootClassName="max-w-7xl mx-auto space-y-3"
         onImageMetricsChange={setImageMetrics}
         getRoiBadges={(roi) => (roi as AdminRoi).workspaceKind === "verification_anchors" ? ["ANCHOR"] : []}
+        allowedRoiTypes={step === "verification_anchors" ? ["text", "image"] : ["text", "table", "image"]}
         getRoiClassName={(roi, selected) => {
           const adminRoi = roi as AdminRoi;
           const isAnchorRoi = adminRoi.workspaceKind === "verification_anchors";
@@ -572,12 +703,9 @@ export default function WorkspaceTemplateEditorV2({
               <>
                 <section className="space-y-2">
                   <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI Mode</h3>
-                  <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-2">
                     <button type="button" onClick={() => setMode("extraction_fields")} className={`rounded-lg px-3 py-2 text-[10px] font-black ${mode === "extraction_fields" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}>
                       Extraction
-                    </button>
-                    <button type="button" onClick={() => setMode("ignore_regions")} className={`rounded-lg px-3 py-2 text-[10px] font-black ${mode === "ignore_regions" ? "bg-white text-amber-700 shadow-sm" : "text-slate-500"}`}>
-                      Ignore
                     </button>
                   </div>
                 </section>
@@ -661,15 +789,6 @@ export default function WorkspaceTemplateEditorV2({
                 {mode === "extraction_fields" && selectedExtractionField && (
                   <TemplateFieldBasicForm field={selectedExtractionField} onUpdate={onUpdateField} onDelete={onDeleteField} />
                 )}
-                {mode === "ignore_regions" && selectedIgnoreRegion && (
-                  <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-800">Ignore Region</h3>
-                    <input className={inputClass} value={selectedIgnoreRegion.fieldName} onChange={(event) => onUpdateIgnoreRegion(selectedIgnoreRegion.id, { fieldName: event.target.value })} />
-                    <button type="button" onClick={() => onDeleteIgnoreRegion(selectedIgnoreRegion.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-                      Delete Ignore Region
-                    </button>
-                  </section>
-                )}
               </>
             ) : (
               <>
@@ -698,12 +817,49 @@ export default function WorkspaceTemplateEditorV2({
                   <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
                     {currentPageAnchors.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create an anchor.</p>
-                    ) : currentPageAnchors.map((anchor) => (
-                      <button key={anchor.id} type="button" onClick={() => selectField(anchor)} className={`w-full rounded-lg border px-2 py-2 text-left text-[11px] font-bold ${selectedAnchor?.id === anchor.id ? "border-amber-500 bg-amber-100 text-amber-900" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                        <div className="truncate">{anchor.displayLabel || anchor.fieldName}</div>
-                        <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-700">{anchorMethod(anchor) === "image_feature" ? "Image Feature" : "OCR Text"}</div>
-                      </button>
-                    ))}
+                    ) : currentPageAnchors.map((anchor, index) => {
+                      const isSelected = selectedAnchor?.id === anchor.id;
+                      return (
+                        <div
+                          key={anchor.id}
+                          className={`flex items-center gap-1.5 rounded-lg border bg-white px-2 py-2 text-[11px] font-bold ${
+                            isSelected ? "border-amber-500 bg-amber-100 text-amber-900" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          <button type="button" onClick={() => selectField(anchor)} className="min-w-0 flex-1 text-left">
+                            <div className="truncate">{anchor.displayLabel || anchor.fieldName}</div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-wide text-amber-700">
+                              <span>{anchorMethod(anchor) === "image_feature" ? "Image" : "OCR Text"}</span>
+                              {anchorMethod(anchor) === "ocr_text" && !String(anchor.expectedText || "").trim() && (
+                                <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">Expected Required</span>
+                              )}
+                            </div>
+                          </button>
+                          <div className="flex shrink-0 gap-1">
+                            <button
+                              type="button"
+                              onClick={() => moveAnchorOrder(anchor.id, -1)}
+                              disabled={index === 0}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                              title="Move anchor up"
+                              aria-label="Move anchor up"
+                            >
+                              <ChevronUp size={14} strokeWidth={2.25} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveAnchorOrder(anchor.id, 1)}
+                              disabled={index === currentPageAnchors.length - 1}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                              title="Move anchor down"
+                              aria-label="Move anchor down"
+                            >
+                              <ChevronDown size={14} strokeWidth={2.25} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
                 {selectedAnchor ? (
@@ -717,24 +873,22 @@ export default function WorkspaceTemplateEditorV2({
                       <span className="text-[9px] font-black uppercase text-slate-400">Verification Method</span>
                       <select className={inputClass} value={anchorMethod(selectedAnchor)} onChange={(event) => updateAnchorMethod(selectedAnchor, event.target.value)}>
                         <option value="ocr_text">OCR Text</option>
-                        <option value="image_feature">Image Feature</option>
-                        <option disabled>Logo Match (reserved)</option>
-                        <option disabled>Barcode (reserved)</option>
-                        <option disabled>QR Code (reserved)</option>
+                        <option value="image_feature">Image</option>
                       </select>
                     </label>
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">ROI Padding</span>
                       <input type="number" min="0" step="1" className={inputClass} value={selectedAnchor.roiPadding ?? 6} onChange={(event) => onUpdateField(selectedAnchor.id, { roiPadding: Number(event.target.value) })} />
                     </label>
-                    <label className="space-y-1 block">
-                      <span className="text-[9px] font-black uppercase text-slate-400">Weight</span>
-                      <input type="number" min="0" step="0.1" className={inputClass} value={selectedAnchor.verificationWeight ?? 1} onChange={(event) => onUpdateField(selectedAnchor.id, { verificationWeight: Number(event.target.value) })} />
-                    </label>
                     {anchorMethod(selectedAnchor) === "ocr_text" && (
                       <label className="space-y-1 block">
                         <span className="text-[9px] font-black uppercase text-slate-400">Expected Text</span>
-                        <input className={inputClass} value={selectedAnchor.expectedText || ""} onChange={(event) => onUpdateField(selectedAnchor.id, { expectedText: event.target.value })} />
+                        <input
+                          required
+                          className={`${inputClass} ${!String(selectedAnchor.expectedText || "").trim() ? "border-red-300 bg-red-50/50 focus:border-red-500" : ""}`}
+                          value={selectedAnchor.expectedText || ""}
+                          onChange={(event) => onUpdateField(selectedAnchor.id, { expectedText: event.target.value })}
+                        />
                       </label>
                     )}
                     <button type="button" onClick={() => onDeleteField(selectedAnchor.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
@@ -768,7 +922,7 @@ export default function WorkspaceTemplateEditorV2({
               <button
                 type="button"
                 onClick={() => runStepTest("verification")}
-                disabled={testAction !== null || verificationAnchors.length === 0}
+                disabled={testAction !== null || !verificationAnchorsReady}
                 className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-black text-amber-800 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 {testAction === "verification" ? "Testing..." : "Test Verification"}
@@ -805,6 +959,11 @@ export default function WorkspaceTemplateEditorV2({
             No step test results yet.
           </p>
         )}
+        {step === "verification_anchors" && verificationBlockedMessage && (
+          <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">
+            {verificationBlockedMessage}
+          </p>
+        )}
         {step === "extraction_fields" && (
           <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
             <button
@@ -826,7 +985,8 @@ export default function WorkspaceTemplateEditorV2({
             <button
               type="button"
               onClick={onRunTestMode}
-              className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-slate-800"
+              disabled={!verificationAnchorsReady}
+              className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
               Test Mode
             </button>

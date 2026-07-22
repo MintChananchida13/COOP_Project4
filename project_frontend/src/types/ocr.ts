@@ -34,8 +34,18 @@ export interface OCRResult {
   weight?: number;
   points?: { x: number; y: number }[];
   tableRows?: string[][];
+  tableMergedCells?: TableMergedCell[];
   tableHtml?: string;
   tableDebug?: Record<string, unknown>;
+}
+
+export interface TableMergedCell {
+  id: string;
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  originalCells?: string[][];
 }
 
 export type TemplateRequestMode = 'image_only' | 'image_with_roi';
