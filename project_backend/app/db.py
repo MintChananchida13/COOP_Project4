@@ -176,7 +176,6 @@ _POSTGRES_SCHEMA = [
         page_name TEXT,
         sample_image_url TEXT,
         normalized_image_url TEXT,
-        qdrant_point_id TEXT,
         layout_signature_json TEXT,
         similarity_threshold DOUBLE PRECISION,
         final_confidence_threshold DOUBLE PRECISION,
@@ -209,6 +208,7 @@ _POSTGRES_SCHEMA = [
         roi_padding DOUBLE PRECISION,
         sort_order INTEGER NOT NULL DEFAULT 0,
         verification_weight DOUBLE PRECISION DEFAULT 1.0,
+        image_category TEXT DEFAULT 'other',
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT template_fields_roi_ratio_check CHECK (
@@ -383,19 +383,7 @@ _POSTGRES_SCHEMA = [
         metadata_json TEXT
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS verification_anchor_embeddings (
-        id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
-        anchor_id TEXT NOT NULL REFERENCES template_fields(id) ON DELETE CASCADE,
-        embedding_json TEXT NOT NULL,
-        model_version TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
     'CREATE UNIQUE INDEX IF NOT EXISTS template_pages_template_id_page_number_key ON template_pages(template_id, page_number)',
-    'CREATE UNIQUE INDEX IF NOT EXISTS template_pages_qdrant_point_id_key ON template_pages(qdrant_point_id)',
     'CREATE INDEX IF NOT EXISTS template_fields_template_page_id_page_number_idx ON template_fields(template_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS ignore_regions_template_page_id_page_number_idx ON ignore_regions(template_page_id, page_number)',
     'CREATE UNIQUE INDEX IF NOT EXISTS template_request_pages_template_request_id_page_number_key ON template_request_pages(template_request_id, page_number)',
@@ -406,5 +394,4 @@ _POSTGRES_SCHEMA = [
     'CREATE INDEX IF NOT EXISTS extraction_results_document_page_id_page_number_idx ON extraction_results(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS detection_logs_document_page_id_page_number_idx ON detection_logs(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)',
-    'CREATE INDEX IF NOT EXISTS verification_anchor_embeddings_anchor_idx ON verification_anchor_embeddings(anchor_id)',
 ]

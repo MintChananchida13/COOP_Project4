@@ -17,8 +17,8 @@ os.environ.setdefault("MODEL_RUNTIME_ROLE", "service")
 
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
+from app.siglip_image_verification_adapter import verify_image_category
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
-from app.vision_embedding_adapter import encode_images
 
 
 class ImagePayload(BaseModel):
@@ -28,6 +28,11 @@ class ImagePayload(BaseModel):
 
 class ImagesPayload(BaseModel):
     images: List[str]
+
+
+class ImageCategoryPayload(BaseModel):
+    image: str
+    image_category: str
 
 
 app = FastAPI(title="OCR Model Runtime Service")
@@ -99,17 +104,17 @@ def _warmup() -> Dict[str, Any]:
     finally:
         Path(temp_path).unlink(missing_ok=True)
     recognition = run_paddle_thai_ocr(sample[45:170, 30:500])
-
-    embedding_summary: Dict[str, Any] = {"enabled": False}
-    if os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower() == "dinov2":
+    siglip_summary: Dict[str, Any] = {"enabled": False}
+    if os.getenv("SIGLIP_IMAGE_VERIFICATION_WARMUP", "true").strip().lower() not in {"0", "false", "no", "off"}:
         temp_path = _data_url_to_temp_image("data:image/png;base64," + base64.b64encode(cv2.imencode(".png", sample)[1].tobytes()).decode("ascii"))
         try:
-            embedding = encode_images([temp_path])
-            embedding_summary = {
+            siglip = verify_image_category(temp_path, "other")
+            siglip_summary = {
                 "enabled": True,
-                "engine": embedding.engine,
-                "model": embedding.model_name,
-                "dimension": embedding.dimension,
+                "model": siglip.model_name,
+                "version": siglip.version,
+                "device": siglip.device,
+                "category_count": len(siglip.labels),
             }
         finally:
             Path(temp_path).unlink(missing_ok=True)
@@ -118,7 +123,7 @@ def _warmup() -> Dict[str, Any]:
         "layout_regions": len(layout.get("regions") or []),
         "text_boxes": len(text_boxes.get("regions") or []),
         "ocr_model": recognition.get("model"),
-        "vision_embedding": embedding_summary,
+        "image_verification": siglip_summary,
         "elapsed_seconds": round(time.perf_counter() - started, 2),
     }
 
@@ -147,7 +152,7 @@ def health() -> Dict[str, Any]:
         "text_detection_model": "PP-OCRv5_server_det",
         "ocr_model": os.getenv("PADDLE_THAI_OCR_MODEL_NAME", "th_PP-OCRv5_mobile_rec"),
         "table_model": os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus"),
-        "vision_embedding_mode": os.getenv("VISION_EMBEDDING_MODE", "stub").strip().lower(),
+        "image_verification_model": "google/siglip-so400m-patch14-384",
     }
 
 
@@ -218,27 +223,34 @@ def runtime_recognize_table_v2(payload: ImagePayload) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(error))
 
 
-@app.post("/runtime/vision/encode")
-def runtime_encode_images(payload: ImagesPayload) -> Dict[str, Any]:
-    temp_paths: List[str] = []
+@app.post("/runtime/siglip/verify-image-category")
+def runtime_verify_image_category(payload: ImageCategoryPayload) -> Dict[str, Any]:
+    temp_path = ""
     try:
-        for image in payload.images:
-            temp_paths.append(_data_url_to_temp_image(image))
-        result = encode_images(temp_paths)
+        temp_path = _data_url_to_temp_image(payload.image)
+        result = verify_image_category(temp_path, payload.image_category)
         return {
             "success": True,
             "data": _json_safe({
-                "vector": result.vector,
-                "dimension": result.dimension,
-                "engine": result.engine,
-                "version": result.version,
+                "score": result.score,
+                "passed": result.passed,
+                "image_category": result.image_category,
+                "image_category_label": result.image_category_label,
+                "prompt": result.prompt,
+                "predicted_category": result.predicted_category,
+                "predicted_label": result.predicted_label,
+                "predicted_prompt": result.predicted_prompt,
+                "target_rank": result.target_rank,
+                "score_margin": result.score_margin,
+                "verification_threshold": result.verification_threshold,
                 "model_name": result.model_name,
-                "input_count": result.input_count,
+                "version": result.version,
                 "device": result.device,
+                "labels": result.labels,
             }),
         }
     except Exception as error:
         raise HTTPException(status_code=503, detail=str(error))
     finally:
-        for temp_path in temp_paths:
+        if temp_path:
             Path(temp_path).unlink(missing_ok=True)

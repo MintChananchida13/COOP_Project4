@@ -122,7 +122,7 @@ export const initialPages: TemplatePage[] = [
     pageName: "Page 1",
     sampleImageUrl: samplePage,
     normalizedImageUrl: samplePage,
-    qdrantPointId: "qdrant_receipt_page_1",
+    layoutSignatureJson: "{}",
     similarityThreshold: 0.78,
     finalConfidenceThreshold: 0.84,
   },

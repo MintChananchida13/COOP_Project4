@@ -1,8 +1,8 @@
 Implement TemplateDetectionService.
 
 Per page:
-- generate embedding
-- Qdrant Top-K
+- generate layout signature
+- layout candidate Top-K
 - verify candidates
 - calculate confidence
 - choose best candidate

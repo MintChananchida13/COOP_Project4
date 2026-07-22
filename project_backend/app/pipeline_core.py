@@ -10,7 +10,7 @@ class PipelineCoreConfig:
     text_detector: str = "pp_ocrv5_server_det"
     ocr_engine: str = "paddle_thai_ocr"
     ocr_model: str = "th_PP-OCRv5_mobile_rec"
-    image_embedding: str = "dinov2"
+    image_verification: str = "siglip_image_category"
     template_matcher: str = "layout_signature_sql"
     alignment_engine: str = "layout_signature_alignment_with_orb_fallback"
     roi_refiner: str = "adaptive_roi"
@@ -24,7 +24,6 @@ class PipelineCoreConfig:
 def get_pipeline_core_config() -> PipelineCoreConfig:
     model_service_url = os.getenv("MODEL_SERVICE_URL", "").strip()
     return PipelineCoreConfig(
-        image_embedding=os.getenv("VISION_EMBEDDING_MODE", "dinov2").strip().lower() or "dinov2",
         model_runtime="model_service" if model_service_url else "local",
         model_service_url=model_service_url,
         ocr_model=os.getenv("PADDLE_THAI_OCR_MODEL_NAME", "th_PP-OCRv5_mobile_rec"),

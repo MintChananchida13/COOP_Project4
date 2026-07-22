@@ -869,7 +869,7 @@ function DraftCandidateCard({
                             </span>
                           </td>
                           <td className="px-3 py-2 font-black text-slate-900">
-                            {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score", "dino_similarity_score"]) || 0))}
+                            {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score", "siglip_similarity_score", "image_category_score"]) || 0))}
                           </td>
                           <td className="px-3 py-2">
                             <DraftStatusPill passed={passed} label={passed ? "PASS" : "FAIL"} />
@@ -1941,11 +1941,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase text-slate-500">
-                    <span className="rounded-full bg-white px-2 py-1">Similarity {formatPrepublishScore(Number(readPrepublishValue(anchor, ["dino_similarity_score", "similarity_score", "score", "field_score"]) || 0))}</span>
-                    <span className="rounded-full bg-white px-2 py-1">Weight {String(readPrepublishValue(anchor, ["weight", "verification_weight"]) || "N/A")}</span>
-                    {readPrepublishValue(anchor, ["embedding_id"]) && (
-                      <span className="rounded-full bg-white px-2 py-1">{String(readPrepublishValue(anchor, ["embedding_id"]))}</span>
+                    <span className="rounded-full bg-white px-2 py-1">SigLIP {formatPrepublishScore(Number(readPrepublishValue(anchor, ["siglip_similarity_score", "image_category_score", "similarity_score", "score", "field_score"]) || 0))}</span>
+                    {readPrepublishValue(anchor, ["image_category_label", "image_category"]) && (
+                      <span className="rounded-full bg-white px-2 py-1">{String(readPrepublishValue(anchor, ["image_category_label", "image_category"]))}</span>
                     )}
+                    <span className="rounded-full bg-white px-2 py-1">Weight {String(readPrepublishValue(anchor, ["weight", "verification_weight"]) || "N/A")}</span>
                   </div>
                 </div>
               );
@@ -1981,7 +1981,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 {overallReady ? "READY TO PUBLISH" : "NOT READY"}
               </h4>
               <p className="mt-2 text-xs font-semibold text-slate-500">
-                Confirm generates the real layout signature, permanent image-anchor embeddings, and publishes only after every operation succeeds.
+                Confirm generates the real layout signature, validates image anchors with SigLIP, and publishes only after every operation succeeds.
               </p>
               {!simulationPassed && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">Run Simulation must pass before publishing.</p>}
               {simulationPassed && !detectionTest && (
@@ -2797,7 +2797,7 @@ function LegacyAdminTemplateTestPage({ templateId }: { templateId: string }) {
           <div>
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Publish Confirmation</h3>
             <p className="mt-2 text-xs font-semibold text-slate-500">
-              Publish is enabled only after the simulation passes. Confirmation creates the real layout signature, stores image anchor embeddings, and marks the template Active.
+              Publish is enabled only after the simulation passes. Confirmation creates the real layout signature, validates image anchors with SigLIP, and marks the template Active.
             </p>
             {!simulation?.separationAnalysis.simulationPassed && (
               <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">

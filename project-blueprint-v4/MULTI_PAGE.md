@@ -6,9 +6,9 @@ Do not merge pages into one image.
 
 ## Upload
 
-Image → one page.
-PDF → many pages.
-Multiple images → many pages.
+Image -> one page.
+PDF -> many pages.
+Multiple images -> many pages.
 
 ## Database
 
@@ -25,9 +25,9 @@ Every ROI must include page context.
 
 Detection runs per page.
 
-## Qdrant
+## Layout Signature
 
-Each Template Page has one Qdrant point.
+Each Template Page has one or more page-level layout signatures.
 
 ## UI
 
@@ -42,6 +42,6 @@ All page-aware screens need:
 Admin manages:
 - Template Pages
 - Fields per page
-- Ignore Regions per page
-- Embeddings per page
+- Verification Anchors per page
+- Layout signatures per page
 - Test Mode per page

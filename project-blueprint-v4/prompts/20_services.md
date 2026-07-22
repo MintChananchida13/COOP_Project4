@@ -3,8 +3,8 @@ Implement service layer from SERVICES.md.
 Create:
 - PageSplitService
 - ImageProcessingService
-- EmbeddingService
-- QdrantService
+- LayoutSignatureService
+- LayoutTemplateMatcher
 - TemplateDetectionService
 - OCRService
 - VerificationService

@@ -1,4 +1,4 @@
-# PROJECT_MEMORY.md
+﻿# PROJECT_MEMORY.md
 
 # Intelligent Document Template Management System
 
@@ -42,7 +42,7 @@ The system should never OCR the entire document unless required.
 
 ## Candidate Retrieval, not Classification
 
-Visual embedding models (such as DINOv2) retrieve candidate templates.
+Visual embedding models (such as SigLIP) retrieve candidate templates.
 
 They are not responsible for final document classification.
 
@@ -137,41 +137,41 @@ The final decision must never rely on one score only.
 
 ```
 Upload Document
-        │
-        ▼
+        â”‚
+        â–¼
 Split into Pages
-        │
-        ▼
+        â”‚
+        â–¼
 Image Preprocessing
-        │
-        ▼
+        â”‚
+        â–¼
 Generate Layout Embedding
-        │
-        ▼
+        â”‚
+        â–¼
 Candidate Retrieval (Top-K)
-        │
-        ▼
+        â”‚
+        â–¼
 Multi-stage Verification
-        │
-        ▼
+        â”‚
+        â–¼
 Page Matching
-        │
-        ▼
+        â”‚
+        â–¼
 Document Alignment
-        │
-        ▼
+        â”‚
+        â–¼
 ROI Projection
-        │
-        ▼
+        â”‚
+        â–¼
 OCR Extraction
-        │
-        ▼
+        â”‚
+        â–¼
 Field Validation
-        │
-        ▼
+        â”‚
+        â–¼
 Confidence Engine
-        │
-        ▼
+        â”‚
+        â–¼
 Result
 ```
 
@@ -200,27 +200,27 @@ Workflow:
 
 Template
 
-↓
+â†“
 
 Page Matching
 
-↓
+â†“
 
 Alignment
 
-↓
+â†“
 
 ROI Projection
 
-↓
+â†“
 
 OCR
 
-↓
+â†“
 
 Validation
 
-↓
+â†“
 
 Result
 
@@ -230,11 +230,11 @@ Result
 
 User uploads document.
 
-↓
+â†“
 
 System detects template.
 
-↓
+â†“
 
 If confirmed:
 
@@ -245,19 +245,19 @@ If confirmed:
 
 If no template is confirmed:
 
-↓
+â†“
 
 Open Custom OCR Studio.
 
-↓
+â†“
 
 User draws ROI.
 
-↓
+â†“
 
 OCR selected ROI.
 
-↓
+â†“
 
 Optional Template Request.
 
@@ -267,39 +267,39 @@ Optional Template Request.
 
 Template Request
 
-↓
+â†“
 
 Review Request
 
-↓
+â†“
 
 Convert to Template
 
-↓
+â†“
 
 Adjust Sample Pages
 
-↓
+â†“
 
 Create Template Fields
 
-↓
+â†“
 
 Mark Verification Fields
 
-↓
+â†“
 
 Create Ignore Regions
 
-↓
+â†“
 
 Validate Template
 
-↓
+â†“
 
 Generate Embedding
 
-↓
+â†“
 
 Activate Template
 
@@ -309,23 +309,23 @@ Activate Template
 
 Draft
 
-↓
+â†“
 
 Validated
 
-↓
+â†“
 
 Embedding Pending
 
-↓
+â†“
 
 Active
 
-↓
+â†“
 
 Deprecated
 
-↓
+â†“
 
 Archived
 
@@ -398,7 +398,7 @@ The architecture should not depend on one fixed formula.
 
 Candidate Retrieval Failed
 
-↓
+â†“
 
 Open Custom OCR
 
@@ -406,7 +406,7 @@ Open Custom OCR
 
 Verification Failed
 
-↓
+â†“
 
 Try Next Candidate
 
@@ -414,11 +414,11 @@ Try Next Candidate
 
 Alignment Failed
 
-↓
+â†“
 
 Retry
 
-↓
+â†“
 
 Fallback
 
@@ -426,7 +426,7 @@ Fallback
 
 OCR Confidence Low
 
-↓
+â†“
 
 Require Review
 
@@ -434,7 +434,7 @@ Require Review
 
 Validation Failed
 
-↓
+â†“
 
 Return Warning
 
@@ -442,7 +442,7 @@ Return Warning
 
 System Failure
 
-↓
+â†“
 
 Return Clear Error
 
@@ -452,18 +452,17 @@ Return Clear Error
 
 The architecture must support replacing AI modules.
 
-Image Encoder
+Image Verification
 
-- DINOv2
-- DINOv3
+- SigLIP
 - CLIP
 - Future models
 
-Vector Store
+Layout Matching
 
-- Qdrant
-- Milvus
-- FAISS
+- PP-DocLayoutV3 Layout Signature
+- SQLite/PostgreSQL candidate scoring
+- Future indexing layer
 
 OCR
 
@@ -510,19 +509,19 @@ Phase 1
 
 Template Management
 
-✓ Completed
+âœ“ Completed
 
 Phase 2
 
 Embedding Pipeline
 
-✓ Completed
+âœ“ Completed
 
 Phase 3
 
 Candidate Retrieval
 
-✓ Completed
+âœ“ Completed
 
 Phase 4
 

@@ -14,15 +14,14 @@ Architecture is final.
 Do not redesign the system.
 
 Core flow:
-Upload → Split Pages → Preprocess → Image Encoder → Qdrant Top-K → OCR Verification → Confidence → Template Found or Custom OCR.
+Upload -> Split Pages -> Preprocess -> Layout Signature -> Layout Candidate Search -> Verification Anchors -> Confidence -> Template Found or Custom OCR.
 
 Rules:
 - Do not OCR the whole document by default.
 - Store ROI as ratios.
 - Keep ROI page-aware.
-- Verification Fields and Extraction Fields are Template Fields.
-- Ignore Regions are required.
-- Qdrant point represents a Template Page.
+- Verification Anchors and Extraction Fields are separate concepts.
+- Layout signature represents a Template Reference Page.
 - Custom OCR fallback must remain.
 - Admin Test Mode must exist before approval.
 

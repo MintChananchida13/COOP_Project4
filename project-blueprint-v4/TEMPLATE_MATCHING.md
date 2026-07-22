@@ -3,33 +3,30 @@
 ## Step 1: Candidate Retrieval
 
 ```text
-Document Page Embedding
-→ Qdrant Top-K
-→ Candidate Template Pages
+Document Page Layout Signature
+-> Layout Candidate Search
+-> Candidate Template Pages
 ```
 
-## Step 2: OCR Verification
+## Step 2: Verification Anchors
 
-OCR only candidate verification fields.
+Run only candidate verification anchors.
 
 ## Step 3: Confidence
 
 ```text
 final_score =
 layout_score * 0.5
-+ verification_score * 0.4
-+ required_pass_score * 0.1
++ verification_score * 0.5
 ```
 
 ## Step 4: Decision
 
 Accept if:
-- layout_score >= similarity_threshold
-- required verification fields pass
 - final_score >= final_confidence_threshold
 
 Reject otherwise.
 
 ## Important
 
-Qdrant alone does not confirm a template. OCR Verification is required.
+Layout similarity alone does not confirm a template. Verification Anchors provide candidate confirmation.

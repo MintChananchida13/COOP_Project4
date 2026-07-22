@@ -17,13 +17,18 @@ from fastapi import HTTPException
 
 from .alignment_service import AlignmentService
 from .db import connect as connect_db
-from .embedding_service import EmbeddingContextError
 from .image_normalization import ImageNormalizationService
 from .layout_analysis_service import analyze_layout
 from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_to_json
 from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
-from .vision_embedding_adapter import encode_images
+from .siglip_image_verification_adapter import (
+    image_category_threshold,
+    image_category_label,
+    image_category_prompt,
+    normalize_image_category,
+    verify_image_category,
+)
 from .schemas import (
     CustomOcrRequest,
     DocumentUploadRequest,
@@ -44,6 +49,10 @@ from .schemas import (
     TemplateTestRequest,
     TemplateUpdate,
 )
+
+
+class EmbeddingContextError(Exception):
+    pass
 
 
 def _now() -> str:
@@ -78,7 +87,6 @@ def _connect() -> Any:
     _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
     _ensure_embedding_jobs_table(conn)
-    _ensure_verification_anchor_embeddings_table(conn)
     return conn
 
 
@@ -183,6 +191,8 @@ def _ensure_template_field_verification_columns(conn: sqlite3.Connection) -> Non
     }
     if columns and "verification_weight" not in columns:
         conn.execute("ALTER TABLE template_fields ADD COLUMN verification_weight REAL DEFAULT 1.0")
+    if columns and "image_category" not in columns:
+        conn.execute("ALTER TABLE template_fields ADD COLUMN image_category TEXT DEFAULT 'other'")
     conn.commit()
 
 
@@ -193,28 +203,6 @@ def _ensure_template_page_layout_signature_column(conn: sqlite3.Connection) -> N
     }
     if columns and "layout_signature_json" not in columns:
         conn.execute("ALTER TABLE template_pages ADD COLUMN layout_signature_json TEXT")
-    conn.commit()
-
-
-def _ensure_verification_anchor_embeddings_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS verification_anchor_embeddings (
-            id TEXT NOT NULL PRIMARY KEY,
-            template_id TEXT NOT NULL,
-            anchor_id TEXT NOT NULL,
-            embedding_json TEXT NOT NULL,
-            model_version TEXT,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
-            FOREIGN KEY (anchor_id) REFERENCES template_fields(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS verification_anchor_embeddings_anchor_idx ON verification_anchor_embeddings(anchor_id)"
-    )
     conn.commit()
 
 
@@ -329,7 +317,6 @@ def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "page_name": item["page_name"],
         "sample_image_url": item["sample_image_url"],
         "normalized_image_url": item["normalized_image_url"],
-        "qdrant_point_id": item["qdrant_point_id"],
         "layout_signature_json": layout_signature_json,
         "similarity_threshold": item["similarity_threshold"],
         "final_confidence_threshold": item["final_confidence_threshold"],
@@ -364,6 +351,7 @@ def _template_field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "extraction_method": _normalize_extraction_method(item["extraction_method"]),
         "roi_padding": item["roi_padding"],
         "verification_weight": item.get("verification_weight", 1.0),
+        "image_category": item.get("image_category") or "other",
         "sort_order": item["sort_order"],
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -699,42 +687,6 @@ def _template_page_image_source(conn: sqlite3.Connection, template_page_id: str)
     return row["normalized_image_url"] or row["sample_image_url"]
 
 
-def _upsert_image_anchor_embedding(conn: sqlite3.Connection, template_id: str, field_row: sqlite3.Row) -> None:
-    item = _template_field_row_to_api(field_row)
-    if not item["use_for_verification"] or item["data_type"] != "image":
-        conn.execute("DELETE FROM verification_anchor_embeddings WHERE anchor_id = ?", (item["id"],))
-        return
-
-    source = _template_page_image_source(conn, item["template_page_id"])
-    if not source:
-        return
-    crop_path = _storage_root() / "verification_anchor_crops" / template_id / f"{item['id']}.png"
-    cropped = _crop_anchor_roi(source, item["roi"], crop_path, item.get("roi_padding") or 6)
-    if not cropped:
-        return
-    result = encode_images([cropped])
-    embedding_id = f"anchor_emb_{item['id']}"
-    conn.execute(
-        """
-        INSERT INTO verification_anchor_embeddings (
-            id, template_id, anchor_id, embedding_json, model_version, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO UPDATE SET
-            embedding_json = excluded.embedding_json,
-            model_version = excluded.model_version,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (
-            embedding_id,
-            template_id,
-            item["id"],
-            json.dumps(result.vector),
-            result.version,
-        ),
-    )
-
-
 class PageSplitService:
     def create_document_pages(self, document_id: str, payload: DocumentUploadRequest) -> List[Dict[str, Any]]:
         source_pages = payload.pages or [
@@ -762,26 +714,7 @@ class ImageProcessingService:
         return [{**page, "status": "preprocessing_pending"} for page in pages]
 
 
-class ImageEncoderService:
-    def encode_page(self, page_id: str) -> Dict[str, Any]:
-        return {"page_id": page_id, "status": "embedding_pending", "embedding": None}
-
-
-class QdrantService:
-    def upsert_template_page_point(self, template_id: str, page_id: str) -> Dict[str, Any]:
-        return {
-            "template_id": template_id,
-            "template_page_id": page_id,
-            "qdrant_point_id": _stub_id("qdrant_point"),
-            "status": "stubbed",
-        }
-
-
 class EmbeddingService:
-    def __init__(self) -> None:
-        self.encoder = ImageEncoderService()
-        self.qdrant = QdrantService()
-
     def _fetch_template_or_404(self, conn: sqlite3.Connection, template_id: str) -> sqlite3.Row:
         template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
         if template_row is None:
@@ -865,8 +798,7 @@ class EmbeddingService:
                 "page_count": len(generated_pages),
                 "layout_signature_pages": generated_pages,
                 "global_vector_store": "disabled",
-                "qdrant_used_for_global_retrieval": False,
-                "image_anchor_embeddings": "dinov2_optional",
+                "image_anchor_verification": "siglip_image_category",
                 "completed_by": "complete-dev",
             }
             conn.execute(
@@ -930,8 +862,7 @@ class EmbeddingService:
                 "page_count": len(generated_pages),
                 "layout_signature_pages": generated_pages,
                 "global_vector_store": "disabled",
-                "qdrant_used_for_global_retrieval": False,
-                "image_anchor_embeddings": "dinov2_optional",
+                "image_anchor_verification": "siglip_image_category",
             }
             vector_id = f"layout_{template_id}"
         except (EmbeddingContextError, ValueError, RuntimeError) as error:
@@ -1026,10 +957,33 @@ class EmbeddingService:
         }
 
     def generate_for_template_page(self, template_id: str, page_id: str) -> Dict[str, Any]:
+        with _connect() as conn:
+            self._fetch_template_or_404(conn, template_id)
+            page_row = conn.execute(
+                "SELECT * FROM template_pages WHERE id = ? AND template_id = ?",
+                (page_id, template_id),
+            ).fetchone()
+            if page_row is None:
+                raise HTTPException(status_code=404, detail="Template page not found")
+            image_url = page_row["normalized_image_url"] or page_row["sample_image_url"]
+            if not image_url:
+                raise HTTPException(status_code=409, detail="Template page image is unavailable")
+            signature = build_layout_signature(image_url)
+            conn.execute(
+                """
+                UPDATE template_pages
+                SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND template_id = ?
+                """,
+                (signature_to_json(signature), page_id, template_id),
+            )
+            conn.commit()
         return {
-            **self.qdrant.upsert_template_page_point(template_id, page_id),
-            "status": "embedding_generation_stubbed",
+            "template_id": template_id,
+            "template_page_id": page_id,
+            "status": "layout_signature_generated",
             "scope": "template_page",
+            "layout_signature": signature,
         }
 
 
@@ -1051,6 +1005,10 @@ class OCRService:
                 for field in payload.fields
             ],
         }
+
+
+def _siglip_image_threshold(category: Optional[str] = None, default: float = 0.70) -> float:
+    return image_category_threshold(category, default)
 
 
 class VerificationService:
@@ -1175,58 +1133,46 @@ class VerificationService:
             "failure_reason": failure_reason,
         }
 
-    def _load_anchor_embedding(self, anchor_id: str) -> Optional[List[float]]:
-        with _connect() as conn:
-            row = conn.execute(
-                "SELECT embedding_json FROM verification_anchor_embeddings WHERE anchor_id = ? ORDER BY updated_at DESC LIMIT 1",
-                (anchor_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        try:
-            values = json.loads(row["embedding_json"])
-        except (TypeError, json.JSONDecodeError):
-            return None
-        if not isinstance(values, list):
-            return None
-        return [float(value) for value in values if isinstance(value, (int, float))]
-
     def _score_image_anchor(self, field: Dict[str, Any], image_path: str) -> Dict[str, Any]:
-        expected_vector = self._load_anchor_embedding(field["id"])
-        reference_crop_path = _storage_root() / "verification_anchor_crops" / field["template_id"] / f"{field['id']}.png"
-        if not expected_vector:
-            return {
-                "score": 0.0,
-                "passed": False,
-                "failure_reason": "anchor_embedding_missing",
-                "embedding_id": None,
-                "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
-                "current_crop_preview_data_url": None,
-            }
-
         crop_path = _storage_root() / "verification_query_anchor_crops" / field["template_id"] / f"{field['id']}_{uuid4().hex[:8]}.png"
         cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 6)
+        category = normalize_image_category(field.get("image_category"))
         if not cropped:
             return {
                 "score": 0.0,
                 "passed": False,
                 "failure_reason": "roi_crop_failed",
-                "embedding_id": f"anchor_emb_{field['id']}",
-                "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
+                "image_category": category,
+                "image_category_label": image_category_label(category),
+                "image_category_prompt": image_category_prompt(category),
+                "reference_crop_preview_data_url": None,
                 "current_crop_preview_data_url": None,
             }
 
-        result = encode_images([cropped])
-        score = round(float(_cosine_similarity(result.vector, expected_vector)), 4)
+        result = verify_image_category(cropped, category)
+        score = round(float(result.score), 4)
+        threshold = result.verification_threshold
         return {
             "score": score,
-            "passed": score >= 0.75,
-            "failure_reason": "passed" if score >= 0.75 else "below_threshold",
-            "embedding_id": f"anchor_emb_{field['id']}",
+            "passed": result.passed,
+            "failure_reason": "passed" if result.passed else ("wrong_image_category" if result.target_rank != 1 else "below_threshold"),
+            "verification_threshold": round(float(threshold), 4),
             "model_version": result.version,
-            "dino_similarity_score": score,
-            "reference_crop_preview_data_url": _image_path_to_data_url(str(reference_crop_path)),
+            "siglip_similarity_score": score,
+            "image_category_score": score,
+            "image_category": result.image_category,
+            "image_category_label": result.image_category_label,
+            "image_category_prompt": result.prompt,
+            "predicted_image_category": result.predicted_category,
+            "predicted_image_category_label": result.predicted_label,
+            "predicted_image_category_prompt": result.predicted_prompt,
+            "siglip_target_rank": result.target_rank,
+            "siglip_score_margin": result.score_margin,
+            "siglip_labels": result.labels,
+            "reference_crop_preview_data_url": None,
             "current_crop_preview_data_url": _image_path_to_data_url(cropped),
+            "model_name": result.model_name,
+            "device": result.device,
         }
 
     def verify_template(self, template_id: str, page_image_paths: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
@@ -1289,14 +1235,14 @@ class VerificationService:
                         "anchor_type": "image",
                         "verification_method": "image_feature",
                         "page_number": page_number,
-                        "expected_text": None,
+                        "expected_text": image_category_label(field.get("image_category")),
                         "actual_text": "",
                         "normalized_expected": "",
                         "normalized_actual": "",
                         "text_similarity_score": None,
                         "ocr_confidence": None,
                         "field_score": 0.0,
-                        "verification_threshold": 0.75,
+                        "verification_threshold": _siglip_image_threshold(field.get("image_category")),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
                         "passed": False,
@@ -1305,10 +1251,13 @@ class VerificationService:
                         "roi": field["roi"],
                         "roi_padding": field.get("roi_padding") or 6,
                         "weight": float(field.get("verification_weight") or 1.0),
-                        "embedding_id": f"anchor_emb_{field['id']}",
+                        "image_category": normalize_image_category(field.get("image_category")),
+                        "image_category_label": image_category_label(field.get("image_category")),
+                        "image_category_prompt": image_category_prompt(field.get("image_category")),
                         "reference_crop_preview_data_url": None,
                         "current_crop_preview_data_url": None,
-                        "dino_similarity_score": 0.0,
+                        "siglip_similarity_score": 0.0,
+                        "image_category_score": 0.0,
                         "error": f"No query page image available for page {page_number}",
                     }
                 )
@@ -1325,14 +1274,14 @@ class VerificationService:
                         "anchor_type": "image",
                         "verification_method": "image_feature",
                         "page_number": page_number,
-                        "expected_text": None,
-                        "actual_text": "",
-                        "normalized_expected": "",
-                        "normalized_actual": "",
+                        "expected_text": image_match.get("image_category_label"),
+                        "actual_text": image_match.get("predicted_image_category_label", ""),
+                        "normalized_expected": image_match.get("image_category_prompt", ""),
+                        "normalized_actual": image_match.get("predicted_image_category_prompt", ""),
                         "text_similarity_score": None,
                         "ocr_confidence": None,
                         "field_score": image_match["score"],
-                        "verification_threshold": 0.75,
+                        "verification_threshold": image_match.get("verification_threshold", _siglip_image_threshold(image_match.get("image_category"))),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
                         "passed": image_match["passed"],
@@ -1341,10 +1290,21 @@ class VerificationService:
                         "roi": field["roi"],
                         "roi_padding": field.get("roi_padding") or 6,
                         "weight": float(field.get("verification_weight") or 1.0),
-                        "embedding_id": image_match.get("embedding_id"),
                         "reference_crop_preview_data_url": image_match.get("reference_crop_preview_data_url"),
                         "current_crop_preview_data_url": image_match.get("current_crop_preview_data_url"),
-                        "dino_similarity_score": image_match.get("dino_similarity_score", image_match["score"]),
+                        "siglip_similarity_score": image_match.get("siglip_similarity_score", image_match["score"]),
+                        "image_category_score": image_match.get("image_category_score", image_match["score"]),
+                        "image_category": image_match.get("image_category"),
+                        "image_category_label": image_match.get("image_category_label"),
+                        "image_category_prompt": image_match.get("image_category_prompt"),
+                        "predicted_image_category": image_match.get("predicted_image_category"),
+                        "predicted_image_category_label": image_match.get("predicted_image_category_label"),
+                        "predicted_image_category_prompt": image_match.get("predicted_image_category_prompt"),
+                        "siglip_target_rank": image_match.get("siglip_target_rank"),
+                        "siglip_score_margin": image_match.get("siglip_score_margin"),
+                        "siglip_labels": image_match.get("siglip_labels"),
+                        "model_name": image_match.get("model_name"),
+                        "device": image_match.get("device"),
                         "model_version": image_match.get("model_version"),
                         "error": None,
                     }
@@ -2201,6 +2161,8 @@ class TemplateRequestService:
                     value = _normalize_data_type(value)
                 if key == "extraction_method":
                     value = _normalize_extraction_method(value)
+                if key == "image_category":
+                    value = normalize_image_category(value)
                 column_values[column] = value
 
         if payload.roi is not None:
@@ -2552,21 +2514,38 @@ class AdminTemplateService:
             query_crop_path = crop_root / "query" / f"{field_id}_{uuid4().hex[:8]}.png"
             reference_crop = _crop_anchor_roi(reference_source, field["roi"], reference_crop_path, field.get("roi_padding") or 6) if reference_source else None
             query_crop = _crop_anchor_roi(query_source, field["roi"], query_crop_path, field.get("roi_padding") or 6) if query_source else None
-            if reference_crop and query_crop:
-                reference_result = encode_images([reference_crop])
-                query_result = encode_images([query_crop])
-                score = round(float(_cosine_similarity(query_result.vector, reference_result.vector)), 4)
+            category = normalize_image_category(field.get("image_category"))
+            if query_crop:
+                siglip_result = verify_image_category(query_crop, category)
+                score = round(float(siglip_result.score), 4)
+                siglip_threshold = siglip_result.verification_threshold
                 checked_fields.append(
                     {
                         **checked,
+                        "expected_text": siglip_result.image_category_label,
+                        "actual_text": siglip_result.predicted_label,
+                        "normalized_expected": siglip_result.prompt,
+                        "normalized_actual": siglip_result.predicted_prompt,
                         "field_score": score,
                         "score": score,
-                        "passed": score >= 0.75,
-                        "failure_reason": "passed" if score >= 0.75 else "below_threshold",
-                        "embedding_id": f"temp_anchor_emb_{field_id}",
-                        "model_version": query_result.version,
-                        "dino_similarity_score": score,
-                        "temporary_embedding": True,
+                        "verification_threshold": siglip_threshold,
+                        "passed": siglip_result.passed,
+                        "failure_reason": "passed" if siglip_result.passed else ("wrong_image_category" if siglip_result.target_rank != 1 else "below_threshold"),
+                        "model_version": siglip_result.version,
+                        "siglip_similarity_score": score,
+                        "image_category_score": score,
+                        "image_category": siglip_result.image_category,
+                        "image_category_label": siglip_result.image_category_label,
+                        "image_category_prompt": siglip_result.prompt,
+                        "predicted_image_category": siglip_result.predicted_category,
+                        "predicted_image_category_label": siglip_result.predicted_label,
+                        "predicted_image_category_prompt": siglip_result.predicted_prompt,
+                        "siglip_target_rank": siglip_result.target_rank,
+                        "siglip_score_margin": siglip_result.score_margin,
+                        "siglip_labels": siglip_result.labels,
+                        "model_name": siglip_result.model_name,
+                        "device": siglip_result.device,
+                        "temporary_siglip_check": True,
                         "reference_crop_preview_data_url": _image_path_to_data_url(reference_crop),
                         "current_crop_preview_data_url": _image_path_to_data_url(query_crop),
                         "error": None,
@@ -2580,11 +2559,14 @@ class AdminTemplateService:
                         "score": 0.0,
                         "passed": False,
                         "failure_reason": "temporary_anchor_crop_failed",
-                        "embedding_id": f"temp_anchor_emb_{field_id}",
-                        "temporary_embedding": True,
+                        "temporary_siglip_check": True,
                         "reference_crop_preview_data_url": _image_path_to_data_url(reference_crop),
                         "current_crop_preview_data_url": _image_path_to_data_url(query_crop),
-                        "dino_similarity_score": 0.0,
+                        "siglip_similarity_score": 0.0,
+                        "image_category_score": 0.0,
+                        "image_category": category,
+                        "image_category_label": image_category_label(category),
+                        "image_category_prompt": image_category_prompt(category),
                     }
                 )
 
@@ -2862,17 +2844,11 @@ class AdminTemplateService:
                 "UPDATE templates SET status = 'validated', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (template_id,),
             )
-            field_rows = conn.execute("SELECT * FROM template_fields WHERE template_id = ?", (template_id,)).fetchall()
-            for field_row in field_rows:
-                try:
-                    _upsert_image_anchor_embedding(conn, template_id, field_row)
-                except Exception:
-                    pass
             conn.commit()
 
-        embedding_service = EmbeddingService()
-        job_result = embedding_service.create_embedding_job(template_id)
-        completed_result = embedding_service.run_job_dev(job_result["job"]["id"])
+        layout_job_service = EmbeddingService()
+        job_result = layout_job_service.create_embedding_job(template_id)
+        completed_result = layout_job_service.run_job_dev(job_result["job"]["id"])
         return {
             "status": "published",
             "template": completed_result["template"],
@@ -2979,20 +2955,6 @@ class AdminTemplateService:
         template = self.get_template(template_id)
         if template.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Template not found")
-        with _connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM template_fields
-                WHERE template_id = ?
-                  AND use_for_verification = 1
-                  AND data_type = 'image'
-                """,
-                (template_id,),
-            ).fetchall()
-            for row in rows:
-                _upsert_image_anchor_embedding(conn, template_id, row)
-            conn.commit()
         page_paths = self._template_page_image_paths(template_id, template.get("pages") or [])
         verification = VerificationService().verify_template(template_id, page_paths)
         checked_fields = verification.get("checked_fields", [])
@@ -3045,10 +3007,6 @@ class AdminTemplateService:
                     "SELECT COUNT(*) AS count FROM embedding_jobs WHERE template_id = ?",
                     (template_id,),
                 ).fetchone()["count"],
-                "verification_anchor_embeddings": conn.execute(
-                    "SELECT COUNT(*) AS count FROM verification_anchor_embeddings WHERE template_id = ?",
-                    (template_id,),
-                ).fetchone()["count"],
                 "ignore_regions": conn.execute(
                     "SELECT COUNT(*) AS count FROM ignore_regions WHERE template_id = ?",
                     (template_id,),
@@ -3073,7 +3031,6 @@ class AdminTemplateService:
                 (template_id,),
             )
             conn.execute("DELETE FROM embedding_jobs WHERE template_id = ?", (template_id,))
-            conn.execute("DELETE FROM verification_anchor_embeddings WHERE template_id = ?", (template_id,))
             conn.execute("DELETE FROM ignore_regions WHERE template_id = ?", (template_id,))
             conn.execute("DELETE FROM template_fields WHERE template_id = ?", (template_id,))
             conn.execute("DELETE FROM template_pages WHERE template_id = ?", (template_id,))
@@ -3195,7 +3152,7 @@ class AdminTemplateService:
                     data_type, user_selectable, default_selected,
                     use_for_verification, expected_text, match_type,
                     required_for_verification, extraction_method,
-                    anchor_text, regex_pattern, roi_padding, verification_weight, sort_order,
+                    anchor_text, regex_pattern, roi_padding, verification_weight, image_category, sort_order,
                     created_at, updated_at
                 )
                 VALUES (
@@ -3205,7 +3162,7 @@ class AdminTemplateService:
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
-                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
                 """,
@@ -3232,15 +3189,10 @@ class AdminTemplateService:
                     payload.regex_pattern,
                     payload.roi_padding if payload.roi_padding is not None else 0,
                     payload.verification_weight if payload.verification_weight is not None else 1.0,
+                    normalize_image_category(payload.image_category),
                     payload.sort_order,
                 ),
             )
-            field_row = conn.execute("SELECT * FROM template_fields WHERE id = ? AND template_id = ?", (field_id, template_id)).fetchone()
-            if field_row is not None:
-                try:
-                    _upsert_image_anchor_embedding(conn, template_id, field_row)
-                except Exception:
-                    pass
             conn.commit()
         return self.get_template(template_id)
 
@@ -3266,6 +3218,7 @@ class AdminTemplateService:
             "regex_pattern": "regex_pattern",
             "roi_padding": "roi_padding",
             "verification_weight": "verification_weight",
+            "image_category": "image_category",
             "sort_order": "sort_order",
         }
         for key, column in direct_columns.items():
@@ -3297,18 +3250,11 @@ class AdminTemplateService:
                     """,
                     [*column_values.values(), field_id, template_id],
                 )
-                field_row = conn.execute("SELECT * FROM template_fields WHERE id = ? AND template_id = ?", (field_id, template_id)).fetchone()
-                if field_row is not None:
-                    try:
-                        _upsert_image_anchor_embedding(conn, template_id, field_row)
-                    except Exception:
-                        pass
                 conn.commit()
         return self.get_template(template_id)
 
     def delete_template_field(self, template_id: str, field_id: str) -> Dict[str, Any]:
         with _connect() as conn:
-            conn.execute("DELETE FROM verification_anchor_embeddings WHERE anchor_id = ?", (field_id,))
             conn.execute("DELETE FROM template_fields WHERE id = ? AND template_id = ?", (field_id, template_id))
             conn.commit()
         return self.get_template(template_id)

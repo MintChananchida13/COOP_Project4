@@ -24,10 +24,9 @@
 - Create Template manually.
 - Create/manage Template Pages.
 - Adjust sample images.
-- Draw Template Fields per page.
-- Mark Template Fields as Verification Fields.
-- Draw Ignore Regions per page.
-- Generate layout embeddings.
+- Draw Extraction Fields per page.
+- Create Verification Anchors per page.
+- Generate layout signatures.
 - Run Template Test Mode.
 - Approve, reject, disable, duplicate, or delete templates.
 
@@ -35,9 +34,9 @@
 
 - Split PDFs into pages.
 - Preprocess images.
-- Generate layout embeddings.
-- Search Qdrant Top-K.
-- OCR verification fields.
+- Generate layout signatures.
+- Search layout candidates.
+- Run verification anchors.
 - Calculate confidence.
 - Extract selected ROI.
 
@@ -51,4 +50,4 @@
 - Logs for detection failures.
 - Privacy-aware OCR handling.
 - Scalable for many templates.
-- Extensible Image Encoder abstraction.
+- Extensible model adapter abstraction.

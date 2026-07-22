@@ -14,7 +14,6 @@ import {
   fetchTemplateBundle,
   type DetectionCandidate,
   type DetectionDevResult,
-  type DetectionProjectedField,
 } from "../admin/adminApi";
 import { ActionButton, InlineState } from "../shared/ui";
 
@@ -186,24 +185,8 @@ const findDetectionPageCandidate = (detection: DetectionDevResult | null | undef
   );
 };
 
-const readProjectedRoiRatio = (roi: DetectionProjectedField["projectedRoi"] | undefined | null) => {
-  if (!roi) return null;
-  const xRatio = typeof roi.x_ratio === "number" ? roi.x_ratio : null;
-  const yRatio = typeof roi.y_ratio === "number" ? roi.y_ratio : null;
-  const widthRatio = typeof roi.width_ratio === "number" ? roi.width_ratio : null;
-  const heightRatio = typeof roi.height_ratio === "number" ? roi.height_ratio : null;
-  const pageNumber = typeof roi.page_number === "number" ? roi.page_number : 1;
-  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
-  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
-};
-
 const candidateFieldRoi = (field: TemplateField, pageCandidate: DetectionCandidate | null) => {
-  const coordinateSpace = pageCandidate?.roiCoordinateSpace || "template_canvas";
-  if (coordinateSpace !== "template_canvas") {
-    const projected = pageCandidate?.projectedFields?.find((item) => item.fieldId === field.id || item.fieldName === field.fieldName);
-    const projectedRatio = readProjectedRoiRatio(projected?.projectedRoi);
-    if (projectedRatio) return { roi: projectedRatio, source: "projected_roi" };
-  }
+  void pageCandidate;
   return { roi: field.roi, source: "template_roi" };
 };
 
@@ -273,7 +256,7 @@ const buildTemplateCanvasImages = async (sourceImages: string[], detection: Dete
     const pageCandidate =
       page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
       (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null);
-    const extractionSrc = backendPreviewSrc(pageCandidate?.extractionImagePreviewUrl || pageCandidate?.alignedImagePreviewUrl);
+    const extractionSrc = backendPreviewSrc(pageCandidate?.alignedImagePreviewUrl || pageCandidate?.extractionImagePreviewUrl);
     if (!extractionSrc) return sourceImage;
     try {
       return await imageUrlToCanvasSafeSrc(extractionSrc);

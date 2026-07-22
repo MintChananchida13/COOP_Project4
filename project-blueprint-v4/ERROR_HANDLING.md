@@ -14,7 +14,7 @@ Preprocessing:
 - perspective correction failed
 
 Detection:
-- Qdrant unavailable
+- layout matcher unavailable
 - no candidates
 - low similarity
 - required verification failed
@@ -26,11 +26,11 @@ OCR:
 - empty OCR result
 
 Admin:
-- approval without embedding
-- no verification field
+- approval without layout signature
+- no verification anchor
 - invalid ROI
 - missing template page
 
 ## Fallback
 
-If template not found, route to Custom OCR Studio.
+If template is not found, route to Custom OCR Studio.

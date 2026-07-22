@@ -1,24 +1,24 @@
-# Project Blueprint v4 — Production Ready
+# Project Blueprint v4 - Production Ready
 
-This folder is the Source of Truth for the Intelligent Document Template Management System.
+This folder is the source of truth for the Intelligent Document Template Management System.
 
 ## Project Goal
 
-Build a production-ready document OCR platform that detects templates by document layout, verifies with OCR, and extracts only selected ROI fields.
+Build a production-ready document OCR platform that detects templates by document layout, verifies with anchors, and extracts only selected ROI fields.
 
 ## Core Architecture
 
 ```text
 Upload Document
-→ Split into Pages
-→ Image Preprocessing per Page
-→ Image Encoder Embedding per Page
-→ Qdrant Top-K Template Page Search
-→ OCR Verification
-→ Confidence Engine
-→ Template Found?
-   ├─ Yes: Selectable Fields → OCR Selected ROI → Result
-   └─ No: Custom OCR Studio → Draw ROI → OCR → Optional Template Request
+-> Split into Pages
+-> Image Preprocessing per Page
+-> PP-DocLayoutV3 Layout Signature per Page
+-> Layout Candidate Search
+-> Verification Anchors
+-> Confidence Engine
+-> Template Found?
+   -> Yes: Selectable Fields -> OCR Selected ROI -> Result
+   -> No: Custom OCR Studio -> Draw ROI -> OCR -> Optional Template Request
 ```
 
 ## How to Use with Codex

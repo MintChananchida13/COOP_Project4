@@ -136,9 +136,21 @@ const roiTypeToFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
 };
 
 const roiTypeToAnchorFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
-  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", expectedText: "" };
+  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: "other" };
   return { dataType: "text", extractionMethod: "ocr_text" };
 };
+
+const IMAGE_ANCHOR_CATEGORY_OPTIONS = [
+  { value: "company_logo", label: "โลโก้บริษัท" },
+  { value: "official_stamp", label: "ตราประทับ" },
+  { value: "signature", label: "ลายเซ็น" },
+  { value: "qr_code", label: "QR Code" },
+  { value: "barcode", label: "บาร์โค้ด" },
+  { value: "portrait", label: "รูปถ่ายบุคคล" },
+  { value: "government_emblem", label: "ตราครุฑ" },
+  { value: "thailand_symbol", label: "สัญลักษณ์ประเทศไทย" },
+  { value: "other", label: "อื่น ๆ" },
+];
 
 const roiToRatio = (roi: ROI, pageNumber: number, metrics: WorkspaceImageMetrics): RoiRatio => ({
   pageNumber,
@@ -395,7 +407,7 @@ export default function WorkspaceTemplateEditorV2({
 
   const updateAnchorMethod = (anchor: TemplateField, value: string) => {
     if (value === "image_feature") {
-      onUpdateField(anchor.id, { dataType: "image", extractionMethod: "extract_image", expectedText: "" });
+      onUpdateField(anchor.id, { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: anchor.imageCategory || "other" });
     } else {
       onUpdateField(anchor.id, { dataType: "text", extractionMethod: "ocr_text" });
     }
@@ -568,15 +580,7 @@ export default function WorkspaceTemplateEditorV2({
                 </span>
               </div>
               {item.anchorType === "image" && (
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-slate-100 bg-white p-2">
-                    <div className="text-[9px] font-black uppercase text-slate-400">Reference Crop</div>
-                    {item.referenceCropPreviewDataUrl || item.referenceCropPreviewUrl ? (
-                      <img src={item.referenceCropPreviewDataUrl || item.referenceCropPreviewUrl || ""} alt="" className="mt-2 h-24 w-full rounded-md object-contain" />
-                    ) : (
-                      <p className="mt-2 text-[10px] font-semibold text-slate-400">No preview</p>
-                    )}
-                  </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-[160px_1fr]">
                   <div className="rounded-lg border border-slate-100 bg-white p-2">
                     <div className="text-[9px] font-black uppercase text-slate-400">Current Crop</div>
                     {item.currentCropPreviewDataUrl || item.currentCropPreviewUrl ? (
@@ -585,32 +589,57 @@ export default function WorkspaceTemplateEditorV2({
                       <p className="mt-2 text-[10px] font-semibold text-slate-400">No preview</p>
                     )}
                   </div>
+                  <div className="rounded-lg border border-slate-100 bg-white p-2">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <div className="text-[9px] font-black uppercase text-slate-400">Expected</div>
+                        <div className="mt-1 text-sm font-black text-slate-800">{item.imageCategoryLabel || item.expectedText || "N/A"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] font-black uppercase text-slate-400">SigLIP Prediction</div>
+                        <div className="mt-1 text-sm font-black text-slate-800">{item.predictedImageCategoryLabel || item.actualText || "N/A"}</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
               {isTableTestItem(item) && renderTablePreview(item)}
-              {!isTableTestItem(item) && (item.ocrText || item.actualText || item.expectedText) && (
+              {!isTableTestItem(item) && item.anchorType !== "image" && (item.ocrText || item.actualText || item.expectedText) && (
                 <div className="mt-2 space-y-1 font-semibold text-slate-600">
                   {item.expectedText && <p>Expected: {item.expectedText}</p>}
                   {(item.ocrText || item.actualText) && <p>Result: {item.ocrText || item.actualText}</p>}
                 </div>
               )}
               <div className="mt-2 flex flex-wrap gap-1 text-[9px] font-black uppercase">
-                {item.confidence !== null && item.confidence !== undefined && (
+                {item.anchorType !== "image" && item.confidence !== null && item.confidence !== undefined && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">Conf {item.confidence.toFixed(2)}</span>
                 )}
-                {(item.fieldScore !== null && item.fieldScore !== undefined) || (item.score !== null && item.score !== undefined) ? (
+                {item.anchorType !== "image" && ((item.fieldScore !== null && item.fieldScore !== undefined) || (item.score !== null && item.score !== undefined)) ? (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
                     Score {(item.fieldScore ?? item.score ?? 0).toFixed(2)}
                   </span>
                 ) : null}
-                {item.dinoSimilarityScore !== null && item.dinoSimilarityScore !== undefined && (
+                {item.siglipSimilarityScore !== null && item.siglipSimilarityScore !== undefined && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
-                    DINO {item.dinoSimilarityScore.toFixed(2)}
+                    SigLIP {item.siglipSimilarityScore.toFixed(2)}
                   </span>
                 )}
-                {item.embeddingId && (
+                {item.imageCategoryLabel && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
-                    {item.embeddingId}
+                    Expected {item.imageCategoryLabel}
+                  </span>
+                )}
+                {item.predictedImageCategoryLabel && (
+                  <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-700">
+                    Predicted {item.predictedImageCategoryLabel}
+                  </span>
+                )}
+                {item.siglipTargetRank !== null && item.siglipTargetRank !== undefined && (
+                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-700">Rank {item.siglipTargetRank}</span>
+                )}
+                {item.siglipScoreMargin !== null && item.siglipScoreMargin !== undefined && (
+                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-700">
+                    Margin {item.siglipScoreMargin.toFixed(2)}
                   </span>
                 )}
                 {item.failureReason && !item.passed && (
@@ -876,6 +905,25 @@ export default function WorkspaceTemplateEditorV2({
                         <option value="image_feature">Image</option>
                       </select>
                     </label>
+                    {anchorMethod(selectedAnchor) === "image_feature" && (
+                      <label className="space-y-1 block">
+                        <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
+                        <select
+                          className={inputClass}
+                          value={selectedAnchor.imageCategory || "other"}
+                          onChange={(event) => onUpdateField(selectedAnchor.id, { imageCategory: event.target.value })}
+                        >
+                          {IMAGE_ANCHOR_CATEGORY_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
+                          ใช้ SigLIP ตรวจว่า Crop นี้เป็นประเภทภาพที่เลือก ไม่ได้เทียบ embedding กับภาพต้นฉบับ
+                        </p>
+                      </label>
+                    )}
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">ROI Padding</span>
                       <input type="number" min="0" step="1" className={inputClass} value={selectedAnchor.roiPadding ?? 6} onChange={(event) => onUpdateField(selectedAnchor.id, { roiPadding: Number(event.target.value) })} />

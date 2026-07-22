@@ -40,7 +40,6 @@ TABLE_ORDER = [
     "extraction_results",
     "detection_logs",
     "embedding_jobs",
-    "verification_anchor_embeddings",
 ]
 
 

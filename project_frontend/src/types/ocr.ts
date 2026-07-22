@@ -114,7 +114,6 @@ export interface TemplatePage {
   pageName?: string;
   sampleImageUrl?: string;
   normalizedImageUrl?: string;
-  qdrantPointId?: string;
   layoutSignatureJson?: string;
   similarityThreshold: number;
   finalConfidenceThreshold: number;
@@ -138,6 +137,7 @@ export interface TemplateField {
   extractionMethod: string;
   roiPadding?: number;
   verificationWeight?: number;
+  imageCategory?: string;
   sortOrder: number;
 }
 

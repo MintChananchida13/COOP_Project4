@@ -6,9 +6,9 @@
 1. User uploads file.
 2. System splits file into pages.
 3. System preprocesses each page.
-4. System generates page embedding.
-5. System searches Qdrant Top-K.
-6. System OCRs verification fields only.
+4. System generates page layout signature.
+5. System searches layout candidates.
+6. System runs verification anchors only.
 7. System calculates confidence.
 8. System confirms template page.
 9. User selects fields grouped by page.
@@ -47,10 +47,9 @@ Admin reviews and converts ROI to Template Fields.
 2. Create Template.
 3. Create Template Pages.
 4. Adjust each sample page.
-5. Draw Template Fields.
-6. Mark Verification Fields.
-7. Draw Ignore Regions.
-8. Generate embeddings.
-9. Test.
-10. Approve.
+5. Draw Extraction Fields.
+6. Create Verification Anchors.
+7. Generate layout signatures.
+8. Test.
+9. Approve.
 ```

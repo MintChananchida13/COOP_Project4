@@ -8,5 +8,5 @@ Check:
 - multi-page works
 - Custom OCR works
 - Test Mode works
-- Qdrant per template page
+- layout signature per template reference page
 - OCR only selected ROI

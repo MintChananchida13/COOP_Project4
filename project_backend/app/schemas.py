@@ -168,6 +168,7 @@ class TemplateFieldCreate(BaseModel):
     regex_pattern: Optional[str] = None
     roi_padding: Optional[float] = None
     verification_weight: Optional[float] = Field(default=1.0, ge=0)
+    image_category: Optional[str] = None
     sort_order: int = 0
 
 
@@ -189,6 +190,7 @@ class TemplateFieldUpdate(BaseModel):
     regex_pattern: Optional[str] = None
     roi_padding: Optional[float] = None
     verification_weight: Optional[float] = Field(default=None, ge=0)
+    image_category: Optional[str] = None
     sort_order: Optional[int] = None
 
 

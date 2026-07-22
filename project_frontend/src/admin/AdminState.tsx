@@ -231,7 +231,7 @@ export function AdminStateProvider({ children }: { children: ReactNode }) {
   };
 
   const generateEmbedding = (templateId: string, pageId: string) => {
-    setPages((prev) => prev.map((page) => (page.id === pageId ? { ...page, qdrantPointId: `qdrant_${Date.now()}` } : page)));
+    setPages((prev) => prev.map((page) => (page.id === pageId ? { ...page, layoutSignatureJson: "{}" } : page)));
     updateTemplate(templateId, { status: "embedding_generated" });
   };
 

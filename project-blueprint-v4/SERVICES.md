@@ -3,7 +3,7 @@
 ## PageSplitService
 
 - Convert PDF to page images.
-- Create document_pages.
+- Create document pages.
 - Preserve page order.
 - Support multiple image upload.
 
@@ -18,19 +18,19 @@
 - Convert ROI ratio to pixels.
 - Convert ROI pixels to ratio.
 
-## EmbeddingService
+## LayoutSignatureService
 
 - Apply Ignore Regions per page.
 - Generate layout preview.
-- Generate Image Encoder/DINOv2 embedding.
-- Store embedding in Qdrant.
-- Search Qdrant Top-K.
-- Delete/update Qdrant point.
+- Generate PP-DocLayoutV3 layout signature.
+- Store layout signature per template reference/page.
+- Search layout candidates.
+- Regenerate layout signature when a reference page changes.
 
 ## TemplateDetectionService
 
 - Detect template per page.
-- Retrieve candidates.
+- Retrieve layout candidates.
 - Verify candidates.
 - Rank candidates.
 - Return confirmed template/page or not found.
@@ -48,7 +48,8 @@
 - Exact match.
 - Contains match.
 - Fuzzy match.
-- Required field validation.
+- Text anchor validation.
+- Image category validation with SigLIP.
 - Verification score.
 
 ## ConfidenceService
@@ -72,6 +73,6 @@
 - Create template pages.
 - Convert request to template.
 - Validate approval.
-- Generate embeddings.
+- Generate layout signatures.
 - Test template.
 - Approve/reject template.

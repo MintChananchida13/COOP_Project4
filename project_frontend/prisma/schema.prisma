@@ -67,7 +67,6 @@ model TemplatePage {
   pageName                 String?  @map("page_name")
   sampleImageUrl           String?  @map("sample_image_url")
   normalizedImageUrl       String?  @map("normalized_image_url")
-  qdrantPointId            String?  @unique @map("qdrant_point_id")
   layoutSignatureJson      String?  @map("layout_signature_json")
   similarityThreshold      Float?   @map("similarity_threshold")
   finalConfidenceThreshold Float?   @map("final_confidence_threshold")

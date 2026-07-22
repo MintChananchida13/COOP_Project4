@@ -1269,9 +1269,8 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "message": None if matched else "No candidate passed verification and final confidence." if candidates else "No active embedded templates available.",
         "debug": {
             "pipeline_core": PIPELINE_CONFIG.to_debug_dict(),
-            "vector_store_mode": "not_used_for_global_retrieval",
-            "vision_embedding_mode": "not_used_for_global_retrieval",
             "retrieval_engine": "layout_signature",
+            "image_verification_engine": "siglip_image_category",
             "source_type": source_type,
             "input_page_count": len(page_paths),
             "converted_page_count": len(page_paths) if source_type == "pdf" else 0,

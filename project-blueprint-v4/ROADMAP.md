@@ -8,9 +8,9 @@
 - Template Request.
 - Admin Template Editor.
 - Relative ROI.
-- Template Fields.
-- Ignore Regions.
-- Qdrant embeddings.
+- Extraction Fields.
+- Verification Anchors.
+- Layout signatures.
 - OCR Verification.
 - Confidence Engine.
 - Test Mode.

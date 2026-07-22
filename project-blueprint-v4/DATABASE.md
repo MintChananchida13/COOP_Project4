@@ -28,7 +28,7 @@ page_number
 page_name
 sample_image_url
 normalized_image_url
-qdrant_point_id
+layout_signature_json
 similarity_threshold
 final_confidence_threshold
 created_at
@@ -43,39 +43,34 @@ template_id
 template_page_id
 page_number
 field_name
-display_label
 roi_x_ratio
 roi_y_ratio
 roi_width_ratio
 roi_height_ratio
-data_type
-user_selectable
-default_selected
-use_for_verification
-expected_text
-match_type
-required_for_verification
 extraction_method
-anchor_text
-regex_pattern
 roi_padding
 sort_order
 created_at
 updated_at
 ```
 
-## ignore_regions
+## verification_anchors
 
 ```text
 id
 template_id
 template_page_id
 page_number
-field_name
+name
+type
 roi_x_ratio
 roi_y_ratio
 roi_width_ratio
 roi_height_ratio
+roi_padding
+expected_text
+image_category
+sort_order
 created_at
 updated_at
 ```
@@ -87,7 +82,6 @@ id
 requested_by
 request_title
 document_type
-sample_file_url
 request_mode
 status
 user_note
@@ -117,7 +111,6 @@ template_request_id
 template_request_page_id
 page_number
 field_name
-display_label
 roi_x_ratio
 roi_y_ratio
 roi_width_ratio
@@ -166,7 +159,6 @@ document_page_id
 page_number
 template_field_id
 field_name
-display_label
 ocr_text
 ocr_confidence
 roi_preview_url

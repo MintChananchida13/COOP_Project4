@@ -4,8 +4,8 @@ sequenceDiagram
   participant API as Backend API
   participant SPLIT as PageSplitService
   participant IMG as ImageProcessingService
-  participant ENC as ImageEncoderService
-  participant QD as QdrantService
+  participant SIG as LayoutSignatureService
+  participant MATCH as LayoutMatcher
   participant OCR as OCRService
   participant VER as VerificationService
   participant CONF as ConfidenceService
@@ -15,9 +15,9 @@ sequenceDiagram
   API->>SPLIT: Split into pages
   loop each page
     API->>IMG: Preprocess page
-    API->>ENC: Generate embedding
-    API->>QD: Top-K search
-    API->>OCR: OCR verification fields
+    API->>SIG: Generate layout signature
+    API->>MATCH: Top-K layout search
+    API->>OCR: OCR verification anchors
     API->>VER: Verify
     API->>CONF: Calculate confidence
   end

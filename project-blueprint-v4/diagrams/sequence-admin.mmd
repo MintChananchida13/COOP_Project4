@@ -2,16 +2,14 @@ sequenceDiagram
   actor Admin
   participant FE as Admin UI
   participant API as Backend API
-  participant EMB as EmbeddingService
-  participant QD as QdrantService
+  participant SIG as LayoutSignatureService
   participant TEST as TestModeService
 
   Admin->>FE: Create/edit template
-  FE->>API: Save fields and ignore regions
-  Admin->>FE: Generate embeddings
+  FE->>API: Save fields and anchors
+  Admin->>FE: Generate layout signatures
   FE->>API: POST generate-layout-embedding
-  API->>EMB: Encode template pages
-  EMB->>QD: Store page vectors
+  API->>SIG: Build template page signatures
   Admin->>FE: Run Test Mode
   FE->>API: POST /test
   API->>TEST: Run full pipeline

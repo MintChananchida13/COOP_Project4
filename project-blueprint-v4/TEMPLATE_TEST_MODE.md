@@ -14,24 +14,23 @@ Admin tests template before approval.
 
 ```text
 Upload Test File
-→ Split into Pages
-→ Preprocess Each Page
-→ Generate Embedding per Page
-→ Qdrant Top-K per Page
-→ OCR Verification per Page
-→ Confidence per Page
-→ Extraction Preview per Page
+-> Split into Pages
+-> Preprocess Each Page
+-> Generate Layout Signature per Page
+-> Layout Candidate Search per Page
+-> Verification Anchors per Page
+-> Confidence per Page
+-> Extraction Preview per Page
 ```
 
 ## Required Preview Per Page
 
 - Original Image Preview
 - Normalized Image Preview
-- Ignore Region Preview
 - Layout Skeleton Preview
 - Layout Overlay Preview
 - Top-K Candidate Preview
-- OCR Verification Preview
+- Verification Anchor Preview
 - ROI Extraction Preview
 - Final Confidence Preview
 
@@ -50,7 +49,6 @@ Document Confidence: 0.88
 
 - sample page adjustment
 - fields
-- verification settings
-- ignore regions
+- verification anchors
 - thresholds
-- embeddings
+- layout signatures

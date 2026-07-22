@@ -3,9 +3,9 @@ flowchart TD
   FE --> API[Backend API]
   API --> SPLIT[PageSplitService]
   SPLIT --> IMG[ImageProcessingService per Page]
-  IMG --> ENC[Image Encoder / DINOv2]
-  ENC --> QD[Qdrant Template Page Search]
-  QD --> VER[OCR Verification]
+  IMG --> SIG[PP-DocLayoutV3 Layout Signature]
+  SIG --> MATCH[Layout Candidate Search]
+  MATCH --> VER[Verification Anchors]
   VER --> CONF[Confidence Engine]
   CONF --> FOUND{Template Found?}
   FOUND -- Yes --> SELECT[Selectable Fields by Page]

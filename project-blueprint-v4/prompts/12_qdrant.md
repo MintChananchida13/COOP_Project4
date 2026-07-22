@@ -1,11 +1,9 @@
-Implement QdrantService.
+Implement LayoutTemplateMatcher.
 
 Required:
-- create/use collection document_template_layouts
-- upsert template page point
-- delete point
-- search Top-K
-- filter approved templates for user detection
-- allow testing template in Admin Test Mode
+- load template page layout signatures
+- calculate layout similarity
+- return Top-K candidate template pages
+- include debug scores for label count, area distribution, aspect ratio, and spatial features
 
 Stop after this phase.

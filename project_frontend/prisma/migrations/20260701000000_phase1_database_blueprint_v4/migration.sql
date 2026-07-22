@@ -24,7 +24,6 @@ CREATE TABLE "template_pages" (
     "page_name" TEXT,
     "sample_image_url" TEXT,
     "normalized_image_url" TEXT,
-    "qdrant_point_id" TEXT,
     "similarity_threshold" REAL,
     "final_confidence_threshold" REAL,
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -217,9 +216,6 @@ CREATE TABLE "detection_logs" (
 
 -- CreateIndex
 CREATE UNIQUE INDEX "template_pages_template_id_page_number_key" ON "template_pages"("template_id", "page_number");
-
--- CreateIndex
-CREATE UNIQUE INDEX "template_pages_qdrant_point_id_key" ON "template_pages"("qdrant_point_id");
 
 -- CreateIndex
 CREATE INDEX "template_fields_template_page_id_page_number_idx" ON "template_fields"("template_page_id", "page_number");

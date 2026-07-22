@@ -7,7 +7,6 @@ import {
   fetchTemplateBundle,
   type DetectionCandidate,
   type DetectionDevResult,
-  type DetectionProjectedField,
 } from "./adminApi";
 import RoiLayer from "../shared/workspace/RoiLayer";
 import { WorkspaceRoi } from "../shared/workspace/RoiBox";
@@ -48,23 +47,23 @@ const readPreviewValue = (field: Record<string, unknown>, keys: string[]) => {
 };
 const renderVerificationExpected = (field: Record<string, unknown>) => {
   if (!isImageVerificationField(field)) return readText(field.expected_text);
-  const src = readPreviewValue(field, ["reference_crop_preview_data_url", "reference_crop_preview_url"]);
-  if (!src) return <span className="text-slate-400">Reference image unavailable</span>;
   return (
-    <div className="w-32 rounded-lg border border-orange-100 bg-orange-50 p-1.5">
-      <img src={src} alt="Expected anchor reference" className="h-20 w-full rounded bg-white object-contain" />
-      <div className="mt-1 text-[9px] font-black uppercase text-orange-700">Reference</div>
+    <div className="space-y-1 text-xs font-semibold text-slate-700">
+      <div>{readText(field.image_category_label || field.expected_text)}</div>
+      <div className="text-[10px] text-slate-400">{readText(field.image_category_prompt || field.normalized_expected)}</div>
     </div>
   );
 };
 const renderVerificationActual = (field: Record<string, unknown>) => {
   if (!isImageVerificationField(field)) return readText(field.actual_text);
   const src = readPreviewValue(field, ["current_crop_preview_data_url", "current_crop_preview_url"]);
-  if (!src) return <span className="text-slate-400">Test image unavailable</span>;
+  const predictedLabel = field.predicted_image_category_label || field.actual_text;
+  if (!src) return <span className="text-slate-400">{readText(predictedLabel) || "Test image unavailable"}</span>;
   return (
-    <div className="w-32 rounded-lg border border-sky-100 bg-sky-50 p-1.5">
+    <div className="w-36 rounded-lg border border-sky-100 bg-sky-50 p-1.5">
       <img src={src} alt="Actual anchor crop" className="h-20 w-full rounded bg-white object-contain" />
-      <div className="mt-1 text-[9px] font-black uppercase text-sky-700">Current</div>
+      <div className="mt-1 text-[9px] font-black uppercase text-sky-700">SigLIP Prediction</div>
+      <div className="mt-0.5 text-[10px] font-bold text-slate-700">{readText(predictedLabel)}</div>
     </div>
   );
 };
@@ -167,16 +166,6 @@ const roiRatioFromRecord = (roi: Record<string, unknown> | null | undefined) => 
   const widthRatio = readRatioNumber(roi, "width_ratio", "widthRatio");
   const heightRatio = readRatioNumber(roi, "height_ratio", "heightRatio");
   const pageNumber = readRatioNumber(roi, "page_number", "pageNumber") || 1;
-  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
-  return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
-};
-const projectedRoiRatio = (roi: DetectionProjectedField["projectedRoi"] | undefined | null) => {
-  if (!roi) return null;
-  const xRatio = typeof roi.x_ratio === "number" ? roi.x_ratio : null;
-  const yRatio = typeof roi.y_ratio === "number" ? roi.y_ratio : null;
-  const widthRatio = typeof roi.width_ratio === "number" ? roi.width_ratio : null;
-  const heightRatio = typeof roi.height_ratio === "number" ? roi.height_ratio : null;
-  const pageNumber = typeof roi.page_number === "number" ? roi.page_number : 1;
   if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null || widthRatio <= 0 || heightRatio <= 0) return null;
   return { pageNumber, xRatio, yRatio, widthRatio, heightRatio };
 };
@@ -284,7 +273,7 @@ export default function AdminDetectionLabPage() {
   );
   const extractionImagePreviewUrl = previewSrc(alignmentCandidate?.extractionImagePreviewUrl);
   const extractionTest = alignmentCandidate?.extractionTest || null;
-  const userFlowWorkspaceImageUrl = extractionImagePreviewUrl || alignedImagePreviewUrl || originalImagePreviewUrl;
+  const userFlowWorkspaceImageUrl = alignedImagePreviewUrl || extractionImagePreviewUrl || originalImagePreviewUrl;
   const effectivePreviewUrl =
     currentAlignmentStatus === "aligned" && alignedImagePreviewUrl ? alignedImagePreviewUrl : normalizedImagePreviewUrl || currentPage?.imagePreviewDataUrl || "";
   const effectivePreviewLabel = currentAlignmentStatus === "aligned" && alignedImagePreviewUrl ? "Aligned Image" : "Normalized Image";
@@ -300,11 +289,11 @@ export default function AdminDetectionLabPage() {
             : "Pipeline image";
   const roiPreviewImageUrl = userFlowWorkspaceImageUrl;
   const roiPreviewLabel = "Template Workspace Image";
-  const roiPreviewBadge = extractionImagePreviewUrl
-    ? "Same as user flow: final extraction image selected by the backend"
-    : alignedImagePreviewUrl
-      ? "Same as user flow fallback: aligned image was available but extraction image was missing"
-      : "Same as user flow fallback: uploaded/source image";
+  const roiPreviewBadge = alignedImagePreviewUrl
+    ? "Aligned/template canvas with original Template ROI"
+    : extractionImagePreviewUrl
+      ? "Fallback image with original Template ROI"
+      : "Source image fallback with original Template ROI";
   const currentVerificationFields = verificationFields(verificationCandidate);
   const isPdf = file?.type === "application/pdf";
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
@@ -349,39 +338,8 @@ export default function AdminDetectionLabPage() {
     },
   ];
   const currentPageNumber = currentPage?.pageIndex || 1;
-  const selectedRoiCoordinateSpace = alignmentCandidate?.roiCoordinateSpace || "template_canvas";
-  const templateFieldById = new Map(workspaceTemplateFields.map((field) => [field.id, field]));
-  const projectedCandidateRoiFields =
-    selectedRoiCoordinateSpace !== "template_canvas"
-      ? (alignmentCandidate?.projectedFields || [])
-          .filter((field) => (field.pageNumber || currentPageNumber) === currentPageNumber)
-          .map((field, index) => {
-            const sourceField = field.fieldId ? templateFieldById.get(field.fieldId) : undefined;
-            const roi = projectedRoiRatio(field.projectedRoi);
-            if (!roi) return null;
-            return {
-              fieldId: field.fieldId || sourceField?.id || `projected-${index}`,
-              fieldName: field.fieldName || sourceField?.fieldName || `field_${index + 1}`,
-              displayLabel: field.displayLabel || sourceField?.displayLabel || field.fieldName || `Field ${index + 1}`,
-              pageNumber: roi.pageNumber || currentPageNumber,
-              dataType: sourceField?.dataType || "text",
-              extractionMethod:
-                sourceField?.extractionMethod ||
-                (sourceField?.dataType === "table" ? "table_recognition_v2" : sourceField?.dataType === "image" ? "extract_image" : "paddle_thai_ocr"),
-              source: "projected_fields",
-              roi: {
-                page_number: roi.pageNumber,
-                x_ratio: roi.xRatio,
-                y_ratio: roi.yRatio,
-                width_ratio: roi.widthRatio,
-                height_ratio: roi.heightRatio,
-              },
-            };
-          })
-          .filter((field): field is NonNullable<typeof field> => Boolean(field))
-      : [];
   const bundleTemplateRoiFields =
-    selectedRoiCoordinateSpace === "template_canvas" && workspaceTemplateId === candidateTemplateId
+    workspaceTemplateId === candidateTemplateId
       ? workspaceTemplateFields
           .filter((field) => !field.useForVerification && field.pageNumber === currentPageNumber)
           .sort(
@@ -416,17 +374,13 @@ export default function AdminDetectionLabPage() {
           }))
       : [];
   const templateRoiFields =
-    projectedCandidateRoiFields.length > 0
-      ? projectedCandidateRoiFields
-      : bundleTemplateRoiFields.length > 0
-        ? bundleTemplateRoiFields
-        : alignmentCandidate?.templateRois || [];
+    bundleTemplateRoiFields.length > 0
+      ? bundleTemplateRoiFields
+      : alignmentCandidate?.templateRois || [];
   const roiSourceLabel =
-    projectedCandidateRoiFields.length > 0
-      ? "Projected ROI from backend"
-      : bundleTemplateRoiFields.length > 0
-        ? "Template Bundle ROI (same as user flow)"
-        : "Detection response template ROI fallback";
+    bundleTemplateRoiFields.length > 0
+      ? "Original Template ROI from Template Bundle"
+      : "Original Template ROI from Detection response";
   const roiPreviewItems = templateRoiFields
     .map((field, index) => {
       const ratio = roiRatioFromRecord(field.roi || null);
@@ -1001,27 +955,32 @@ export default function AdminDetectionLabPage() {
                               </span>
                             </div>
                             {isImageVerificationField(field) && (
-                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                <div>
-                                  <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-orange-700">Expected Reference</div>
-                                  {renderVerificationExpected(field)}
-                                </div>
-                                <div>
-                                  <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-sky-700">Actual Crop</div>
-                                  {renderVerificationActual(field)}
-                                </div>
+                              <div className="mt-3">
+                                <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-sky-700">Current Crop / SigLIP Prediction</div>
+                                {renderVerificationActual(field)}
                               </div>
                             )}
-                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                              <DebugMetric label="Normalized Expected" value={readText(field.normalized_expected)} />
-                              <DebugMetric label="Normalized Actual" value={readText(field.normalized_actual)} />
-                              <DebugMetric label="Text Similarity" value={readScore(field.text_similarity_score)} />
-                              <DebugMetric label="OCR Confidence" value={readScore(field.ocr_confidence)} />
-                              <DebugMetric label="DINO Similarity" value={readScore(field.dino_similarity_score)} />
-                              <DebugMetric label="Threshold" value={readScore(field.verification_threshold)} />
-                              <DebugMetric label="Field Score" value={readScore(field.field_score ?? field.score)} />
-                              <DebugMetric label="Reason" value={readText(field.failure_reason || field.error)} />
-                            </div>
+                            {isImageVerificationField(field) ? (
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                <DebugMetric label="SigLIP Score" value={readScore(field.siglip_similarity_score ?? field.image_category_score)} />
+                                <DebugMetric label="Expected Category" value={readText(field.image_category_label || field.image_category)} />
+                                <DebugMetric label="Predicted Category" value={readText(field.predicted_image_category_label || field.actual_text)} />
+                                <DebugMetric label="Target Rank" value={readValue(field.siglip_target_rank)} />
+                                <DebugMetric label="Score Margin" value={readScore(field.siglip_score_margin)} />
+                                <DebugMetric label="Threshold" value={readScore(field.verification_threshold)} />
+                                <DebugMetric label="Reason" value={readText(field.failure_reason || field.error)} />
+                              </div>
+                            ) : (
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                <DebugMetric label="Normalized Expected" value={readText(field.normalized_expected)} />
+                                <DebugMetric label="Normalized Actual" value={readText(field.normalized_actual)} />
+                                <DebugMetric label="Text Similarity" value={readScore(field.text_similarity_score)} />
+                                <DebugMetric label="OCR Confidence" value={readScore(field.ocr_confidence)} />
+                                <DebugMetric label="Threshold" value={readScore(field.verification_threshold)} />
+                                <DebugMetric label="Field Score" value={readScore(field.field_score ?? field.score)} />
+                                <DebugMetric label="Reason" value={readText(field.failure_reason || field.error)} />
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

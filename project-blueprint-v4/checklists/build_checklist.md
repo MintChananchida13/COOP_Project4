@@ -5,6 +5,6 @@
 - [ ] Frontend builds.
 - [ ] Backend builds.
 - [ ] Database migrations run.
-- [ ] Qdrant connection works.
+- [ ] Layout signature generation works.
 - [ ] OCR service health check works.
 - [ ] Upload flow works.

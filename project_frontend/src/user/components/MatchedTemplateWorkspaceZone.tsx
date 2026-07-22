@@ -257,7 +257,7 @@ export default function MatchedTemplateWorkspaceZone({
                 className="ui-button-text ui-stable-action-lg flex w-full items-center justify-center gap-2 rounded-xl bg-[#0052cc] px-6 py-3.5 text-white shadow-md transition-all hover:bg-[#0043a4] disabled:bg-slate-400 disabled:text-white/80"
               >
                 <Cpu size={14} className={props.isLoading ? "animate-spin" : ""} />
-                {props.isLoading ? "กำลังอ่านข้อมูล..." : `อ่านข้อมูลที่เลือก (${enabledCount})`}
+                {props.isLoading ? "กำลังอ่านข้อมูล..." : `อ่านข้อมูลที่เลือก`}
               </button>
             </div>
           </div>

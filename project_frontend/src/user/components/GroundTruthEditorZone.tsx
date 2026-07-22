@@ -892,6 +892,7 @@ export default function GroundTruthEditorZone({
   const tableSectionRef = useRef<HTMLElement | null>(null);
   const imageSectionRef = useRef<HTMLElement | null>(null);
   const fieldResultRefs = useRef<Map<number, HTMLDivElement | HTMLElement>>(new Map());
+  const pendingScrollResultIdRef = useRef<number | null>(null);
 
 
   const currentPageRois = useMemo(() => {
@@ -905,6 +906,12 @@ export default function GroundTruthEditorZone({
 
   const getRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
     return currentPageRois.find(roi => roi.id === result.roiId) || currentPageRois.find(roi => roi.fieldName === result.fieldName);
+  };
+
+  const getAnyPageRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
+    const resultPageIndex = result.pageIndex !== undefined ? Number(result.pageIndex) : 0;
+    return rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.id === result.roiId)
+      || rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.fieldName === result.fieldName);
   };
 
   const currentPageResultGroups = useMemo(() => {
@@ -921,7 +928,24 @@ export default function GroundTruthEditorZone({
     };
   }, [currentPageOcrResults, currentPageRois]);
 
-  const editedFieldCount = useMemo(() => {
+  const allPageResultGroups = useMemo(() => {
+    const typedResults = ocrResults.map((res) => {
+      const matchedRoi = getAnyPageRoiForResult(res);
+      const fieldType = (matchedRoi?.type || res.type || "text") as DisplayFieldType;
+      const pageIndex = res.pageIndex !== undefined ? Number(res.pageIndex) : matchedRoi?.pageIndex !== undefined ? Number(matchedRoi.pageIndex) : 0;
+      return { res, matchedRoi, fieldType, pageIndex };
+    });
+
+    return {
+      all: typedResults,
+      text: typedResults.filter(item => item.fieldType === "text"),
+      table: typedResults.filter(item => item.fieldType === "table"),
+      image: typedResults.filter(item => item.fieldType === "image"),
+      edited: typedResults.filter(item => getRawOcrText(item.res) !== item.res.extractedText),
+    };
+  }, [ocrResults, rois]);
+
+  const currentPageEditedFieldCount = useMemo(() => {
     return currentPageOcrResults.filter((res) => getRawOcrText(res) !== res.extractedText).length;
   }, [currentPageOcrResults]);
 
@@ -940,33 +964,43 @@ export default function GroundTruthEditorZone({
     container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   };
 
-  const scrollToResult = (resultId: number) => {
+  const scrollToResult = (resultId: number, pageIndex = currentImageIndex) => {
     setActiveFieldId(resultId);
+    if (pageIndex !== currentImageIndex && onImageIndexChange) {
+      pendingScrollResultIdRef.current = resultId;
+      onImageIndexChange(pageIndex);
+      return;
+    }
     window.setTimeout(() => {
       scrollInsideResultsPanel(fieldResultRefs.current.get(resultId) || null, "center");
     }, 0);
   };
 
+  useEffect(() => {
+    const pendingResultId = pendingScrollResultIdRef.current;
+    if (pendingResultId === null) return;
+    if (!currentPageOcrResults.some(result => result.id === pendingResultId)) return;
+    pendingScrollResultIdRef.current = null;
+    window.setTimeout(() => {
+      scrollInsideResultsPanel(fieldResultRefs.current.get(pendingResultId) || null, "center");
+    }, 0);
+  }, [currentImageIndex, currentPageOcrResults]);
+
   const scrollToSection = (type: "all" | DisplayFieldType | "edited") => {
     if (type === "all") {
-      const firstResult = currentPageOcrResults[0];
-      if (firstResult) scrollToResult(firstResult.id);
+      const firstResult = allPageResultGroups.all[0];
+      if (firstResult) scrollToResult(firstResult.res.id, firstResult.pageIndex);
       return;
     }
 
     if (type === "edited") {
       const firstEdited = currentPageOcrResults.find((res) => getRawOcrText(res) !== res.extractedText);
-      if (firstEdited) scrollToResult(firstEdited.id);
+      if (firstEdited) scrollToResult(firstEdited.id, currentImageIndex);
       return;
     }
 
-    const target =
-      type === "text"
-        ? textSectionRef.current
-        : type === "table"
-          ? tableSectionRef.current
-          : imageSectionRef.current;
-    scrollInsideResultsPanel(target, "start");
+    const firstResult = currentPageResultGroups[type][0];
+    if (firstResult) scrollToResult(firstResult.res.id, currentImageIndex);
   };
 
   const handlePrevImage = () => {
@@ -1232,7 +1266,7 @@ export default function GroundTruthEditorZone({
           </div>
 
           <div ref={resultsPanelRef} className="overflow-y-auto flex-1 min-h-0 bg-slate-50/40 p-4">
-            {currentPageOcrResults.length > 0 && (
+            {ocrResults.length > 0 && (
               <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
                 <button
                   type="button"
@@ -1240,7 +1274,8 @@ export default function GroundTruthEditorZone({
                   className="rounded-xl border border-slate-200 bg-white p-2.5 text-left transition-all hover:border-indigo-200 hover:bg-indigo-50/40 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                 >
                   <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">ทั้งหมด</p>
-                  <p className="mt-0.5 text-base font-black tabular-nums text-slate-900">{currentPageOcrResults.length}</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-slate-900">{allPageResultGroups.all.length}</p>
+                  <p className="mt-0.5 text-[9px] font-bold text-slate-400">ทุกหน้า</p>
                 </button>
                 <button
                   type="button"
@@ -1250,6 +1285,7 @@ export default function GroundTruthEditorZone({
                 >
                   <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">ข้อความ</p>
                   <p className="mt-0.5 text-base font-black tabular-nums text-slate-900">{currentPageResultGroups.text.length}</p>
+                  <p className="mt-0.5 text-[9px] font-bold text-slate-400">หน้า {currentImageIndex + 1}/{imageList.length}</p>
                 </button>
                 <button
                   type="button"
@@ -1259,6 +1295,7 @@ export default function GroundTruthEditorZone({
                 >
                   <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">ตาราง</p>
                   <p className="mt-0.5 text-base font-black tabular-nums text-indigo-900">{currentPageResultGroups.table.length}</p>
+                  <p className="mt-0.5 text-[9px] font-bold text-indigo-400">หน้า {currentImageIndex + 1}/{imageList.length}</p>
                 </button>
                 <button
                   type="button"
@@ -1268,15 +1305,17 @@ export default function GroundTruthEditorZone({
                 >
                   <p className="text-[10px] font-black uppercase tracking-wider text-sky-600">รูปภาพ</p>
                   <p className="mt-0.5 text-base font-black tabular-nums text-sky-900">{currentPageResultGroups.image.length}</p>
+                  <p className="mt-0.5 text-[9px] font-bold text-sky-500">หน้า {currentImageIndex + 1}/{imageList.length}</p>
                 </button>
                 <button
                   type="button"
                   onClick={() => scrollToSection("edited")}
-                  disabled={editedFieldCount === 0}
+                  disabled={currentPageEditedFieldCount === 0}
                   className="rounded-xl border border-amber-100 bg-amber-50/70 p-2.5 text-left transition-all hover:border-amber-300 hover:bg-amber-100/70 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <p className="text-[10px] font-black uppercase tracking-wider text-amber-600">แก้ไขแล้ว</p>
-                  <p className="mt-0.5 text-base font-black tabular-nums text-amber-900">{editedFieldCount}</p>
+                  <p className="mt-0.5 text-base font-black tabular-nums text-amber-900">{currentPageEditedFieldCount}</p>
+                  <p className="mt-0.5 text-[9px] font-bold text-amber-500">หน้า {currentImageIndex + 1}/{imageList.length}</p>
                 </button>
               </div>
             )}

@@ -4,7 +4,7 @@ Create/update schema for:
 - templates
 - template_pages
 - template_fields
-- ignore_regions
+- verification_anchors
 - template_requests
 - template_request_pages
 - requested_fields
@@ -16,7 +16,7 @@ Create/update schema for:
 Rules:
 - ROI fields are ratios.
 - ROI includes page_number.
-- No verification_fields table.
-- No extraction_fields table.
-- Qdrant point belongs to template_page.
+- Extraction Fields and Verification Anchors are separate concepts.
+- Layout signature belongs to template page/reference.
+
 Stop after this phase.

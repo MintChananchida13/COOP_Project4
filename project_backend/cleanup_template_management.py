@@ -1,8 +1,8 @@
 """
 Development cleanup for removed Admin Template Management.
 
-This script deletes old template data, local template artifacts, and Qdrant
-collections used by the removed template retrieval implementation.
+This script deletes old template data and local template artifacts used by
+removed development implementations.
 """
 
 import shutil
@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DB = ROOT / "project_frontend" / "prisma" / "dev.db"
-BACKEND_QDRANT_DIR = ROOT / "project_backend" / "qdrant_local_db"
 BACKEND_CROPS_DIR = ROOT / "project_backend" / "cropped_rois"
 FRONTEND_CROPS_DIR = ROOT / "project_frontend" / "cropped_rois"
 POSTGRES_CLEANUP_SQL = ROOT / "project_backend" / "cleanup_template_management.sql"
@@ -82,7 +81,6 @@ def run_postgres_cleanup() -> None:
 
 def main() -> None:
     drop_sqlite_tables(FRONTEND_DB)
-    remove_path(BACKEND_QDRANT_DIR)
     remove_path(BACKEND_CROPS_DIR)
     remove_path(FRONTEND_CROPS_DIR)
     run_postgres_cleanup()

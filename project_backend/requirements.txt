@@ -1,4 +1,4 @@
-fastapi==0.110.0
+﻿fastapi==0.110.0
 uvicorn==0.28.0
 pydantic==2.6.4
 opencv-python-headless==4.9.0.80
@@ -7,7 +7,7 @@ numpy
 pymupdf
 psycopg2-binary>=2.9.9
 
-# Optional DINOv2 embedding mode:
+# Optional SigLIP embedding mode:
 torch
 transformers
 accelerate
@@ -18,8 +18,3 @@ safetensors
 # If installation fails on Python 3.13, use a Python version supported by PaddlePaddle/PaddleOCR.
 paddleocr>=3.0.0,<4.0.0
 paddlepaddle
-
-# Optional Phase 6.9 Qdrant vector store:
-# pip install qdrant-client
-# docker run -p 6333:6333 qdrant/qdrant
-# VECTOR_STORE_MODE=qdrant QDRANT_URL=http://localhost:6333 QDRANT_COLLECTION=templates

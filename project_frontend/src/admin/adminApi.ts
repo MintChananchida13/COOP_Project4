@@ -48,7 +48,6 @@ interface ApiTemplatePage {
   page_name?: string | null;
   sample_image_url?: string | null;
   normalized_image_url?: string | null;
-  qdrant_point_id?: string | null;
   layout_signature_json?: string | null;
   similarity_threshold?: number | null;
   final_confidence_threshold?: number | null;
@@ -78,6 +77,7 @@ interface ApiTemplateField {
   extraction_method: string;
   roi_padding?: number | null;
   verification_weight?: number | null;
+  image_category?: string | null;
   sort_order: number;
 }
 
@@ -401,8 +401,15 @@ export interface TemplateStepTestItem {
   failureReason?: string | null;
   anchorType?: string | null;
   verificationMethod?: string | null;
-  embeddingId?: string | null;
-  dinoSimilarityScore?: number | null;
+  siglipSimilarityScore?: number | null;
+  imageCategory?: string | null;
+  imageCategoryLabel?: string | null;
+  imageCategoryPrompt?: string | null;
+  predictedImageCategory?: string | null;
+  predictedImageCategoryLabel?: string | null;
+  predictedImageCategoryPrompt?: string | null;
+  siglipTargetRank?: number | null;
+  siglipScoreMargin?: number | null;
   referenceCropPreviewDataUrl?: string | null;
   currentCropPreviewDataUrl?: string | null;
   referenceCropPreviewUrl?: string | null;
@@ -684,7 +691,6 @@ const mapApiTemplatePage = (page: ApiTemplatePage): TemplatePage => ({
   pageName: page.page_name || undefined,
   sampleImageUrl: page.sample_image_url || undefined,
   normalizedImageUrl: page.normalized_image_url || undefined,
-  qdrantPointId: page.qdrant_point_id || undefined,
   layoutSignatureJson: page.layout_signature_json || undefined,
   similarityThreshold: page.similarity_threshold ?? 0.75,
   finalConfidenceThreshold: page.final_confidence_threshold ?? 0.8,
@@ -714,6 +720,7 @@ const mapApiTemplateField = (field: ApiTemplateField): TemplateField => ({
   extractionMethod: normalizeExtractionMethod(field.extraction_method),
   roiPadding: field.roi_padding ?? undefined,
   verificationWeight: field.verification_weight ?? undefined,
+  imageCategory: field.image_category || undefined,
   sortOrder: field.sort_order,
 });
 
@@ -1309,8 +1316,15 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   failureReason: (item.failure_reason as string | null | undefined) ?? null,
   anchorType: (item.anchor_type as string | null | undefined) ?? null,
   verificationMethod: (item.verification_method as string | null | undefined) ?? null,
-  embeddingId: (item.embedding_id as string | null | undefined) ?? null,
-  dinoSimilarityScore: typeof item.dino_similarity_score === "number" ? item.dino_similarity_score : null,
+  siglipSimilarityScore: typeof item.siglip_similarity_score === "number" ? item.siglip_similarity_score : null,
+  imageCategory: (item.image_category as string | null | undefined) ?? null,
+  imageCategoryLabel: (item.image_category_label as string | null | undefined) ?? null,
+  imageCategoryPrompt: (item.image_category_prompt as string | null | undefined) ?? null,
+  predictedImageCategory: (item.predicted_image_category as string | null | undefined) ?? null,
+  predictedImageCategoryLabel: (item.predicted_image_category_label as string | null | undefined) ?? null,
+  predictedImageCategoryPrompt: (item.predicted_image_category_prompt as string | null | undefined) ?? null,
+  siglipTargetRank: typeof item.siglip_target_rank === "number" ? item.siglip_target_rank : null,
+  siglipScoreMargin: typeof item.siglip_score_margin === "number" ? item.siglip_score_margin : null,
   referenceCropPreviewDataUrl: (item.reference_crop_preview_data_url as string | null | undefined) ?? null,
   currentCropPreviewDataUrl: (item.current_crop_preview_data_url as string | null | undefined) ?? null,
   referenceCropPreviewUrl: (item.reference_crop_preview_url as string | null | undefined) ?? null,
@@ -1412,6 +1426,7 @@ const fieldToApiPayload = (
   extraction_method: normalizeExtractionMethod(field.extractionMethod),
   roi_padding: field.roiPadding ?? 0,
   verification_weight: field.verificationWeight ?? 1,
+  image_category: field.imageCategory,
   sort_order: field.sortOrder ?? 0,
 });
 
@@ -1444,6 +1459,7 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
     extraction_method: patch.extractionMethod ? normalizeExtractionMethod(patch.extractionMethod) : undefined,
     roi_padding: patch.roiPadding,
     verification_weight: patch.verificationWeight,
+    image_category: patch.imageCategory,
     sort_order: patch.sortOrder,
   };
 

@@ -1,9 +1,9 @@
 flowchart TD
   A[Upload Document] --> B[Split into Pages]
   B --> C[Preprocess Each Page]
-  C --> D[Generate Page Embedding]
-  D --> E[Qdrant Top-K per Page]
-  E --> F[OCR Verification]
+  C --> D[Generate Layout Signature]
+  D --> E[Layout Candidate Search per Page]
+  E --> F[Verification Anchors]
   F --> G{Template Confirmed?}
   G -- Yes --> H[Show Selectable Fields by Page]
   H --> I[OCR Selected ROI]

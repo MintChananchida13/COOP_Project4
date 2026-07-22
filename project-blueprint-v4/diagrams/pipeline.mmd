@@ -1,7 +1,6 @@
 flowchart LR
-  A[Normalized Page] --> B[Image Encoder]
-  B --> C[Embedding]
-  C --> D[Qdrant Top-K]
-  D --> E[OCR Verification]
-  E --> F[Confidence Engine]
-  F --> G[Confirmed Template Page]
+  A[Normalized Page] --> B[Layout Signature]
+  B --> C[Layout Candidate Search]
+  C --> D[Verification Anchors]
+  D --> E[Confidence Engine]
+  E --> F[Confirmed Template Page]

@@ -115,11 +115,14 @@ def remote_recognize_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     )
 
 
-def remote_encode_images(image_paths: List[str]) -> Optional[Dict[str, Any]]:
+def remote_verify_image_category(image_path: str, image_category: str) -> Optional[Dict[str, Any]]:
     if not _runtime_url():
         return None
     return _post(
-        "/runtime/vision/encode",
-        {"images": [_path_to_data_url(image_path) for image_path in image_paths]},
+        "/runtime/siglip/verify-image-category",
+        {
+            "image": _path_to_data_url(image_path),
+            "image_category": image_category,
+        },
         timeout=240.0,
     )
