@@ -171,6 +171,10 @@ const roiRatioFromRecord = (roi: Record<string, unknown> | null | undefined) => 
 };
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 11));
+const isPdfFile = (file?: File | null) => {
+  if (!file) return false;
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+};
 
 export default function AdminDetectionLabPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -185,7 +189,7 @@ export default function AdminDetectionLabPage() {
   const [workspaceTemplateFields, setWorkspaceTemplateFields] = useState<TemplateField[]>([]);
   const [workspaceTemplateError, setWorkspaceTemplateError] = useState("");
   useEffect(() => {
-    if (!file || file.type === "application/pdf") {
+    if (!file || isPdfFile(file)) {
       setPreviewUrl("");
       return;
     }
@@ -209,12 +213,14 @@ export default function AdminDetectionLabPage() {
   const layoutScoreGapQuality = separationQuality(layoutScoreGap);
   const finalTemplateId = bestCandidate?.templateId || currentPage?.bestCandidate?.templateId || null;
   const pageDisplayCandidate =
-    finalTemplateId && currentPage
-      ? currentPage.candidates.find((candidate) => candidate.templateId === finalTemplateId) ||
-        (currentPage.bestCandidate?.templateId === finalTemplateId ? currentPage.bestCandidate : null) ||
-        bestCandidate ||
-        null
-      : currentPage?.bestCandidate || sortedVisibleCandidates[0] || bestCandidate || null;
+    currentPage?.bestCandidate ||
+    sortedVisibleCandidates.find((candidate) => candidate.finalPassed) ||
+    sortedVisibleCandidates[0] ||
+    (currentPage && finalTemplateId
+      ? currentPage.candidates.find((candidate) => candidate.templateId === finalTemplateId) || null
+      : null) ||
+    bestCandidate ||
+    null;
   const verificationCandidate = pageDisplayCandidate;
   const alignmentCandidate = pageDisplayCandidate;
   const candidateTemplateId = alignmentCandidate?.templateId || null;
@@ -267,7 +273,12 @@ export default function AdminDetectionLabPage() {
   const orbExecuted = currentAlignmentDebug.orb_executed === true;
   const homographyFound = currentAlignmentDebug.homography_found === true || currentAlignment.homography_found === true;
   const alignedImagePreviewUrl = previewSrc(alignmentCandidate?.alignedImagePreviewUrl || (currentAlignment.aligned_image_preview_url as string | null | undefined));
-  const originalImagePreviewUrl = previewSrc(currentPage?.imagePreviewDataUrl || previewUrl);
+  const originalImagePreviewUrl = previewSrc(
+    currentPage?.originalImagePreviewUrl ||
+      (currentPage?.debug?.original_image_preview_url as string | undefined) ||
+      currentPage?.imagePreviewDataUrl ||
+      previewUrl
+  );
   const normalizedImagePreviewUrl = previewSrc(
     currentPage?.normalizedImagePreviewUrl || (currentPage?.debug?.normalized_image_preview_url as string | undefined) || currentPage?.imagePreviewDataUrl
   );
@@ -295,7 +306,7 @@ export default function AdminDetectionLabPage() {
       ? "Fallback image with original Template ROI"
       : "Source image fallback with original Template ROI";
   const currentVerificationFields = verificationFields(verificationCandidate);
-  const isPdf = file?.type === "application/pdf";
+  const isPdf = isPdfFile(file);
   const sourceType = typeof result?.debug?.source_type === "string" ? result.debug.source_type : isPdf ? "pdf" : "image";
   const convertedPageCount = typeof result?.debug?.converted_page_count === "number" ? result.debug.converted_page_count : 0;
   const inputPageCount = typeof result?.debug?.input_page_count === "number" ? result.debug.input_page_count : pages.length;
@@ -338,10 +349,16 @@ export default function AdminDetectionLabPage() {
     },
   ];
   const currentPageNumber = currentPage?.pageIndex || 1;
+  const matchedTemplatePageNumber =
+    typeof alignmentCandidate?.templatePageNumber === "number"
+      ? alignmentCandidate.templatePageNumber
+      : typeof alignmentCandidate?.metadata?.matched_layout_reference_page_number === "number"
+        ? alignmentCandidate.metadata.matched_layout_reference_page_number
+        : currentPageNumber;
   const bundleTemplateRoiFields =
     workspaceTemplateId === candidateTemplateId
       ? workspaceTemplateFields
-          .filter((field) => !field.useForVerification && field.pageNumber === currentPageNumber)
+          .filter((field) => !field.useForVerification && field.pageNumber === matchedTemplatePageNumber)
           .sort(
             (left, right) =>
               left.pageNumber - right.pageNumber ||
@@ -403,7 +420,7 @@ export default function AdminDetectionLabPage() {
           y: box.y,
           width: box.width,
           height: box.height,
-          pageIndex: Math.max(0, (field.pageNumber || currentPage?.pageIndex || 1) - 1),
+          pageIndex: Math.max(0, currentPageNumber - 1),
           type: field.dataType === "table" ? "table" : field.dataType === "image" ? "image" : "text",
           kind: "extraction_field",
           enabled: true,
@@ -449,6 +466,7 @@ export default function AdminDetectionLabPage() {
     }
     const isSupported =
       nextFile.type === "application/pdf" ||
+      nextFile.name.toLowerCase().endsWith(".pdf") ||
       nextFile.type === "image/png" ||
       nextFile.type === "image/jpeg" ||
       nextFile.type === "image/webp";
@@ -666,6 +684,7 @@ export default function AdminDetectionLabPage() {
                   <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page Results</h3>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
                     {sourceType === "pdf" ? "PDF pages converted to images" : "Uploaded image"} · Page {currentPage?.pageIndex || 1} of {pages.length}
+                    {alignmentCandidate ? ` · Template page ${matchedTemplatePageNumber}` : ""}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -962,12 +981,14 @@ export default function AdminDetectionLabPage() {
                             )}
                             {isImageVerificationField(field) ? (
                               <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                <DebugMetric label="SigLIP Score" value={readScore(field.siglip_similarity_score ?? field.image_category_score)} />
+                                <DebugMetric label="Score" value={readScore(field.evidence_score ?? field.field_score ?? field.score)} />
+                                <DebugMetric label="Pair Score (debug)" value={readScore(field.raw_pair_score)} />
+                                <DebugMetric label="Relative Score (debug)" value={`${readScore(field.relative_percentage)}%`} />
                                 <DebugMetric label="Expected Category" value={readText(field.image_category_label || field.image_category)} />
                                 <DebugMetric label="Predicted Category" value={readText(field.predicted_image_category_label || field.actual_text)} />
                                 <DebugMetric label="Target Rank" value={readValue(field.siglip_target_rank)} />
-                                <DebugMetric label="Score Margin" value={readScore(field.siglip_score_margin)} />
-                                <DebugMetric label="Threshold" value={readScore(field.verification_threshold)} />
+                                <DebugMetric label="Status" value={readText(field.status)} />
+                                <DebugMetric label="Scoring" value={readText(field.scoring_version)} />
                                 <DebugMetric label="Reason" value={readText(field.failure_reason || field.error)} />
                               </div>
                             ) : (

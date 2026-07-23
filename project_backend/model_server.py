@@ -4,7 +4,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -16,6 +16,7 @@ from pydantic import BaseModel
 os.environ.setdefault("MODEL_RUNTIME_ROLE", "service")
 
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
+from app.image_verification_category_service import DEFAULT_IMAGE_VERIFICATION_CATEGORIES
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.siglip_image_verification_adapter import verify_image_category
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
@@ -33,6 +34,7 @@ class ImagesPayload(BaseModel):
 class ImageCategoryPayload(BaseModel):
     image: str
     image_category: str
+    categories: Optional[List[Dict[str, Any]]] = None
 
 
 app = FastAPI(title="OCR Model Runtime Service")
@@ -108,11 +110,12 @@ def _warmup() -> Dict[str, Any]:
     if os.getenv("SIGLIP_IMAGE_VERIFICATION_WARMUP", "true").strip().lower() not in {"0", "false", "no", "off"}:
         temp_path = _data_url_to_temp_image("data:image/png;base64," + base64.b64encode(cv2.imencode(".png", sample)[1].tobytes()).decode("ascii"))
         try:
-            siglip = verify_image_category(temp_path, "other")
+            warmup_categories = [item for item in DEFAULT_IMAGE_VERIFICATION_CATEGORIES if item["value"] == "qr_code"]
+            siglip = verify_image_category(temp_path, "qr_code", warmup_categories)
             siglip_summary = {
                 "enabled": True,
                 "model": siglip.model_name,
-                "version": siglip.version,
+                "version": siglip.scoring_version,
                 "device": siglip.device,
                 "category_count": len(siglip.labels),
             }
@@ -228,12 +231,16 @@ def runtime_verify_image_category(payload: ImageCategoryPayload) -> Dict[str, An
     temp_path = ""
     try:
         temp_path = _data_url_to_temp_image(payload.image)
-        result = verify_image_category(temp_path, payload.image_category)
+        categories = payload.categories if payload.categories is not None else DEFAULT_IMAGE_VERIFICATION_CATEGORIES
+        result = verify_image_category(temp_path, payload.image_category, categories)
         return {
             "success": True,
             "data": _json_safe({
                 "score": result.score,
+                "evidence_score": result.evidence_score,
                 "passed": result.passed,
+                "status": result.status,
+                "failure_reason": result.failure_reason,
                 "image_category": result.image_category,
                 "image_category_label": result.image_category_label,
                 "prompt": result.prompt,
@@ -242,11 +249,19 @@ def runtime_verify_image_category(payload: ImageCategoryPayload) -> Dict[str, An
                 "predicted_prompt": result.predicted_prompt,
                 "target_rank": result.target_rank,
                 "score_margin": result.score_margin,
+                "raw_logit": result.raw_logit,
+                "raw_pair_score": result.raw_pair_score,
+                "relative_percentage": result.relative_percentage,
                 "verification_threshold": result.verification_threshold,
+                "margin_threshold": result.margin_threshold,
                 "model_name": result.model_name,
+                "model_version": result.model_version,
+                "scoring_version": result.scoring_version,
                 "version": result.version,
                 "device": result.device,
                 "labels": result.labels,
+                "ui_percentages": result.ui_percentages,
+                "error": result.error,
             }),
         }
     except Exception as error:

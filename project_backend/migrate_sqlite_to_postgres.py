@@ -28,6 +28,7 @@ DEFAULT_SQLITE_PATH = ROOT / "project_frontend" / "prisma" / "dev.db"
 
 TABLE_ORDER = [
     "User",
+    "image_verification_categories",
     "templates",
     "template_pages",
     "template_fields",

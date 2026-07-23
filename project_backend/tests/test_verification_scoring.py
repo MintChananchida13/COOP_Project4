@@ -33,6 +33,23 @@ class VerificationScoringTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertGreaterEqual(result["text_similarity_score"], 0.90)
         self.assertGreaterEqual(result["field_score"], 0.90)
+        self.assertEqual(result["text_match_score"], result["field_score"])
+
+    def test_text_score_stays_continuous_when_below_threshold(self) -> None:
+        result = self.service._score_match(
+            expected_text="PASSPORT",
+            actual_text="assport",
+            match_type="contains",
+            ocr_confidence=0.69,
+            verification_threshold=0.95,
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertGreater(result["field_score"], 0.0)
+        self.assertLess(result["field_score"], 1.0)
+        self.assertEqual(result["score"], result["field_score"])
+        self.assertEqual(result["text_match_score"], result["field_score"])
+        self.assertEqual(result["failure_reason"], "below_threshold")
 
 
 if __name__ == "__main__":

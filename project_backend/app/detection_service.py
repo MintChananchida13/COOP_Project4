@@ -672,11 +672,19 @@ def _candidate_from_result(
         return None
 
     matching_weights = decision_service.matching_weights(template, metadata)
+    template_page_number = int(
+        metadata.get("matched_layout_reference_page_number")
+        or metadata.get("page_number")
+        or page_index
+        or 1
+    )
+    candidate_page_image_paths = dict(page_image_paths)
+    candidate_page_image_paths[template_page_number] = query_image_path
 
     # 1) Verify จาก normalized ก่อน
     normalized_verification = verification_service.verify_template(
         template_id,
-        page_image_paths,
+        candidate_page_image_paths,
     ) if template_id else {
         "status": "failed",
         "passed": False,
@@ -706,14 +714,14 @@ def _candidate_from_result(
     if should_try_alignment:
         alignment = _align_candidate_page(
             template_id,
-            page_index,
+            template_page_number,
             query_image_path,
             normalization_info,
         )
 
         if alignment.get("alignment_status") == "aligned" and alignment.get("aligned_image_path"):
-            aligned_page_image_paths = dict(page_image_paths)
-            aligned_page_image_paths[page_index] = str(alignment["aligned_image_path"])
+            aligned_page_image_paths = dict(candidate_page_image_paths)
+            aligned_page_image_paths[template_page_number] = str(alignment["aligned_image_path"])
 
             aligned_verification = verification_service.verify_template(
                 template_id,
@@ -813,12 +821,12 @@ def _candidate_from_result(
     }
     if template_id and decision["final_passed"]:
         template_fields = _fetch_template_fields(template_id)
-        template_rois = _template_roi_items(template_fields, page_index)
+        template_rois = _template_roi_items(template_fields, template_page_number)
         if roi_coordinate_space == "template_canvas":
             projection = _template_canvas_projection(
                 template_id,
                 template_fields,
-                page_index,
+                template_page_number,
                 alignment_status,
                 alignment_reason,
                 extraction_image_path,
@@ -826,8 +834,8 @@ def _candidate_from_result(
             )
         else:
             try:
-                projection_page_paths = dict(page_image_paths)
-                projection_page_paths[page_index] = extraction_image_path
+                projection_page_paths = dict(candidate_page_image_paths)
+                projection_page_paths[template_page_number] = extraction_image_path
                 projection = projection_service.project(
                     template_id,
                     template_fields,
@@ -858,15 +866,16 @@ def _candidate_from_result(
             template_fields,
             projection.get("projected_fields", []),
             extraction_image_path,
-            page_index,
+            template_page_number,
             str(projection.get("roi_coordinate_space") or roi_coordinate_space),
         )
 
-    template_image_source = _fetch_template_page_image_source(template_id, page_index) if template_id else None
+    template_image_source = _fetch_template_page_image_source(template_id, template_page_number) if template_id else None
     first_template_roi = template_rois[0].get("roi") if template_rois else None
     first_projected_field = (projection.get("projected_fields") or [None])[0]
     coordinate_debug = {
-        "page_number": page_index,
+        "query_page_index": page_index,
+        "template_page_number": template_page_number,
         "roi_coordinate_space": projection.get("roi_coordinate_space") or roi_coordinate_space,
         "verification_source_used": verification_source_used,
         "template_image_size": _image_source_dimensions(template_image_source),
@@ -878,7 +887,7 @@ def _candidate_from_result(
     }
     print(
         "[detection-coordinate] "
-        f"template={template_id} page={page_index} space={coordinate_debug['roi_coordinate_space']} "
+        f"template={template_id} query_page={page_index} template_page={template_page_number} space={coordinate_debug['roi_coordinate_space']} "
         f"source={verification_source_used} template_size={coordinate_debug['template_image_size']} "
         f"extraction_size={coordinate_debug['extraction_image_size']} first_template_roi={first_template_roi}"
     )
@@ -899,6 +908,8 @@ def _candidate_from_result(
         "model_name": metadata.get("model_name") or metadata.get("layout_signature_version"),
         "vector_store_engine": metadata.get("vector_store_engine") or "layout-signature",
         "retrieval_engine": metadata.get("retrieval_engine") or "layout_signature",
+        "query_page_index": page_index,
+        "template_page_number": template_page_number,
 
         "alignment_status": alignment_status,
         "alignment": alignment,
@@ -1188,6 +1199,8 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "model_name": best_page_cand["model_name"],
             "vector_store_engine": best_page_cand["vector_store_engine"],
             "retrieval_engine": best_page_cand.get("retrieval_engine"),
+            "query_page_index": best_page_cand.get("query_page_index"),
+            "template_page_number": best_page_cand.get("template_page_number"),
             "alignment_status": best_page_cand.get("alignment_status"),
             "alignment": best_page_cand.get("alignment"),
             "alignment_debug": best_page_cand.get("alignment_debug"),

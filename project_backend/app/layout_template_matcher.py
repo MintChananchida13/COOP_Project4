@@ -113,17 +113,15 @@ def search_layout_candidates(
             FROM template_pages tp
             JOIN templates t ON t.id = tp.template_id
             WHERE tp.layout_signature_json IS NOT NULL
-              AND tp.page_number = ?
               AND NOT EXISTS (
                   SELECT 1
                   FROM template_layout_references tlr
                   WHERE tlr.template_id = t.id
                     AND tlr.layout_signature_json IS NOT NULL
                     AND tlr.review_status = 'approved'
-              )
+            )
             ORDER BY t.updated_at DESC, tp.page_number ASC
-            """,
-            (page_number,),
+            """
         ).fetchall()
 
         rows = [*reference_rows, *fallback_rows]
@@ -143,9 +141,9 @@ def search_layout_candidates(
             "template_status": row["template_status"],
             "page_count": row["page_count"],
             "template_page_id": row["template_page_id"],
-            "page_number": 1,
             "matched_layout_reference_id": row["layout_reference_id"],
             "matched_layout_reference_page_number": row["page_number"],
+            "page_number": row["page_number"],
             "matched_layout_reference_image_url": row["layout_reference_image_url"],
             "matched_layout_reference_source": row["layout_reference_source"],
             "matched_layout_reference_is_canonical": bool(row["layout_reference_is_canonical"]),

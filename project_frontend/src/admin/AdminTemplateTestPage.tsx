@@ -663,6 +663,19 @@ const readPrepublishValue = (record: Record<string, unknown>, keys: string[]) =>
   return null;
 };
 
+const isImageVerificationRecord = (record: Record<string, unknown>) => {
+  const typeText = String(readPrepublishValue(record, ["anchor_type", "verification_method", "match_type", "type"]) || "").toLowerCase();
+  return typeText.includes("image");
+};
+
+const readVerificationRecordScore = (record: Record<string, unknown>) => {
+  const value = isImageVerificationRecord(record)
+    ? readPrepublishValue(record, ["evidence_score", "image_category_score", "field_score", "score"])
+    : readPrepublishValue(record, ["text_match_score", "field_score", "score", "similarity_score", "text_similarity_score"]);
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
+
 function DraftSummaryCard({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
@@ -869,7 +882,7 @@ function DraftCandidateCard({
                             </span>
                           </td>
                           <td className="px-3 py-2 font-black text-slate-900">
-                            {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score", "siglip_similarity_score", "image_category_score"]) || 0))}
+                            {formatPrepublishScore(readVerificationRecordScore(detail))}
                           </td>
                           <td className="px-3 py-2">
                             <DraftStatusPill passed={passed} label={passed ? "PASS" : "FAIL"} />
@@ -903,7 +916,7 @@ function DraftCandidateCard({
                     </div>
                     <div className="mt-1 flex flex-wrap gap-2 text-[10px]">
                       <span>{String(readPrepublishValue(detail, ["anchor_type", "verification_method", "match_type"]) || "verification")}</span>
-                      <span>Score {formatPrepublishScore(Number(readPrepublishValue(detail, ["score", "field_score", "similarity_score"]) || 0))}</span>
+                      <span>Score {formatPrepublishScore(readVerificationRecordScore(detail))}</span>
                       <span>Weight {String(readPrepublishValue(detail, ["weight", "verification_weight"]) || "N/A")}</span>
                       <span>{String(readPrepublishValue(detail, ["status", "decision", "failure_reason"]) || "N/A")}</span>
                     </div>
@@ -1238,7 +1251,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       const result = await confirmTemplatePublish(templateId);
       setTemplate(result.template);
       setPublishConfirmed(true);
-      setStatusMessage("Layout signature generated, image anchors stored, and template published as Active.");
+      setStatusMessage("Layout signature generated, image anchors validated with SigLIP, and template published as Active.");
     } catch (error) {
       console.warn("Template publish failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
@@ -1941,7 +1954,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase text-slate-500">
-                    <span className="rounded-full bg-white px-2 py-1">SigLIP {formatPrepublishScore(Number(readPrepublishValue(anchor, ["siglip_similarity_score", "image_category_score", "similarity_score", "score", "field_score"]) || 0))}</span>
+                    <span className="rounded-full bg-white px-2 py-1">Score {formatPrepublishScore(readVerificationRecordScore(anchor))}</span>
                     {readPrepublishValue(anchor, ["image_category_label", "image_category"]) && (
                       <span className="rounded-full bg-white px-2 py-1">{String(readPrepublishValue(anchor, ["image_category_label", "image_category"]))}</span>
                     )}

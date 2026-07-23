@@ -1,5 +1,7 @@
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import cv2
 
@@ -10,6 +12,10 @@ from .table_recognition_v2_adapter import TableRecognitionV2UnavailableError, re
 
 class OcrUnavailableError(RuntimeError):
     pass
+
+
+TEXT_DETECTION_MIN_BOX_SIZE = 2
+TEXT_DETECTION_LINE_Y_TOLERANCE = 0.6
 
 
 def _load_image():
@@ -46,7 +52,7 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
     crop = image.crop((x, y, right, bottom))
     try:
         bgr_crop = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR)
-        result = run_paddle_thai_ocr(bgr_crop)
+        result = recognize_text_crop_with_detection(bgr_crop)
     except PaddleThaiOcrUnavailableError as error:
         raise OcrUnavailableError(str(error)) from error
 
@@ -57,7 +63,172 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
         "segments": result.get("segments") or [],
         "engine": result.get("engine") or "paddle_thai_ocr",
         "model": result.get("model"),
+        "text_detection": result.get("text_detection"),
     }
+
+
+def _temp_png_from_crop(bgr_crop) -> str:
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp.close()
+    if not cv2.imwrite(temp.name, bgr_crop):
+        raise OcrUnavailableError("Failed to prepare ROI crop for text detection.")
+    return temp.name
+
+
+def _region_to_box(region: Dict[str, Any], image_width: int, image_height: int) -> Dict[str, int] | None:
+    bbox = region.get("bbox") or {}
+    x = max(0, min(image_width - 1, int(round(float(bbox.get("x") or 0)))))
+    y = max(0, min(image_height - 1, int(round(float(bbox.get("y") or 0)))))
+    width = max(0, int(round(float(bbox.get("width") or 0))))
+    height = max(0, int(round(float(bbox.get("height") or 0))))
+    right = min(image_width, x + width)
+    bottom = min(image_height, y + height)
+    width = right - x
+    height = bottom - y
+    if width < TEXT_DETECTION_MIN_BOX_SIZE or height < TEXT_DETECTION_MIN_BOX_SIZE:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _sort_boxes_reading_order(boxes: List[Dict[str, int]]) -> List[Dict[str, int]]:
+    if not boxes:
+        return []
+    ordered = sorted(boxes, key=lambda box: (box["y"] + box["height"] / 2, box["x"]))
+    lines: List[Dict[str, Any]] = []
+    for box in ordered:
+        center_y = box["y"] + box["height"] / 2
+        matched_line = None
+        for line in lines:
+            tolerance = max(8.0, max(float(line["height"]), float(box["height"])) * TEXT_DETECTION_LINE_Y_TOLERANCE)
+            if abs(center_y - float(line["center_y"])) <= tolerance:
+                matched_line = line
+                break
+        if matched_line is None:
+            lines.append({"center_y": center_y, "height": box["height"], "boxes": [box]})
+        else:
+            matched_line["boxes"].append(box)
+            matched_line["center_y"] = sum(item["y"] + item["height"] / 2 for item in matched_line["boxes"]) / len(matched_line["boxes"])
+            matched_line["height"] = max(item["height"] for item in matched_line["boxes"])
+
+    sorted_boxes: List[Dict[str, int]] = []
+    for line in sorted(lines, key=lambda item: item["center_y"]):
+        sorted_boxes.extend(sorted(line["boxes"], key=lambda box: box["x"]))
+    return sorted_boxes
+
+
+def _detect_boxes_in_crop(bgr_crop) -> Tuple[List[Dict[str, int]], Dict[str, Any]]:
+    image_height, image_width = bgr_crop.shape[:2]
+    temp_path = ""
+    try:
+        temp_path = _temp_png_from_crop(bgr_crop)
+        detection = detect_text_boxes(temp_path)
+        boxes = [
+            box
+            for box in (_region_to_box(region, image_width, image_height) for region in detection.get("regions", []))
+            if box is not None
+        ]
+        return _sort_boxes_reading_order(boxes), {
+            "engine": "paddle_text_detection",
+            "model": detection.get("model"),
+            "box_count": len(boxes),
+            "fallback_used": False,
+            "error": None,
+        }
+    except (LayoutAnalysisUnavailableError, RuntimeError, OcrUnavailableError, ValueError) as error:
+        return [], {
+            "engine": "paddle_text_detection",
+            "model": "PP-OCRv5_server_det",
+            "box_count": 0,
+            "fallback_used": True,
+            "error": str(error),
+        }
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+def _crop_box(bgr_crop, box: Dict[str, int]):
+    y1 = box["y"]
+    x1 = box["x"]
+    y2 = min(bgr_crop.shape[0], y1 + box["height"])
+    x2 = min(bgr_crop.shape[1], x1 + box["width"])
+    return bgr_crop[y1:y2, x1:x2]
+
+
+def _recognize_text_crops_with_detection(text_items: List[Tuple[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    if not text_items:
+        return {}
+
+    recognition_crops = []
+    recognition_meta: List[Dict[str, Any]] = []
+    per_key_detection: Dict[str, Dict[str, Any]] = {}
+
+    for key, bgr_crop in text_items:
+        boxes, detection_meta = _detect_boxes_in_crop(bgr_crop)
+        if boxes:
+            per_key_detection[key] = detection_meta
+            for box in boxes:
+                sub_crop = _crop_box(bgr_crop, box)
+                if sub_crop.size == 0:
+                    continue
+                recognition_crops.append(sub_crop)
+                recognition_meta.append({"key": key, "bbox": box, "fallback": False})
+        else:
+            fallback_meta = {**detection_meta, "fallback_used": True}
+            per_key_detection[key] = fallback_meta
+            recognition_crops.append(bgr_crop)
+            recognition_meta.append(
+                {
+                    "key": key,
+                    "bbox": {"x": 0, "y": 0, "width": int(bgr_crop.shape[1]), "height": int(bgr_crop.shape[0])},
+                    "fallback": True,
+                }
+            )
+
+    batch_results = run_paddle_thai_ocr_batch(recognition_crops)
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for meta, result in zip(recognition_meta, batch_results):
+        text = str(result.get("text") or "").strip()
+        confidence = round(float(result.get("confidence") or 0.0), 4)
+        grouped.setdefault(meta["key"], []).append(
+            {
+                "text": text,
+                "confidence": confidence,
+                "bbox": meta["bbox"],
+                "engine": result.get("engine") or "paddle_thai_ocr",
+                "model": result.get("model"),
+                "fallback": meta["fallback"],
+                "error": result.get("error"),
+            }
+        )
+
+    results: Dict[str, Dict[str, Any]] = {}
+    for key, _ in text_items:
+        segments = grouped.get(key, [])
+        text_segments = [segment["text"] for segment in segments if segment.get("text")]
+        confidences = [float(segment.get("confidence") or 0.0) for segment in segments]
+        detection_meta = per_key_detection.get(key, {})
+        fallback_used = bool(detection_meta.get("fallback_used")) or any(segment.get("fallback") for segment in segments)
+        results[key] = {
+            "text": " ".join(text_segments).strip(),
+            "confidence": round(sum(confidences) / len(confidences), 4) if confidences else 0.0,
+            "preprocessing": "paddle_text_detection_then_recognition"
+            if not fallback_used
+            else "paddle_text_detection_fallback_then_recognition",
+            "segments": segments,
+            "engine": "paddle_text_detection+paddle_thai_ocr",
+            "model": segments[0].get("model") if segments else None,
+            "text_detection": detection_meta,
+            "error": detection_meta.get("error") if fallback_used else None,
+        }
+    return results
+
+
+def recognize_text_crop_with_detection(bgr_crop) -> Dict[str, Any]:
+    return _recognize_text_crops_with_detection([("roi", bgr_crop)])["roi"]
 
 
 def _crop_roi_from_image(image, roi: Dict[str, Any]):
@@ -94,8 +265,7 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
         raise ValueError(f"Verification image not found: {image_path}")
 
     image = Image.open(path).convert("RGB")
-    crops = []
-    keys = []
+    text_items: List[Tuple[str, Any]] = []
     failed: Dict[str, Dict[str, Any]] = {}
     for index, item in enumerate(roi_items):
         key = str(item.get("id") or item.get("field_id") or index)
@@ -118,8 +288,7 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
                     "error": table_result.get("error"),
                 }
             else:
-                crops.append(bgr_crop)
-                keys.append(key)
+                text_items.append((key, bgr_crop))
         except TableRecognitionV2UnavailableError as error:
             failed[key] = {
                 "text": "",
@@ -142,22 +311,23 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
             }
 
     results: Dict[str, Dict[str, Any]] = dict(failed)
-    if not crops:
+    if not text_items:
         return results
 
     try:
-        batch_results = run_paddle_thai_ocr_batch(crops)
+        text_results = _recognize_text_crops_with_detection(text_items)
     except PaddleThaiOcrUnavailableError as error:
         raise OcrUnavailableError(str(error)) from error
 
-    for key, result in zip(keys, batch_results):
+    for key, result in text_results.items():
         results[key] = {
             "text": str(result.get("text") or ""),
             "confidence": round(float(result.get("confidence") or 0.0), 4),
-            "preprocessing": result.get("preprocessing") or "paddle_text_recognition",
+            "preprocessing": result.get("preprocessing") or "paddle_text_detection_then_recognition",
             "segments": result.get("segments") or [],
-            "engine": result.get("engine") or "paddle_thai_ocr",
+            "engine": result.get("engine") or "paddle_text_detection+paddle_thai_ocr",
             "model": result.get("model"),
+            "text_detection": result.get("text_detection"),
             "error": result.get("error"),
         }
     return results

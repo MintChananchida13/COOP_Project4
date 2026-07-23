@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.routes import router as blueprint_router
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
+from app.ocr_adapter import recognize_text_crop_with_detection
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 
@@ -384,7 +385,7 @@ def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, An
     if extraction_method == "ocr_table":
         return process_table_roi_with_engine(crop_img)
 
-    return run_paddle_thai_ocr(crop_img)
+    return recognize_text_crop_with_detection(crop_img)
 
 
 @app.get("/")

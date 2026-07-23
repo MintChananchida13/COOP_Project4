@@ -108,7 +108,7 @@ class LayoutSignatureServiceTest(unittest.TestCase):
                 "score": 0.9,
                 "text_anchor_score": 0.9,
                 "image_anchor_score": 0.95,
-                "checked_fields": [],
+                "checked_fields": [{"anchor_type": "image", "score": 0.95, "passed": True}],
             },
             0.8,
         )
@@ -121,7 +121,7 @@ class LayoutSignatureServiceTest(unittest.TestCase):
                 "score": 0.9,
                 "text_anchor_score": 0.9,
                 "image_anchor_score": 0.1,
-                "checked_fields": [],
+                "checked_fields": [{"anchor_type": "image", "score": 0.1, "passed": True}],
             },
             0.8,
         )

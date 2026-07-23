@@ -172,6 +172,8 @@ export interface DetectionCandidate {
   vectorStoreEngine?: string | null;
   retrievalEngine?: string | null;
   pageIndex?: number | null;
+  queryPageIndex?: number | null;
+  templatePageNumber?: number | null;
   alignmentStatus?: "skipped" | "aligned" | "fallback" | "failed" | null;
   alignment?: Record<string, unknown>;
   alignmentDebug?: Record<string, unknown>;
@@ -393,6 +395,7 @@ export interface TemplateStepTestItem {
   confidence?: number | null;
   score?: number | null;
   fieldScore?: number | null;
+  textMatchScore?: number | null;
   tableRows?: string[][] | null;
   tableHtml?: string | null;
   tableDebug?: Record<string, unknown> | null;
@@ -402,6 +405,13 @@ export interface TemplateStepTestItem {
   anchorType?: string | null;
   verificationMethod?: string | null;
   siglipSimilarityScore?: number | null;
+  evidenceScore?: number | null;
+  rawLogit?: number | null;
+  rawPairScore?: number | null;
+  relativePercentage?: number | null;
+  marginThreshold?: number | null;
+  scoringVersion?: string | null;
+  siglipUiPercentages?: Record<string, unknown>[];
   imageCategory?: string | null;
   imageCategoryLabel?: string | null;
   imageCategoryPrompt?: string | null;
@@ -414,6 +424,16 @@ export interface TemplateStepTestItem {
   currentCropPreviewDataUrl?: string | null;
   referenceCropPreviewUrl?: string | null;
   currentCropPreviewUrl?: string | null;
+}
+
+export interface ImageVerificationCategory {
+  value: string;
+  label: string;
+  prompt: string;
+  matchThreshold: number;
+  marginThreshold: number;
+  evidenceTemperature: number;
+  enabled: boolean;
 }
 
 export interface TemplateStepTestResult {
@@ -631,6 +651,8 @@ const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCan
   vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
   retrievalEngine: (candidate.retrieval_engine as string | null | undefined) ?? null,
   pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
+  queryPageIndex: typeof candidate.query_page_index === "number" ? candidate.query_page_index : null,
+  templatePageNumber: typeof candidate.template_page_number === "number" ? candidate.template_page_number : null,
   alignmentStatus:
     candidate.alignment_status === "skipped" ||
     candidate.alignment_status === "fallback" ||
@@ -1301,6 +1323,7 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   confidence: typeof item.confidence === "number" ? item.confidence : typeof item.ocr_confidence === "number" ? item.ocr_confidence : null,
   score: typeof item.score === "number" ? item.score : null,
   fieldScore: typeof item.field_score === "number" ? item.field_score : null,
+  textMatchScore: typeof item.text_match_score === "number" ? item.text_match_score : null,
   tableRows: Array.isArray(item.table_rows)
     ? (item.table_rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
     : Array.isArray(item.tableRows)
@@ -1317,6 +1340,13 @@ const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTes
   anchorType: (item.anchor_type as string | null | undefined) ?? null,
   verificationMethod: (item.verification_method as string | null | undefined) ?? null,
   siglipSimilarityScore: typeof item.siglip_similarity_score === "number" ? item.siglip_similarity_score : null,
+  evidenceScore: typeof item.evidence_score === "number" ? item.evidence_score : null,
+  rawLogit: typeof item.raw_logit === "number" ? item.raw_logit : null,
+  rawPairScore: typeof item.raw_pair_score === "number" ? item.raw_pair_score : null,
+  relativePercentage: typeof item.relative_percentage === "number" ? item.relative_percentage : null,
+  marginThreshold: typeof item.margin_threshold === "number" ? item.margin_threshold : null,
+  scoringVersion: (item.scoring_version as string | null | undefined) ?? null,
+  siglipUiPercentages: Array.isArray(item.siglip_ui_percentages) ? (item.siglip_ui_percentages as Record<string, unknown>[]) : [],
   imageCategory: (item.image_category as string | null | undefined) ?? null,
   imageCategoryLabel: (item.image_category_label as string | null | undefined) ?? null,
   imageCategoryPrompt: (item.image_category_prompt as string | null | undefined) ?? null,
@@ -1574,4 +1604,78 @@ export const convertTemplateRequestToTemplate = async (requestId: string) => {
     status: result.status,
     createdRecords: result.created_records,
   };
+};
+
+const mapImageVerificationCategory = (item: Record<string, unknown>): ImageVerificationCategory => ({
+  value: String(item.value || ""),
+  label: String(item.label || item.value || ""),
+  prompt: String(item.prompt || ""),
+  matchThreshold: typeof item.match_threshold === "number" ? item.match_threshold : Number(item.matchThreshold || 0.7),
+  marginThreshold: typeof item.margin_threshold === "number" ? item.margin_threshold : Number(item.marginThreshold || 0.05),
+  evidenceTemperature:
+    typeof item.evidence_temperature === "number" ? item.evidence_temperature : Number(item.evidenceTemperature || 1),
+  enabled: Boolean(item.enabled),
+});
+
+export const listImageVerificationCategories = async (enabledOnly = false): Promise<ImageVerificationCategory[]> => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories?enabled_only=${enabledOnly ? "true" : "false"}`);
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Load image categories failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Load image categories failed with ${response.status}`);
+  }
+  const categories = Array.isArray(json?.data?.categories) ? json.data.categories : [];
+  return categories.map((item: Record<string, unknown>) => mapImageVerificationCategory(item));
+};
+
+export const createImageVerificationCategory = async (
+  payload: Omit<ImageVerificationCategory, "matchThreshold" | "marginThreshold" | "evidenceTemperature"> & {
+    matchThreshold?: number;
+    marginThreshold?: number;
+    evidenceTemperature?: number;
+  }
+): Promise<ImageVerificationCategory> => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      value: payload.value,
+      label: payload.label,
+      prompt: payload.prompt,
+      match_threshold: payload.matchThreshold ?? 0.7,
+      margin_threshold: payload.marginThreshold ?? 0.05,
+      evidence_temperature: payload.evidenceTemperature ?? 1,
+      enabled: payload.enabled,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Create image category failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Create image category failed with ${response.status}`);
+  }
+  return mapImageVerificationCategory(json?.data?.category || {});
+};
+
+export const updateImageVerificationCategory = async (
+  value: string,
+  patch: Partial<ImageVerificationCategory>
+): Promise<ImageVerificationCategory> => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: patch.label,
+      prompt: patch.prompt,
+      match_threshold: patch.matchThreshold,
+      margin_threshold: patch.marginThreshold,
+      evidence_temperature: patch.evidenceTemperature,
+      enabled: patch.enabled,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Update image category failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Update image category failed with ${response.status}`);
+  }
+  return mapImageVerificationCategory(json?.data?.category || {});
 };

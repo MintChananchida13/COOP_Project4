@@ -106,6 +106,7 @@ model TemplateField {
   regexPattern            String?  @map("regex_pattern")
   roiPadding              Float?   @map("roi_padding")
   verificationWeight      Float?   @default(1.0) @map("verification_weight")
+  imageCategory           String?  @map("image_category")
   sortOrder               Int      @default(0) @map("sort_order")
   createdAt               DateTime @default(now()) @map("created_at")
   updatedAt               DateTime @updatedAt @map("updated_at")
@@ -116,6 +117,20 @@ model TemplateField {
 
   @@index([templatePageId, pageNumber])
   @@map("template_fields")
+}
+
+model ImageVerificationCategory {
+  value               String   @id
+  label               String
+  prompt              String
+  matchThreshold      Float    @default(0.70) @map("match_threshold")
+  marginThreshold     Float    @default(0.05) @map("margin_threshold")
+  evidenceTemperature Float    @default(1.0) @map("evidence_temperature")
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("image_verification_categories")
 }
 
 model IgnoreRegion {

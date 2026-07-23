@@ -148,6 +148,19 @@ _POSTGRES_SCHEMA = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS image_verification_categories (
+        value TEXT NOT NULL PRIMARY KEY,
+        label TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        match_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.70,
+        margin_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.05,
+        evidence_temperature DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS templates (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -208,7 +221,7 @@ _POSTGRES_SCHEMA = [
         roi_padding DOUBLE PRECISION,
         sort_order INTEGER NOT NULL DEFAULT 0,
         verification_weight DOUBLE PRECISION DEFAULT 1.0,
-        image_category TEXT DEFAULT 'other',
+        image_category TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT template_fields_roi_ratio_check CHECK (

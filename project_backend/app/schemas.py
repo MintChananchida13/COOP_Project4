@@ -215,3 +215,22 @@ class RejectRequest(BaseModel):
 class TemplateTestRequest(BaseModel):
     original_file_url: Optional[str] = None
     pages: List[PageInput] = Field(default_factory=list)
+
+
+class ImageVerificationCategoryCreate(BaseModel):
+    value: str
+    label: str
+    prompt: str
+    match_threshold: float = Field(default=0.70, ge=0, le=1)
+    margin_threshold: float = Field(default=0.05, ge=0, le=1)
+    evidence_temperature: float = Field(default=1.0, gt=0)
+    enabled: bool = True
+
+
+class ImageVerificationCategoryUpdate(BaseModel):
+    label: Optional[str] = None
+    prompt: Optional[str] = None
+    match_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    margin_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    evidence_temperature: Optional[float] = Field(default=None, gt=0)
+    enabled: Optional[bool] = None

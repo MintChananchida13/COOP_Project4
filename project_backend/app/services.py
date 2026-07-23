@@ -18,15 +18,18 @@ from fastapi import HTTPException
 from .alignment_service import AlignmentService
 from .db import connect as connect_db
 from .image_normalization import ImageNormalizationService
+from .image_verification_category_service import (
+    ImageVerificationCategoryService,
+    categories_to_runtime_payload,
+    ensure_image_verification_categories_table,
+    get_image_verification_category,
+    list_image_verification_categories,
+)
 from .layout_analysis_service import analyze_layout
 from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_to_json
 from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
 from .siglip_image_verification_adapter import (
-    image_category_threshold,
-    image_category_label,
-    image_category_prompt,
-    normalize_image_category,
     verify_image_category,
 )
 from .schemas import (
@@ -86,6 +89,7 @@ def _connect() -> Any:
     _ensure_template_matching_weight_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
+    ensure_image_verification_categories_table(conn)
     _ensure_embedding_jobs_table(conn)
     return conn
 
@@ -192,7 +196,7 @@ def _ensure_template_field_verification_columns(conn: sqlite3.Connection) -> Non
     if columns and "verification_weight" not in columns:
         conn.execute("ALTER TABLE template_fields ADD COLUMN verification_weight REAL DEFAULT 1.0")
     if columns and "image_category" not in columns:
-        conn.execute("ALTER TABLE template_fields ADD COLUMN image_category TEXT DEFAULT 'other'")
+        conn.execute("ALTER TABLE template_fields ADD COLUMN image_category TEXT")
     conn.commit()
 
 
@@ -351,7 +355,7 @@ def _template_field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
         "extraction_method": _normalize_extraction_method(item["extraction_method"]),
         "roi_padding": item["roi_padding"],
         "verification_weight": item.get("verification_weight", 1.0),
-        "image_category": item.get("image_category") or "other",
+        "image_category": item.get("image_category"),
         "sort_order": item["sort_order"],
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -1008,7 +1012,31 @@ class OCRService:
 
 
 def _siglip_image_threshold(category: Optional[str] = None, default: float = 0.70) -> float:
-    return image_category_threshold(category, default)
+    config = get_image_verification_category(category)
+    return round(float(config.match_threshold), 4) if config else default
+
+
+def _active_image_category_payloads() -> List[Dict[str, Any]]:
+    return categories_to_runtime_payload(list_image_verification_categories(enabled_only=True))
+
+
+def _image_category_api(value: Optional[str]) -> Dict[str, Any]:
+    raw_value = str(value or "").strip()
+    category = get_image_verification_category(raw_value)
+    if category is None:
+        return {
+            "value": raw_value,
+            "label": raw_value,
+            "prompt": "",
+            "match_threshold": 0.0,
+            "margin_threshold": 0.0,
+            "enabled": False,
+            "error": "category_not_found" if raw_value else "category_missing",
+        }
+    item = category.to_api()
+    if not category.enabled:
+        item["error"] = "category_disabled"
+    return item
 
 
 class VerificationService:
@@ -1125,6 +1153,7 @@ class VerificationService:
             "normalized_expected": expected,
             "normalized_actual": actual,
             "text_similarity_score": text_similarity_score,
+            "text_match_score": field_score,
             "ocr_confidence": round(float(ocr_confidence or 0.0), 4),
             "field_score": field_score,
             "verification_threshold": round(float(threshold), 4),
@@ -1136,30 +1165,72 @@ class VerificationService:
     def _score_image_anchor(self, field: Dict[str, Any], image_path: str) -> Dict[str, Any]:
         crop_path = _storage_root() / "verification_query_anchor_crops" / field["template_id"] / f"{field['id']}_{uuid4().hex[:8]}.png"
         cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 6)
-        category = normalize_image_category(field.get("image_category"))
+        category_value = str(field.get("image_category") or "").strip()
+        active_categories = _active_image_category_payloads()
+        category_info = _image_category_api(category_value)
+        category_error = category_info.get("error")
+        if category_error:
+            return {
+                "score": 0.0,
+                "field_score": 0.0,
+                "evidence_score": 0.0,
+                "passed": False,
+                "status": "error",
+                "failure_reason": category_error,
+                "verification_threshold": category_info.get("match_threshold", 0.0),
+                "margin_threshold": category_info.get("margin_threshold", 0.0),
+                "image_category": category_value,
+                "image_category_label": category_info.get("label") or category_value,
+                "image_category_prompt": category_info.get("prompt") or "",
+                "predicted_image_category": "",
+                "predicted_image_category_label": "",
+                "predicted_image_category_prompt": "",
+                "reference_crop_preview_data_url": None,
+                "current_crop_preview_data_url": _image_path_to_data_url(cropped) if cropped else None,
+                "siglip_similarity_score": 0.0,
+                "image_category_score": 0.0,
+                "raw_logit": 0.0,
+                "raw_pair_score": 0.0,
+                "relative_percentage": 0.0,
+                "siglip_target_rank": 0,
+                "siglip_score_margin": 0.0,
+                "siglip_labels": [],
+                "siglip_ui_percentages": [],
+            }
         if not cropped:
             return {
                 "score": 0.0,
+                "field_score": 0.0,
+                "evidence_score": 0.0,
                 "passed": False,
+                "status": "error",
                 "failure_reason": "roi_crop_failed",
-                "image_category": category,
-                "image_category_label": image_category_label(category),
-                "image_category_prompt": image_category_prompt(category),
+                "image_category": category_value,
+                "image_category_label": category_info.get("label") or category_value,
+                "image_category_prompt": category_info.get("prompt") or "",
                 "reference_crop_preview_data_url": None,
                 "current_crop_preview_data_url": None,
             }
 
-        result = verify_image_category(cropped, category)
-        score = round(float(result.score), 4)
+        result = verify_image_category(cropped, category_value, active_categories)
+        score = round(float(result.evidence_score), 4)
         threshold = result.verification_threshold
         return {
             "score": score,
+            "field_score": score,
+            "evidence_score": score,
             "passed": result.passed,
-            "failure_reason": "passed" if result.passed else ("wrong_image_category" if result.target_rank != 1 else "below_threshold"),
+            "status": result.status,
+            "failure_reason": result.failure_reason,
             "verification_threshold": round(float(threshold), 4),
-            "model_version": result.version,
+            "margin_threshold": round(float(result.margin_threshold), 4),
+            "model_version": result.model_version,
+            "scoring_version": result.scoring_version,
             "siglip_similarity_score": score,
             "image_category_score": score,
+            "raw_logit": result.raw_logit,
+            "raw_pair_score": result.raw_pair_score,
+            "relative_percentage": result.relative_percentage,
             "image_category": result.image_category,
             "image_category_label": result.image_category_label,
             "image_category_prompt": result.prompt,
@@ -1169,6 +1240,7 @@ class VerificationService:
             "siglip_target_rank": result.target_rank,
             "siglip_score_margin": result.score_margin,
             "siglip_labels": result.labels,
+            "siglip_ui_percentages": result.ui_percentages,
             "reference_crop_preview_data_url": None,
             "current_crop_preview_data_url": _image_path_to_data_url(cropped),
             "model_name": result.model_name,
@@ -1226,6 +1298,7 @@ class VerificationService:
             field_error = None
 
             if anchor_type == "image" and not image_path:
+                category_info = _image_category_api(field.get("image_category"))
                 checked_fields.append(
                     {
                         "field_id": field["id"],
@@ -1235,7 +1308,7 @@ class VerificationService:
                         "anchor_type": "image",
                         "verification_method": "image_feature",
                         "page_number": page_number,
-                        "expected_text": image_category_label(field.get("image_category")),
+                        "expected_text": category_info.get("label") or field.get("image_category"),
                         "actual_text": "",
                         "normalized_expected": "",
                         "normalized_actual": "",
@@ -1243,6 +1316,7 @@ class VerificationService:
                         "ocr_confidence": None,
                         "field_score": 0.0,
                         "verification_threshold": _siglip_image_threshold(field.get("image_category")),
+                        "margin_threshold": category_info.get("margin_threshold", 0.0),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
                         "passed": False,
@@ -1251,13 +1325,21 @@ class VerificationService:
                         "roi": field["roi"],
                         "roi_padding": field.get("roi_padding") or 6,
                         "weight": float(field.get("verification_weight") or 1.0),
-                        "image_category": normalize_image_category(field.get("image_category")),
-                        "image_category_label": image_category_label(field.get("image_category")),
-                        "image_category_prompt": image_category_prompt(field.get("image_category")),
+                        "image_category": field.get("image_category"),
+                        "image_category_label": category_info.get("label") or field.get("image_category"),
+                        "image_category_prompt": category_info.get("prompt") or "",
                         "reference_crop_preview_data_url": None,
                         "current_crop_preview_data_url": None,
                         "siglip_similarity_score": 0.0,
                         "image_category_score": 0.0,
+                        "evidence_score": 0.0,
+                        "raw_logit": 0.0,
+                        "raw_pair_score": 0.0,
+                        "relative_percentage": 0.0,
+                        "siglip_target_rank": 0,
+                        "siglip_score_margin": 0.0,
+                        "siglip_labels": [],
+                        "siglip_ui_percentages": [],
                         "error": f"No query page image available for page {page_number}",
                     }
                 )
@@ -1282,6 +1364,7 @@ class VerificationService:
                         "ocr_confidence": None,
                         "field_score": image_match["score"],
                         "verification_threshold": image_match.get("verification_threshold", _siglip_image_threshold(image_match.get("image_category"))),
+                        "margin_threshold": image_match.get("margin_threshold"),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
                         "passed": image_match["passed"],
@@ -1294,6 +1377,11 @@ class VerificationService:
                         "current_crop_preview_data_url": image_match.get("current_crop_preview_data_url"),
                         "siglip_similarity_score": image_match.get("siglip_similarity_score", image_match["score"]),
                         "image_category_score": image_match.get("image_category_score", image_match["score"]),
+                        "evidence_score": image_match.get("evidence_score", image_match["score"]),
+                        "raw_logit": image_match.get("raw_logit"),
+                        "raw_pair_score": image_match.get("raw_pair_score"),
+                        "relative_percentage": image_match.get("relative_percentage"),
+                        "status": image_match.get("status"),
                         "image_category": image_match.get("image_category"),
                         "image_category_label": image_match.get("image_category_label"),
                         "image_category_prompt": image_match.get("image_category_prompt"),
@@ -1303,9 +1391,11 @@ class VerificationService:
                         "siglip_target_rank": image_match.get("siglip_target_rank"),
                         "siglip_score_margin": image_match.get("siglip_score_margin"),
                         "siglip_labels": image_match.get("siglip_labels"),
+                        "siglip_ui_percentages": image_match.get("siglip_ui_percentages"),
                         "model_name": image_match.get("model_name"),
                         "device": image_match.get("device"),
                         "model_version": image_match.get("model_version"),
+                        "scoring_version": image_match.get("scoring_version"),
                         "error": None,
                     }
                 )
@@ -1341,6 +1431,7 @@ class VerificationService:
                 "normalized_expected": self._normalize_text(expected_text),
                 "normalized_actual": self._normalize_text(actual_text),
                 "text_similarity_score": 0.0,
+                "text_match_score": 0.0,
                 "ocr_confidence": round(float(ocr_confidence or 0.0), 4),
                 "field_score": 0.0,
                 "verification_threshold": verification_threshold,
@@ -1362,6 +1453,7 @@ class VerificationService:
                     "normalized_expected": match["normalized_expected"],
                     "normalized_actual": match["normalized_actual"],
                     "text_similarity_score": match["text_similarity_score"],
+                    "text_match_score": match.get("text_match_score", match["field_score"]),
                     "ocr_confidence": match["ocr_confidence"],
                     "field_score": match["field_score"],
                     "verification_threshold": match["verification_threshold"],
@@ -1715,8 +1807,17 @@ class DecisionService:
             (image_anchor_score * effective_weights["image_anchor"]),
             4,
         )
-        final_passed = final_score >= final_confidence_threshold
-        decision_path = "final_threshold_passed" if final_passed else "final_threshold_failed"
+        final_threshold_passed = final_score >= final_confidence_threshold
+        layout_passed = retrieval_score >= self.MIN_RETRIEVAL_SCORE
+        final_passed = final_threshold_passed and required_passed and layout_passed
+        if not required_passed:
+            decision_path = "required_verification_failed"
+        elif not layout_passed:
+            decision_path = "layout_score_below_threshold"
+        elif not final_threshold_passed:
+            decision_path = "final_threshold_failed"
+        else:
+            decision_path = "final_threshold_passed"
 
         return {
             "retrieval_score": retrieval_score,
@@ -1732,6 +1833,8 @@ class DecisionService:
             "decision_reason": decision_path,
             "decision_path": decision_path,
             "final_confidence_threshold": final_confidence_threshold,
+            "final_threshold_passed": final_threshold_passed,
+            "layout_passed": layout_passed,
             "required_passed": required_passed,
             "required_failed_fields": required_failed_fields,
         }
@@ -2161,8 +2264,6 @@ class TemplateRequestService:
                     value = _normalize_data_type(value)
                 if key == "extraction_method":
                     value = _normalize_extraction_method(value)
-                if key == "image_category":
-                    value = normalize_image_category(value)
                 column_values[column] = value
 
         if payload.roi is not None:
@@ -2514,10 +2615,11 @@ class AdminTemplateService:
             query_crop_path = crop_root / "query" / f"{field_id}_{uuid4().hex[:8]}.png"
             reference_crop = _crop_anchor_roi(reference_source, field["roi"], reference_crop_path, field.get("roi_padding") or 6) if reference_source else None
             query_crop = _crop_anchor_roi(query_source, field["roi"], query_crop_path, field.get("roi_padding") or 6) if query_source else None
-            category = normalize_image_category(field.get("image_category"))
+            category = str(field.get("image_category") or "").strip()
+            active_categories = _active_image_category_payloads()
             if query_crop:
-                siglip_result = verify_image_category(query_crop, category)
-                score = round(float(siglip_result.score), 4)
+                siglip_result = verify_image_category(query_crop, category, active_categories)
+                score = round(float(siglip_result.evidence_score), 4)
                 siglip_threshold = siglip_result.verification_threshold
                 checked_fields.append(
                     {
@@ -2529,11 +2631,18 @@ class AdminTemplateService:
                         "field_score": score,
                         "score": score,
                         "verification_threshold": siglip_threshold,
+                        "margin_threshold": siglip_result.margin_threshold,
                         "passed": siglip_result.passed,
-                        "failure_reason": "passed" if siglip_result.passed else ("wrong_image_category" if siglip_result.target_rank != 1 else "below_threshold"),
-                        "model_version": siglip_result.version,
+                        "status": siglip_result.status,
+                        "failure_reason": siglip_result.failure_reason,
+                        "model_version": siglip_result.model_version,
+                        "scoring_version": siglip_result.scoring_version,
                         "siglip_similarity_score": score,
                         "image_category_score": score,
+                        "evidence_score": score,
+                        "raw_logit": siglip_result.raw_logit,
+                        "raw_pair_score": siglip_result.raw_pair_score,
+                        "relative_percentage": siglip_result.relative_percentage,
                         "image_category": siglip_result.image_category,
                         "image_category_label": siglip_result.image_category_label,
                         "image_category_prompt": siglip_result.prompt,
@@ -2543,6 +2652,7 @@ class AdminTemplateService:
                         "siglip_target_rank": siglip_result.target_rank,
                         "siglip_score_margin": siglip_result.score_margin,
                         "siglip_labels": siglip_result.labels,
+                        "siglip_ui_percentages": siglip_result.ui_percentages,
                         "model_name": siglip_result.model_name,
                         "device": siglip_result.device,
                         "temporary_siglip_check": True,
@@ -2565,8 +2675,8 @@ class AdminTemplateService:
                         "siglip_similarity_score": 0.0,
                         "image_category_score": 0.0,
                         "image_category": category,
-                        "image_category_label": image_category_label(category),
-                        "image_category_prompt": image_category_prompt(category),
+                        "image_category_label": _image_category_api(category).get("label") or category,
+                        "image_category_prompt": _image_category_api(category).get("prompt") or "",
                     }
                 )
 
@@ -3189,7 +3299,7 @@ class AdminTemplateService:
                     payload.regex_pattern,
                     payload.roi_padding if payload.roi_padding is not None else 0,
                     payload.verification_weight if payload.verification_weight is not None else 1.0,
-                    normalize_image_category(payload.image_category),
+                    (payload.image_category or None),
                     payload.sort_order,
                 ),
             )

@@ -9,6 +9,8 @@ from .schemas import (
     ExtractionRequest,
     IgnoreRegionCreate,
     IgnoreRegionUpdate,
+    ImageVerificationCategoryCreate,
+    ImageVerificationCategoryUpdate,
     RejectRequest,
     RequestedFieldCreate,
     RequestedFieldUpdate,
@@ -34,6 +36,7 @@ from .services import (
     StorageMaintenanceService,
     TemplateDetectionService,
     TemplateRequestService,
+    ImageVerificationCategoryService,
 )
 
 router = APIRouter()
@@ -46,6 +49,7 @@ template_requests = TemplateRequestService()
 admin_templates = AdminTemplateService()
 embeddings = EmbeddingService()
 storage_maintenance = StorageMaintenanceService()
+image_categories = ImageVerificationCategoryService()
 
 
 def ok(data: dict) -> ApiResponse:
@@ -246,6 +250,23 @@ def admin_dashboard() -> ApiResponse:
 @router.post("/admin/storage/cleanup-generated", response_model=ApiResponse)
 def cleanup_generated_storage(max_age_hours: int = 24, dry_run: bool = True) -> ApiResponse:
     return ok(storage_maintenance.cleanup_generated_files(max_age_hours=max_age_hours, dry_run=dry_run))
+
+
+@router.get("/admin/image-verification-categories", response_model=ApiResponse)
+def list_image_verification_categories(enabled_only: bool = False) -> ApiResponse:
+    return ok(image_categories.list(enabled_only=enabled_only))
+
+
+@router.post("/admin/image-verification-categories", response_model=ApiResponse)
+def create_image_verification_category(payload: ImageVerificationCategoryCreate) -> ApiResponse:
+    return ok(image_categories.create(payload.model_dump()))
+
+
+@router.put("/admin/image-verification-categories/{category_value}", response_model=ApiResponse)
+def update_image_verification_category(
+    category_value: str, payload: ImageVerificationCategoryUpdate
+) -> ApiResponse:
+    return ok(image_categories.update(category_value, payload.model_dump(exclude_unset=True)))
 
 
 @router.get("/admin/template-requests", response_model=ApiResponse)

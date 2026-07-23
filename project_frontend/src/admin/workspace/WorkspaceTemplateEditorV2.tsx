@@ -1,14 +1,22 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
-import { SetStateAction, useMemo, useRef, useState } from "react";
+import { SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../../shared/workspace/roiGeometry";
 import { IgnoreRegion, ROI, RoiRatio, TemplateField } from "../../types/ocr";
-import { TemplateStepTestItem, TemplateStepTestResult, testTemplateExtractionFields, testTemplateVerificationAnchors } from "../adminApi";
+import {
+  ImageVerificationCategory,
+  createImageVerificationCategory,
+  listImageVerificationCategories,
+  TemplateStepTestItem,
+  TemplateStepTestResult,
+  testTemplateExtractionFields,
+  testTemplateVerificationAnchors,
+  updateImageVerificationCategory,
+} from "../adminApi";
 import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
-import TemplateVerificationAnchorForm from "./TemplateVerificationAnchorForm";
 
 interface WorkspaceTemplateEditorProps {
   templateId: string;
@@ -115,6 +123,11 @@ const isTableTestItem = (item: TemplateStepTestItem) =>
   item.extractionMethod === "ocr_table" ||
   Boolean(item.tableRows?.length || item.tableHtml || getTableRowsFromTestItem(item));
 
+const getVerificationItemScore = (item: TemplateStepTestItem) =>
+  item.anchorType === "image"
+    ? item.evidenceScore ?? item.fieldScore ?? item.score ?? 0
+    : item.textMatchScore ?? item.fieldScore ?? item.score ?? 0;
+
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
 
@@ -136,21 +149,10 @@ const roiTypeToFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
 };
 
 const roiTypeToAnchorFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
-  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: "other" };
+  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: undefined };
   return { dataType: "text", extractionMethod: "ocr_text" };
 };
 
-const IMAGE_ANCHOR_CATEGORY_OPTIONS = [
-  { value: "company_logo", label: "โลโก้บริษัท" },
-  { value: "official_stamp", label: "ตราประทับ" },
-  { value: "signature", label: "ลายเซ็น" },
-  { value: "qr_code", label: "QR Code" },
-  { value: "barcode", label: "บาร์โค้ด" },
-  { value: "portrait", label: "รูปถ่ายบุคคล" },
-  { value: "government_emblem", label: "ตราครุฑ" },
-  { value: "thailand_symbol", label: "สัญลักษณ์ประเทศไทย" },
-  { value: "other", label: "อื่น ๆ" },
-];
 
 const roiToRatio = (roi: ROI, pageNumber: number, metrics: WorkspaceImageMetrics): RoiRatio => ({
   pageNumber,
@@ -269,9 +271,40 @@ export default function WorkspaceTemplateEditorV2({
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
   const [autoDetectError, setAutoDetectError] = useState("");
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [imageCategories, setImageCategories] = useState<ImageVerificationCategory[]>([]);
+  const [categoryError, setCategoryError] = useState("");
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ImageVerificationCategory>>({});
+  const [newCategory, setNewCategory] = useState<ImageVerificationCategory>({
+    value: "",
+    label: "",
+    prompt: "",
+    matchThreshold: 0.7,
+    marginThreshold: 0.05,
+    evidenceTemperature: 1,
+    enabled: true,
+  });
   const pendingRoiRef = useRef<{ mode: EditorMode; roi: RoiRatio } | null>(null);
   const currentPageNumber = currentPage + 1;
   const selectedPage = pages[currentPage];
+
+  const reloadImageCategories = useCallback(async () => {
+    try {
+      setCategoryError("");
+      const categories = await listImageVerificationCategories(false);
+      setImageCategories(categories);
+      setCategoryDrafts(Object.fromEntries(categories.map((category) => [category.value, category])));
+    } catch (error) {
+      setCategoryError(error instanceof Error ? error.message : "โหลดประเภทภาพไม่สำเร็จ");
+    }
+  }, []);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      void reloadImageCategories();
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [reloadImageCategories]);
 
   const orderedFields = useMemo(
     () =>
@@ -283,6 +316,7 @@ export default function WorkspaceTemplateEditorV2({
       ),
     [fields]
   );
+  const activeImageCategories = useMemo(() => imageCategories.filter((category) => category.enabled), [imageCategories]);
   const extractionFields = orderedFields.filter((field) => !isAnchor(field));
   const verificationAnchors = orderedFields.filter(isAnchor);
   const currentPageExtractionFields = extractionFields.filter((field) => field.pageNumber === currentPageNumber);
@@ -407,7 +441,7 @@ export default function WorkspaceTemplateEditorV2({
 
   const updateAnchorMethod = (anchor: TemplateField, value: string) => {
     if (value === "image_feature") {
-      onUpdateField(anchor.id, { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: anchor.imageCategory || "other" });
+      onUpdateField(anchor.id, { dataType: "image", extractionMethod: "extract_image", expectedText: "", imageCategory: anchor.imageCategory });
     } else {
       onUpdateField(anchor.id, { dataType: "text", extractionMethod: "ocr_text" });
     }
@@ -435,6 +469,37 @@ export default function WorkspaceTemplateEditorV2({
     nextOrder.splice(nextIndex, 0, anchor);
     onReorderFields(nextOrder.map((item) => item.id));
     selectField(anchor);
+  };
+
+  const saveCategoryDraft = async (value: string) => {
+    const draft = categoryDrafts[value];
+    if (!draft) return;
+    try {
+      setCategoryError("");
+      await updateImageVerificationCategory(value, draft);
+      await reloadImageCategories();
+    } catch (error) {
+      setCategoryError(error instanceof Error ? error.message : "บันทึกประเภทภาพไม่สำเร็จ");
+    }
+  };
+
+  const addCategoryDraft = async () => {
+    try {
+      setCategoryError("");
+      await createImageVerificationCategory(newCategory);
+      setNewCategory({
+        value: "",
+        label: "",
+        prompt: "",
+        matchThreshold: 0.7,
+        marginThreshold: 0.05,
+        evidenceTemperature: 1,
+        enabled: true,
+      });
+      await reloadImageCategories();
+    } catch (error) {
+      setCategoryError(error instanceof Error ? error.message : "เพิ่มประเภทภาพไม่สำเร็จ");
+    }
   };
 
   const handleAutoDetectExtractionRoi = async () => {
@@ -614,14 +679,24 @@ export default function WorkspaceTemplateEditorV2({
                 {item.anchorType !== "image" && item.confidence !== null && item.confidence !== undefined && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">Conf {item.confidence.toFixed(2)}</span>
                 )}
-                {item.anchorType !== "image" && ((item.fieldScore !== null && item.fieldScore !== undefined) || (item.score !== null && item.score !== undefined)) ? (
+                {item.anchorType !== "image" && ((item.textMatchScore !== null && item.textMatchScore !== undefined) || (item.fieldScore !== null && item.fieldScore !== undefined) || (item.score !== null && item.score !== undefined)) ? (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
-                    Score {(item.fieldScore ?? item.score ?? 0).toFixed(2)}
+                    Score {getVerificationItemScore(item).toFixed(2)}
                   </span>
                 ) : null}
-                {item.siglipSimilarityScore !== null && item.siglipSimilarityScore !== undefined && (
+                {item.anchorType === "image" && item.evidenceScore !== null && item.evidenceScore !== undefined && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
-                    SigLIP {item.siglipSimilarityScore.toFixed(2)}
+                    Score {getVerificationItemScore(item).toFixed(0)}
+                  </span>
+                )}
+                {item.rawPairScore !== null && item.rawPairScore !== undefined && (
+                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
+                    Pair {item.rawPairScore.toFixed(2)}
+                  </span>
+                )}
+                {item.relativePercentage !== null && item.relativePercentage !== undefined && (
+                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
+                    Relative {item.relativePercentage.toFixed(1)}%
                   </span>
                 )}
                 {item.imageCategoryLabel && (
@@ -636,11 +711,6 @@ export default function WorkspaceTemplateEditorV2({
                 )}
                 {item.siglipTargetRank !== null && item.siglipTargetRank !== undefined && (
                   <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-700">Rank {item.siglipTargetRank}</span>
-                )}
-                {item.siglipScoreMargin !== null && item.siglipScoreMargin !== undefined && (
-                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-700">
-                    Margin {item.siglipScoreMargin.toFixed(2)}
-                  </span>
                 )}
                 {item.failureReason && !item.passed && (
                   <span className="rounded bg-red-100 px-1.5 py-0.5 text-red-700">{item.failureReason}</span>
@@ -910,19 +980,85 @@ export default function WorkspaceTemplateEditorV2({
                         <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
                         <select
                           className={inputClass}
-                          value={selectedAnchor.imageCategory || "other"}
+                          value={selectedAnchor.imageCategory || ""}
                           onChange={(event) => onUpdateField(selectedAnchor.id, { imageCategory: event.target.value })}
                         >
-                          {IMAGE_ANCHOR_CATEGORY_OPTIONS.map((option) => (
+                          <option value="" disabled>เลือกประเภทภาพ</option>
+                          {activeImageCategories.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
                           ))}
                         </select>
+                        {selectedAnchor.imageCategory && !activeImageCategories.some((category) => category.value === selectedAnchor.imageCategory) && (
+                          <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
+                            ประเภทภาพนี้ไม่พบหรือถูกปิดใช้งาน: {selectedAnchor.imageCategory}
+                          </p>
+                        )}
+                        {categoryError && <p className="text-[10px] font-semibold text-red-600">{categoryError}</p>}
+                        <button
+                          type="button"
+                          className="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-amber-800"
+                          onClick={() => setCategoryManagerOpen((value) => !value)}
+                        >
+                          จัดการประเภทภาพ
+                        </button>
                         <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
                           ใช้ SigLIP ตรวจว่า Crop นี้เป็นประเภทภาพที่เลือก ไม่ได้เทียบ embedding กับภาพต้นฉบับ
                         </p>
                       </label>
+                    )}
+                    {anchorMethod(selectedAnchor) === "image_feature" && categoryManagerOpen && (
+                      <div className="space-y-2 rounded-xl border border-amber-200 bg-white p-2">
+                        <div className="text-[10px] font-black uppercase text-slate-500">Image Category Manager</div>
+                        <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                          {imageCategories.map((category) => {
+                            const draft = categoryDrafts[category.value] || category;
+                            return (
+                              <div key={category.value} className="space-y-1 rounded-lg border border-slate-200 p-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-black text-slate-800">{category.value}</span>
+                                  <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500">
+                                    <input
+                                      type="checkbox"
+                                      checked={draft.enabled}
+                                      onChange={(event) =>
+                                        setCategoryDrafts((current) => ({
+                                          ...current,
+                                          [category.value]: { ...draft, enabled: event.target.checked },
+                                        }))
+                                      }
+                                    />
+                                    Enabled
+                                  </label>
+                                </div>
+                                <input className={inputClass} value={draft.label} onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, label: event.target.value } }))} />
+                                <input className={inputClass} value={draft.prompt} onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, prompt: event.target.value } }))} />
+                                <button type="button" className="rounded-lg bg-slate-900 px-2 py-1 text-[10px] font-black text-white" onClick={() => saveCategoryDraft(category.value)}>
+                                  Save
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="space-y-1 rounded-lg border border-dashed border-amber-200 p-2">
+                          <div className="text-[10px] font-black text-amber-800">Add category</div>
+                          <input className={inputClass} placeholder="value เช่น document_logo" value={newCategory.value} onChange={(event) => setNewCategory((current) => ({ ...current, value: event.target.value }))} />
+                          <input className={inputClass} placeholder="label" value={newCategory.label} onChange={(event) => setNewCategory((current) => ({ ...current, label: event.target.value }))} />
+                          <input className={inputClass} placeholder="English prompt" value={newCategory.prompt} onChange={(event) => setNewCategory((current) => ({ ...current, prompt: event.target.value }))} />
+                          <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
+                            <input
+                              type="checkbox"
+                              checked={newCategory.enabled}
+                              onChange={(event) => setNewCategory((current) => ({ ...current, enabled: event.target.checked }))}
+                            />
+                            Enabled
+                          </label>
+                          <button type="button" className="rounded-lg bg-amber-600 px-2 py-1 text-[10px] font-black text-white" onClick={addCategoryDraft}>
+                            Add category
+                          </button>
+                        </div>
+                      </div>
                     )}
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">ROI Padding</span>
