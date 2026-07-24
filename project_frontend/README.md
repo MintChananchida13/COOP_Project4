@@ -52,14 +52,6 @@ uvicorn main:app
 แล้วรัน backend แบบ local model fallback ได้
 uvicorn main:app --reload
 
-ย้ายข้อมูลเดิมจาก SQLite ไป PostgreSQL
-cd ..\project_backend
-.\venv\Scripts\activate
-$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
-python migrate_sqlite_to_postgres.py --dry-run
-python migrate_sqlite_to_postgres.py
-สคริปต์จะย้ายข้อมูลจาก project_frontend/prisma/dev.db ไป PostgreSQL และรันซ้ำได้โดย upsert ตาม id
-
 cd D:\coop\COOP_Project4\project_backend
 .\venv\Scripts\activate
 $env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"

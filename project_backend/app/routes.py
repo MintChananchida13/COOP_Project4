@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from .db import connect as connect_db
-from .db import is_postgres_enabled, sqlite_db_path
 from .schemas import (
     ApiResponse,
     CustomOcrRequest,
@@ -63,15 +62,13 @@ def health() -> ApiResponse:
 
 @router.get("/health/db", response_model=ApiResponse)
 def database_health() -> ApiResponse:
-    engine = "postgresql" if is_postgres_enabled() else "sqlite"
     try:
         with connect_db() as conn:
             conn.execute("SELECT 1").fetchone()
         return ok(
             {
                 "status": "ok",
-                "engine": engine,
-                "sqlite_path": None if engine == "postgresql" else str(sqlite_db_path()),
+                "engine": "postgresql",
             }
         )
     except Exception as error:
@@ -79,7 +76,7 @@ def database_health() -> ApiResponse:
             status_code=503,
             detail={
                 "status": "unavailable",
-                "engine": engine,
+                "engine": "postgresql",
                 "message": str(error),
             },
         ) from error

@@ -168,7 +168,7 @@ COOP_Project4/
 
 ### Production Database: PostgreSQL
 
-ระบบ backend รองรับ PostgreSQL ผ่าน `DATABASE_URL` แล้ว โดยยัง fallback ไป SQLite เดิมได้ถ้าไม่ได้ตั้งค่า env นี้
+ระบบ backend ใช้ PostgreSQL เป็นฐานข้อมูลหลักและจำเป็นต้องตั้งค่า `DATABASE_URL` ก่อนรันระบบ ไม่มี SQLite fallback แล้ว
 
 ```powershell
 docker run --name ocr-postgres `
@@ -187,28 +187,7 @@ $env:MODEL_SERVICE_URL="http://127.0.0.1:8010"
 uvicorn main:app
 ```
 
-เมื่อใช้ PostgreSQL ครั้งแรก backend จะสร้างตารางหลักที่จำเป็นให้เอง เช่น `templates`, `template_pages`, `template_fields`, `template_requests`, `embedding_jobs` และ `verification_anchor_embeddings`
-
-### ย้ายข้อมูลเดิมจาก SQLite ไป PostgreSQL
-
-ใช้สคริปต์นี้เมื่อต้องการย้าย template, request, page, ROI, embedding job, verification anchor embedding และ log เดิมจาก `project_frontend/prisma/dev.db`
-
-ตรวจจำนวนข้อมูลก่อน:
-
-```powershell
-cd project_backend
-.\venv\Scripts\activate
-$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ocr_studio"
-python migrate_sqlite_to_postgres.py --dry-run
-```
-
-ย้ายข้อมูลจริง:
-
-```powershell
-python migrate_sqlite_to_postgres.py
-```
-
-สคริปต์นี้ไม่ลบข้อมูล PostgreSQL ปลายทาง และสามารถรันซ้ำได้โดยจะ upsert ตาม `id`
+เมื่อใช้ PostgreSQL ครั้งแรก backend จะสร้างตารางหลักที่จำเป็นให้เอง เช่น `templates`, `template_pages`, `template_fields`, `template_requests`, `template_layout_references`, `embedding_jobs` และ `image_verification_categories`
 
 ### 1. Backend
 

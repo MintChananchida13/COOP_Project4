@@ -204,42 +204,35 @@ class SiglipImageVerificationTest(unittest.TestCase):
 
 class ImageVerificationCategoryServiceTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_database_url = os.environ.get("DATABASE_URL")
-        temp_root = Path(__file__).resolve().parents[1] / "storage"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        self.db_path = temp_root / f"test_siglip_categories_{uuid4().hex}.db"
-        self.db_path.touch()
-        os.environ["DATABASE_URL"] = f"file:{self.db_path}"
+        if os.getenv("RUN_POSTGRES_INTEGRATION_TESTS") != "1":
+            self.skipTest("PostgreSQL integration tests are disabled.")
+        database_url = os.getenv("DATABASE_URL", "")
+        if not database_url.startswith(("postgresql://", "postgres://")):
+            self.skipTest("DATABASE_URL must point to PostgreSQL.")
+        self.unique_suffix = uuid4().hex[:8]
 
     def tearDown(self) -> None:
-        if self.original_database_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = self.original_database_url
-        try:
-            self.db_path.unlink()
-        except (FileNotFoundError, PermissionError):
-            pass
+        return None
 
     def test_admin_created_category_is_used_by_next_inference(self) -> None:
         service = ImageVerificationCategoryService()
         created = service.create(
             {
-                "value": "seal",
+                "value": f"seal_{self.unique_suffix}",
                 "label": "Seal",
                 "prompt": "official seal",
                 "enabled": True,
             }
         )["category"]
-        self.assertEqual(created["value"], "seal")
+        self.assertEqual(created["value"], f"seal_{self.unique_suffix}")
 
         active_payload = [item.to_api() for item in list_image_verification_categories(enabled_only=True)]
         values = [item["value"] for item in active_payload]
-        self.assertIn("seal", values)
+        self.assertIn(f"seal_{self.unique_suffix}", values)
 
         logits = [0.0 for _ in active_payload]
-        logits[values.index("seal")] = 4.0
-        result = verify_image_category_from_logits(logits, "seal", active_payload)
+        logits[values.index(f"seal_{self.unique_suffix}")] = 4.0
+        result = verify_image_category_from_logits(logits, f"seal_{self.unique_suffix}", active_payload)
 
         self.assertTrue(result.passed)
         self.assertEqual(result.score, 1.0)
@@ -248,7 +241,7 @@ class ImageVerificationCategoryServiceTest(unittest.TestCase):
     def test_duplicate_value_is_rejected(self) -> None:
         service = ImageVerificationCategoryService()
         payload = {
-            "value": "seal",
+            "value": f"seal_duplicate_{self.unique_suffix}",
             "label": "Seal",
             "prompt": "official seal",
             "enabled": True,
@@ -259,19 +252,20 @@ class ImageVerificationCategoryServiceTest(unittest.TestCase):
 
     def test_disabled_category_is_not_active(self) -> None:
         service = ImageVerificationCategoryService()
+        value = f"seal_disabled_{self.unique_suffix}"
         service.create(
             {
-                "value": "seal",
+                "value": value,
                 "label": "Seal",
                 "prompt": "official seal",
                 "enabled": True,
             }
         )
-        updated = service.update("seal", {"enabled": False})["category"]
+        updated = service.update(value, {"enabled": False})["category"]
         self.assertFalse(updated["enabled"])
 
         active_values = {item.value for item in list_image_verification_categories(enabled_only=True)}
-        self.assertNotIn("seal", active_values)
+        self.assertNotIn(value, active_values)
 
     def test_other_cannot_be_created_as_a_category(self) -> None:
         with self.assertRaises(Exception):

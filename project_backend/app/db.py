@@ -1,7 +1,5 @@
 import os
 import re
-import sqlite3
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 
@@ -15,20 +13,6 @@ def _database_url() -> str:
 def is_postgres_enabled() -> bool:
     database_url = _database_url().lower()
     return database_url.startswith("postgresql://") or database_url.startswith("postgres://")
-
-
-def sqlite_db_path() -> Path:
-    database_url = _database_url()
-    if database_url.startswith("file:"):
-        raw_path = database_url.replace("file:", "", 1).strip('"')
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        cwd_candidate = Path.cwd() / candidate
-        if cwd_candidate.exists():
-            return cwd_candidate
-
-    return Path(__file__).resolve().parents[2] / "project_frontend" / "prisma" / "dev.db"
 
 
 class StaticCursor:
@@ -117,13 +101,11 @@ def _connect_postgres() -> PostgresConnection:
 
 
 def connect() -> Any:
-    if is_postgres_enabled():
-        return _connect_postgres()
-
-    conn = sqlite3.connect(sqlite_db_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if not is_postgres_enabled():
+        raise RuntimeError(
+            "PostgreSQL is required. Set DATABASE_URL to a postgresql:// or postgres:// connection string."
+        )
+    return _connect_postgres()
 
 
 def _ensure_postgres_schema(conn: PostgresConnection) -> None:

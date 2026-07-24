@@ -26,7 +26,8 @@ DETECTION_THRESHOLD = 0.75
 PIPELINE_CONFIG = get_pipeline_core_config()
 DETECTION_VERSION = PIPELINE_CONFIG.version
 PDF_RENDER_SCALE = 2.0
-DETECTION_RETRIEVAL_LIMIT = max(1, int(os.getenv("DETECTION_RETRIEVAL_LIMIT", "5")))
+DETECTION_TOP_K_LIMIT = 5
+DETECTION_RETRIEVAL_LIMIT = DETECTION_TOP_K_LIMIT
 DETECTION_FULL_EVAL_LIMIT = max(1, int(os.getenv("DETECTION_FULL_EVAL_LIMIT", str(DETECTION_RETRIEVAL_LIMIT))))
 DETECTION_ALIGNMENT_LIMIT = max(0, int(os.getenv("DETECTION_ALIGNMENT_LIMIT", "1")))
 verification_service = VerificationService()
@@ -1076,7 +1077,13 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
     full_evaluation_count = 0
     early_accept_rank = None
     for index, result in enumerate(raw_results, start=1):
-        should_fully_evaluate = early_accept_rank is None and full_evaluation_count < DETECTION_FULL_EVAL_LIMIT
+        layout_score = float(result.get("layout_score", result.get("score", 0.0)) or 0.0)
+        layout_confident = layout_score >= DecisionService.MIN_RETRIEVAL_SCORE
+        should_fully_evaluate = (
+            layout_confident
+            and early_accept_rank is None
+            and full_evaluation_count < DETECTION_FULL_EVAL_LIMIT
+        )
         if should_fully_evaluate:
             full_evaluation_count += 1
             candidate = _candidate_from_result(
@@ -1091,6 +1098,13 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             candidate = _lightweight_candidate_from_result(result)
         if candidate is not None:
             candidate["retrieval_rank"] = index
+            candidate["layout_confident"] = layout_confident
+            candidate["top_k_limit"] = DETECTION_TOP_K_LIMIT
+            if not layout_confident:
+                candidate["final_passed"] = False
+                candidate["decision_reason"] = "layout_score_below_threshold"
+                candidate["decision_path"] = "layout_score_below_threshold"
+                candidate["evaluation_status"] = "layout_rejected"
             candidates.append(candidate)
             if should_fully_evaluate and candidate["final_passed"] and early_accept_rank is None:
                 early_accept_rank = index
@@ -1108,6 +1122,7 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
     passing_candidates = [candidate for candidate in candidates if candidate["final_passed"]]
     best_candidate = passing_candidates[0] if passing_candidates else None
     matched = best_candidate is not None
+    confident_layout_count = sum(1 for candidate in candidates if candidate.get("layout_confident"))
     return {
         "page_index": page_index,
         "matched": matched,
@@ -1132,6 +1147,9 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             "query_layout_signature": query_signature,
             "raw_candidate_count": len(raw_results),
             "active_candidate_count": len(candidates),
+            "confident_layout_candidate_count": confident_layout_count,
+            "layout_confidence_threshold": DecisionService.MIN_RETRIEVAL_SCORE,
+            "top_k_limit": DETECTION_TOP_K_LIMIT,
             "retrieval_limit": DETECTION_RETRIEVAL_LIMIT,
             "full_evaluation_limit": DETECTION_FULL_EVAL_LIMIT,
             "full_evaluation_count": full_evaluation_count,
@@ -1254,6 +1272,18 @@ def _detection_engine(pages: List[Dict[str, Any]]) -> str:
     return "layout_signature"
 
 
+def _no_match_message(candidates: List[Dict[str, Any]]) -> str:
+    if not candidates:
+        return "No active templates available in the Top 5 layout search."
+    confident_layout_count = sum(
+        1 for candidate in candidates
+        if float(candidate.get("layout_score", candidate.get("retrieval_score", 0.0)) or 0.0) >= DecisionService.MIN_RETRIEVAL_SCORE
+    )
+    if confident_layout_count == 0:
+        return "No template was confident enough: no Top 5 layout candidate reached 0.50."
+    return "No candidate passed verification and final confidence."
+
+
 def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
     source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
@@ -1279,7 +1309,7 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
         "best_candidate": best_candidate,
         "candidates": candidates,
         "pages": pages,
-        "message": None if matched else "No candidate passed verification and final confidence." if candidates else "No active embedded templates available.",
+        "message": None if matched else _no_match_message(candidates),
         "debug": {
             "pipeline_core": PIPELINE_CONFIG.to_debug_dict(),
             "retrieval_engine": "layout_signature",

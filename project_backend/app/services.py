@@ -4,7 +4,6 @@ import json
 import math
 import os
 import re
-import sqlite3
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -94,7 +93,7 @@ def _connect() -> Any:
     return conn
 
 
-def _ensure_template_request_page_review_columns(conn: sqlite3.Connection) -> None:
+def _ensure_template_request_page_review_columns(conn: Any) -> None:
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(template_request_pages)").fetchall()
@@ -110,7 +109,7 @@ def _ensure_template_request_page_review_columns(conn: sqlite3.Connection) -> No
     conn.commit()
 
 
-def _ensure_template_layout_references_table(conn: sqlite3.Connection) -> None:
+def _ensure_template_layout_references_table(conn: Any) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS template_layout_references (
@@ -139,7 +138,7 @@ def _ensure_template_layout_references_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _ensure_requested_field_metadata_columns(conn: sqlite3.Connection) -> None:
+def _ensure_requested_field_metadata_columns(conn: Any) -> None:
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(requested_fields)").fetchall()
@@ -151,7 +150,7 @@ def _ensure_requested_field_metadata_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _ensure_embedding_jobs_table(conn: sqlite3.Connection) -> None:
+def _ensure_embedding_jobs_table(conn: Any) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS embedding_jobs (
@@ -174,7 +173,7 @@ def _ensure_embedding_jobs_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _ensure_template_matching_weight_columns(conn: sqlite3.Connection) -> None:
+def _ensure_template_matching_weight_columns(conn: Any) -> None:
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(templates)").fetchall()
@@ -188,7 +187,7 @@ def _ensure_template_matching_weight_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _ensure_template_field_verification_columns(conn: sqlite3.Connection) -> None:
+def _ensure_template_field_verification_columns(conn: Any) -> None:
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(template_fields)").fetchall()
@@ -200,7 +199,7 @@ def _ensure_template_field_verification_columns(conn: sqlite3.Connection) -> Non
     conn.commit()
 
 
-def _ensure_template_page_layout_signature_column(conn: sqlite3.Connection) -> None:
+def _ensure_template_page_layout_signature_column(conn: Any) -> None:
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(template_pages)").fetchall()
@@ -210,11 +209,11 @@ def _ensure_template_page_layout_signature_column(conn: sqlite3.Connection) -> N
     conn.commit()
 
 
-def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+def _row_to_dict(row: Any) -> Dict[str, Any]:
     return dict(row)
 
 
-def _request_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _request_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -233,7 +232,7 @@ def _request_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _page_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -249,7 +248,7 @@ def _page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _template_layout_reference_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _template_layout_reference_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -266,7 +265,7 @@ def _template_layout_reference_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _field_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -290,7 +289,7 @@ def _field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _template_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _template_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -311,7 +310,7 @@ def _template_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _template_page_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     layout_signature_json = item.get("layout_signature_json") if "layout_signature_json" in item else None
     return {
@@ -329,7 +328,7 @@ def _template_page_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _template_field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _template_field_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -362,7 +361,7 @@ def _template_field_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _ignore_region_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
+def _ignore_region_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
     return {
         "id": item["id"],
@@ -382,7 +381,7 @@ def _ignore_region_row_to_api(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def _embedding_job_row_to_api(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+def _embedding_job_row_to_api(row: Optional[Any]) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     item = _row_to_dict(row)
@@ -462,7 +461,7 @@ def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dic
     return build_layout_signature(analysis)
 
 
-def _refresh_template_layout_signatures(conn: sqlite3.Connection, template_id: str) -> List[Dict[str, Any]]:
+def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
     reference_count_row = conn.execute(
         "SELECT COUNT(*) AS reference_count FROM template_layout_references WHERE template_id = ?",
         (template_id,),
@@ -532,7 +531,7 @@ def _refresh_template_layout_signatures(conn: sqlite3.Connection, template_id: s
     return refreshed
 
 
-def _refresh_template_layout_reference_signatures(conn: sqlite3.Connection, template_id: str) -> List[Dict[str, Any]]:
+def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT id, page_number, image_url
@@ -681,7 +680,7 @@ def _normalize_prepublish_test_pages(test_id: str, page_paths: List[Path]) -> Di
     return normalized
 
 
-def _template_page_image_source(conn: sqlite3.Connection, template_page_id: str) -> Optional[str]:
+def _template_page_image_source(conn: Any, template_page_id: str) -> Optional[str]:
     row = conn.execute(
         "SELECT normalized_image_url, sample_image_url FROM template_pages WHERE id = ?",
         (template_page_id,),
@@ -719,13 +718,13 @@ class ImageProcessingService:
 
 
 class EmbeddingService:
-    def _fetch_template_or_404(self, conn: sqlite3.Connection, template_id: str) -> sqlite3.Row:
+    def _fetch_template_or_404(self, conn: Any, template_id: str) -> Any:
         template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
         if template_row is None:
             raise HTTPException(status_code=404, detail="Template not found")
         return template_row
 
-    def _job_with_template(self, conn: sqlite3.Connection, job_id: str) -> Dict[str, Any]:
+    def _job_with_template(self, conn: Any, job_id: str) -> Dict[str, Any]:
         job_row = conn.execute("SELECT * FROM embedding_jobs WHERE id = ?", (job_id,)).fetchone()
         if job_row is None:
             raise HTTPException(status_code=404, detail="Embedding job not found")
@@ -3694,3 +3693,4 @@ class AdminTemplateService:
                 for page in payload.pages
             ],
         }
+
