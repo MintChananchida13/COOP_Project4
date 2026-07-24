@@ -2,7 +2,7 @@ import tempfile
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 import cv2
 import numpy as np
@@ -37,11 +37,16 @@ _LAYOUT_MODEL: Any = None
 _TEXT_DETECTOR: Any = None
 _LAYOUT_MODEL_NAME = "PP-DocLayoutV3"
 _TEXT_DETECTION_MODEL_NAME = "PP-OCRv5_server_det"
-AUTO_ROI_EXPAND_TOP_RATIO = float(os.getenv("AUTO_ROI_EXPAND_TOP_RATIO", "0.15"))
-AUTO_ROI_EXPAND_BOTTOM_RATIO = float(os.getenv("AUTO_ROI_EXPAND_BOTTOM_RATIO", "0.15"))
-AUTO_ROI_EXPAND_LEFT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_LEFT_RATIO", "0.05"))
-AUTO_ROI_EXPAND_RIGHT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_RIGHT_RATIO", "0.15"))
-AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO", "0.45"))
+AUTO_ROI_EXPAND_TOP_RATIO = float(os.getenv("AUTO_ROI_EXPAND_TOP_RATIO", "0.10"))
+AUTO_ROI_EXPAND_BOTTOM_RATIO = float(os.getenv("AUTO_ROI_EXPAND_BOTTOM_RATIO", "0.10"))
+AUTO_ROI_EXPAND_LEFT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_LEFT_RATIO", "0.10"))
+AUTO_ROI_EXPAND_RIGHT_RATIO = float(os.getenv("AUTO_ROI_EXPAND_RIGHT_RATIO", "0.10"))
+AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO", "0.15"))
+AUTO_ROI_PARAGRAPH_MAX_GAP_HEIGHT_RATIO = float(os.getenv("AUTO_ROI_PARAGRAPH_MAX_GAP_HEIGHT_RATIO", "2.2"))
+AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO", "0.40"))
+AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO = float(os.getenv("AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO", "0.05"))
+
+AutoRoiMode = Literal["text_line", "paragraph"]
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -382,12 +387,128 @@ def _text_box_belongs_to_table(text_box: List[float], table_boxes: List[List[flo
     return False
 
 
-def analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Dict[str, Any]:
+def _horizontal_overlap_ratio(box_a: List[float], box_b: List[float]) -> float:
+    left = max(min(box_a[0], box_a[2]), min(box_b[0], box_b[2]))
+    right = min(max(box_a[0], box_a[2]), max(box_b[0], box_b[2]))
+    overlap = max(0.0, right - left)
+    smaller_width = max(1.0, min(abs(box_a[2] - box_a[0]), abs(box_b[2] - box_b[0])))
+    return overlap / smaller_width
+
+
+def _has_blocker_between_lines(
+    upper_box: List[float],
+    lower_box: List[float],
+    blocker_boxes: List[List[float]],
+) -> bool:
+    gap_top = max(float(upper_box[1]), float(upper_box[3]))
+    gap_bottom = min(float(lower_box[1]), float(lower_box[3]))
+    if gap_bottom <= gap_top:
+        return False
+
+    group_left = min(float(upper_box[0]), float(upper_box[2]), float(lower_box[0]), float(lower_box[2]))
+    group_right = max(float(upper_box[0]), float(upper_box[2]), float(lower_box[0]), float(lower_box[2]))
+    for blocker in blocker_boxes:
+        blocker_left = min(float(blocker[0]), float(blocker[2]))
+        blocker_right = max(float(blocker[0]), float(blocker[2]))
+        blocker_top = min(float(blocker[1]), float(blocker[3]))
+        blocker_bottom = max(float(blocker[1]), float(blocker[3]))
+        vertical_intersects_gap = blocker_bottom > gap_top and blocker_top < gap_bottom
+        horizontal_intersects_group = blocker_right > group_left and blocker_left < group_right
+        if vertical_intersects_gap and horizontal_intersects_group:
+            return True
+    return False
+
+
+def _merge_boxes(boxes: List[List[float]]) -> List[float]:
+    return [
+        min(min(box[0], box[2]) for box in boxes),
+        min(min(box[1], box[3]) for box in boxes),
+        max(max(box[0], box[2]) for box in boxes),
+        max(max(box[1], box[3]) for box in boxes),
+    ]
+
+
+def _build_paragraph_text_items(
+    text_items: List[Dict[str, Any]],
+    blocker_boxes: List[List[float]],
+    image_width: int,
+) -> List[Dict[str, Any]]:
+    if len(text_items) <= 1:
+        return text_items
+
+    ordered = sorted(
+        text_items,
+        key=lambda item: (
+            min(float(item["box"][1]), float(item["box"][3])),
+            min(float(item["box"][0]), float(item["box"][2])),
+        ),
+    )
+    avg_height = sum(max(1.0, abs(float(item["box"][3]) - float(item["box"][1]))) for item in ordered) / len(ordered)
+    max_vertical_gap = avg_height * AUTO_ROI_PARAGRAPH_MAX_GAP_HEIGHT_RATIO
+    left_tolerance = max(1.0, image_width * AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO)
+
+    groups: List[List[Dict[str, Any]]] = []
+    current_group: List[Dict[str, Any]] = []
+    for item in ordered:
+        if not current_group:
+            current_group = [item]
+            continue
+
+        previous = current_group[-1]
+        previous_box = previous["box"]
+        current_box = item["box"]
+        previous_bottom = max(float(previous_box[1]), float(previous_box[3]))
+        current_top = min(float(current_box[1]), float(current_box[3]))
+        vertical_gap = current_top - previous_bottom
+        left_delta = abs(min(float(previous_box[0]), float(previous_box[2])) - min(float(current_box[0]), float(current_box[2])))
+        can_merge = (
+            0 <= vertical_gap <= max_vertical_gap
+            and _horizontal_overlap_ratio(previous_box, current_box) >= AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO
+            and left_delta <= left_tolerance
+            and not _has_blocker_between_lines(previous_box, current_box, blocker_boxes)
+        )
+        if can_merge:
+            current_group.append(item)
+        else:
+            groups.append(current_group)
+            current_group = [item]
+    if current_group:
+        groups.append(current_group)
+
+    paragraph_items: List[Dict[str, Any]] = []
+    for group in groups:
+        if len(group) == 1:
+            paragraph_items.append(group[0])
+            continue
+        boxes = [item["box"] for item in group]
+        paragraph_items.append(
+            {
+                "box": _merge_boxes(boxes),
+                "type": "text",
+                "confidence": sum(float(item.get("confidence", 0.0)) for item in group) / len(group),
+                "auto_roi_group": {
+                    "mode": "paragraph",
+                    "line_count": len(group),
+                    "source_boxes": boxes,
+                    "rules": {
+                        "max_vertical_gap_avg_height": AUTO_ROI_PARAGRAPH_MAX_GAP_HEIGHT_RATIO,
+                        "min_x_overlap": AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO,
+                        "left_edge_tolerance_image_width": AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO,
+                    },
+                },
+            }
+        )
+    return paragraph_items
+
+
+def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_mode: AutoRoiMode = "text_line") -> Dict[str, Any]:
     if image is None or image.size == 0:
         raise ValueError("Invalid image for layout analysis.")
+    if auto_roi_mode not in {"text_line", "paragraph"}:
+        auto_roi_mode = "text_line"
 
     try:
-        remote_result = remote_analyze_layout(image, expand_text_rois=expand_text_rois)
+        remote_result = remote_analyze_layout(image, expand_text_rois=expand_text_rois, auto_roi_mode=auto_roi_mode)
         if remote_result is not None:
             return remote_result
     except ModelRuntimeUnavailableError as error:
@@ -428,6 +549,15 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Dict[st
 
         filtered_items.append(item)
 
+    layout_blocker_boxes = [item["box"] for item in filtered_items if item["type"] in {"table", "image"}]
+    if auto_roi_mode == "paragraph":
+        text_items = [item for item in filtered_items if item["type"] == "text"]
+        layout_items = [item for item in filtered_items if item["type"] != "text"]
+        filtered_items = [
+            *_build_paragraph_text_items(text_items, layout_blocker_boxes, width),
+            *layout_items,
+        ]
+
     original_boxes = [_clip_box_to_image(item["box"], width, height) for item in filtered_items]
     regions: List[Dict[str, Any]] = []
     for item_index, item in enumerate(filtered_items):
@@ -462,6 +592,7 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Dict[st
             {
                 "type": region_type,
                 "confidence": float(item["confidence"]),
+                "auto_roi_group": item.get("auto_roi_group"),
                 "roi": {
                     "x_ratio": _clamp_ratio(left / max(width, 1)),
                     "y_ratio": _clamp_ratio(top / max(height, 1)),
@@ -487,6 +618,12 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Dict[st
             "left": AUTO_ROI_EXPAND_LEFT_RATIO,
             "right": AUTO_ROI_EXPAND_RIGHT_RATIO,
             "max_neighbor_overlap": AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO,
+            "mode": auto_roi_mode,
+            "paragraph": {
+                "max_vertical_gap_avg_height": AUTO_ROI_PARAGRAPH_MAX_GAP_HEIGHT_RATIO,
+                "min_x_overlap": AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO,
+                "left_edge_tolerance_image_width": AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO,
+            },
         },
     }
 

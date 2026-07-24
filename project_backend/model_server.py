@@ -25,6 +25,7 @@ from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError,
 class ImagePayload(BaseModel):
     image: str
     expand_text_rois: bool = False
+    auto_roi_mode: str = "text_line"
 
 
 class ImagesPayload(BaseModel):
@@ -171,7 +172,16 @@ def warmup() -> Dict[str, Any]:
 def runtime_analyze_layout(payload: ImagePayload) -> Dict[str, Any]:
     try:
         _, opencv_img = _decode_image(payload.image)
-        return {"success": True, "data": _json_safe(analyze_layout(opencv_img, expand_text_rois=payload.expand_text_rois))}
+        return {
+            "success": True,
+            "data": _json_safe(
+                analyze_layout(
+                    opencv_img,
+                    expand_text_rois=payload.expand_text_rois,
+                    auto_roi_mode="paragraph" if payload.auto_roi_mode == "paragraph" else "text_line",
+                )
+            ),
+        }
     except LayoutAnalysisUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error))
     except Exception as error:

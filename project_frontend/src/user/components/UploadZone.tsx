@@ -80,28 +80,30 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    if (files.length > 1) {
+      alert("อัปโหลดได้ครั้งละ 1 ไฟล์เท่านั้น กรุณาเลือกไฟล์เดียว");
+      e.target.value = "";
+      return;
+    }
 
     setIsProcessing(true);
-    let accumulatedImages: string[] = [];
+    const file = files[0];
+    let preparedImages: string[] = [];
 
     try {
-      for (let i = 0; i < files.length; i += 1) {
-        const file = files[i];
-        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-          const pdfImages = await convertPdfToImages(file);
-          accumulatedImages = [...accumulatedImages, ...pdfImages];
-        } else {
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ""));
-            reader.readAsDataURL(file);
-          });
-          accumulatedImages.push(base64);
-        }
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        preparedImages = await convertPdfToImages(file);
+      } else {
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.readAsDataURL(file);
+        });
+        preparedImages = [base64];
       }
 
-      if (accumulatedImages.length > 0) {
-        onUploadSuccess(accumulatedImages);
+      if (preparedImages.length > 0) {
+        onUploadSuccess(preparedImages);
       }
     } catch (error) {
       alert("เกิดข้อผิดพลาดระหว่างเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");
@@ -147,7 +149,6 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
             <input
               type="file"
               accept="image/*,application/pdf"
-              multiple
               className="absolute inset-0 z-10 cursor-pointer opacity-0"
               aria-label="เลือกไฟล์เอกสาร"
               onChange={handleFileChange}
@@ -162,7 +163,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
                 วางไฟล์เอกสารที่นี่ หรือคลิกเพื่อเลือกไฟล์
               </h3>
               <p className="ui-body mx-auto max-w-md text-slate-500">
-                เลือกไฟล์ภาพหรือ PDF ได้หลายหน้า ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
+                เลือกได้ครั้งละ 1 ไฟล์ รองรับไฟล์ภาพหรือ PDF หลายหน้า ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
               </p>
             </div>
 

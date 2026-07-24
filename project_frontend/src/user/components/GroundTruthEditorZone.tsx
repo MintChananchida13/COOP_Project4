@@ -1,8 +1,8 @@
 ﻿"use client";
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2 } from 'lucide-react';
-import { ROI, OCRResult, TableMergedCell } from '../../types/ocr';
+import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2, Columns3 } from 'lucide-react';
+import { ROI, OCRResult, StructuredTableResult, TableMergedCell } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
@@ -170,6 +170,8 @@ type TableSelection = {
 type TableEditorSnapshot = {
   rows: string[][];
   mergedCells: TableMergedCell[];
+  columnWidths: number[];
+  headerRowCount: number;
 };
 
 type TableContextMenuState = {
@@ -182,6 +184,12 @@ const normalizeEditableRows = (rows?: string[][] | null): string[][] => {
   const maxColumns = Math.max(...usefulRows.map(row => row.length), 1);
   return usefulRows.map(row => [...row.map(cell => String(cell ?? "")), ...Array(maxColumns - row.length).fill("")]);
 };
+
+const normalizeColumnWidths = (widths: number[] | undefined, columnCount: number): number[] =>
+  Array.from({ length: columnCount }, (_, index) => {
+    const value = widths?.[index];
+    return Number.isFinite(value) ? Math.max(72, Math.min(420, Number(value))) : 144;
+  });
 
 const cloneMergedCells = (cells?: TableMergedCell[]): TableMergedCell[] =>
   (cells || []).map(cell => ({
@@ -233,6 +241,8 @@ const sanitizeTableSnapshot = (snapshot: TableEditorSnapshot): TableEditorSnapsh
   const rows = normalizeEditableRows(snapshot.rows);
   const rowCount = rows.length;
   const colCount = rows[0]?.length || 1;
+  const columnWidths = normalizeColumnWidths(snapshot.columnWidths, colCount);
+  const headerRowCount = Math.max(1, Math.min(rowCount, Number(snapshot.headerRowCount || 1)));
   const occupied = new Set<string>();
   const mergedCells: TableMergedCell[] = [];
 
@@ -264,7 +274,7 @@ const sanitizeTableSnapshot = (snapshot: TableEditorSnapshot): TableEditorSnapsh
     });
   });
 
-  return { rows, mergedCells };
+  return { rows, mergedCells, columnWidths, headerRowCount };
 };
 
 const snapshotToKey = (snapshot: TableEditorSnapshot) => JSON.stringify(snapshot);
@@ -280,23 +290,83 @@ const getSpreadsheetColumnLabel = (index: number) => {
   return label;
 };
 
+const structuredTableFromSnapshot = (
+  snapshot: TableEditorSnapshot,
+  sourceStructured?: StructuredTableResult | null
+): StructuredTableResult => {
+  const { rows, mergedCells, columnWidths, headerRowCount } = sanitizeTableSnapshot(snapshot);
+  const sourceCells = new Map(
+    (sourceStructured?.cells || []).map(cell => [`${cell.row}:${cell.col}`, cell])
+  );
+  const cells = rows.flatMap((row, rowIndex) =>
+    row.map((text, colIndex) => {
+      const merge = getMergeAtAnchor(mergedCells, rowIndex, colIndex);
+      const containingMerge = getMergeContainingCell(mergedCells, rowIndex, colIndex);
+      const sourceCell = sourceCells.get(`${rowIndex}:${colIndex}`);
+      return {
+        row: rowIndex,
+        col: colIndex,
+        text,
+        rowSpan: merge?.rowSpan ?? 1,
+        colSpan: merge?.colSpan ?? 1,
+        bbox: sourceCell?.bbox,
+        ocrText: sourceCell?.ocrText ?? sourceCell?.text ?? text,
+        groundTruth: text,
+        hidden: Boolean(containingMerge && (containingMerge.row !== rowIndex || containingMerge.col !== colIndex)),
+      };
+    })
+  );
+
+  return {
+    rows,
+    cells,
+    colWidths: columnWidths,
+    headerRowCount,
+    bbox: sourceStructured?.bbox,
+  };
+};
+
+const structuredTableToJson = (structured: StructuredTableResult) =>
+  JSON.stringify(
+    {
+      headerRowCount: structured.headerRowCount ?? 1,
+      colWidths: structured.colWidths ?? [],
+      cells: (structured.cells || []).map(cell => ({
+        row: cell.row,
+        col: cell.col,
+        text: cell.text,
+        rowSpan: cell.rowSpan ?? 1,
+        colSpan: cell.colSpan ?? 1,
+        bbox: cell.bbox,
+        ocrText: cell.ocrText ?? cell.text,
+        groundTruth: cell.groundTruth ?? cell.text,
+      })),
+    },
+    null,
+    2
+  );
+
 const EditableTableResult = ({
   value,
   rows: sourceRows,
   mergedCells,
+  structured,
   onChange,
 }: {
   value: string;
   rows?: string[][] | null;
   mergedCells?: TableMergedCell[];
-  onChange: (nextValue: string, nextRows: string[][], nextMergedCells: TableMergedCell[]) => void;
+  structured?: StructuredTableResult | null;
+  onChange: (nextValue: string, nextRows: string[][], nextMergedCells: TableMergedCell[], nextStructured: StructuredTableResult) => void;
 }) => {
   const sourceSnapshot = useMemo(
     () => sanitizeTableSnapshot({
-      rows: normalizeEditableRows(sourceRows || parseTableText(value)),
+      rows: normalizeEditableRows(sourceRows || structured?.rows || parseTableText(value)),
       mergedCells: cloneMergedCells(mergedCells),
+      columnWidths: normalizeColumnWidths(structured?.colWidths, normalizeEditableRows(sourceRows || structured?.rows || parseTableText(value))[0]?.length || 1),
+      headerRowCount: structured?.headerRowCount ?? 1,
     }),
-    [sourceRows, value, mergedCells]
+    [sourceRows, structured, value, mergedCells]
   );
   const sourceKey = snapshotToKey(sourceSnapshot);
   const [snapshot, setSnapshot] = useState<TableEditorSnapshot>(sourceSnapshot);
@@ -304,6 +374,8 @@ const EditableTableResult = ({
   const [historyIndex, setHistoryIndex] = useState(0);
   const [selection, setSelection] = useState<TableSelection | null>(null);
   const [contextMenu, setContextMenu] = useState<TableContextMenuState | null>(null);
+  const [isDraggingSelection, setIsDraggingSelection] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -320,7 +392,8 @@ const EditableTableResult = ({
     setSnapshot(sanitized);
     setHistory(nextHistory);
     setHistoryIndex(nextHistory.length - 1);
-    onChange(tableRowsToMarkdown(sanitized.rows), sanitized.rows, sanitized.mergedCells);
+    const nextStructured = structuredTableFromSnapshot(sanitized, structured);
+    onChange(structuredTableToJson(nextStructured), sanitized.rows, sanitized.mergedCells, nextStructured);
   };
 
   const restoreSnapshot = (nextIndex: number) => {
@@ -328,7 +401,8 @@ const EditableTableResult = ({
     if (!nextSnapshot) return;
     setSnapshot(nextSnapshot);
     setHistoryIndex(nextIndex);
-    onChange(tableRowsToMarkdown(nextSnapshot.rows), nextSnapshot.rows, nextSnapshot.mergedCells);
+    const nextStructured = structuredTableFromSnapshot(nextSnapshot, structured);
+    onChange(structuredTableToJson(nextStructured), nextSnapshot.rows, nextSnapshot.mergedCells, nextStructured);
   };
 
   const handleKeyboardShortcuts = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -378,8 +452,28 @@ const EditableTableResult = ({
     );
   };
 
+  const startDragSelection = (event: React.MouseEvent, row: number, col: number) => {
+    if (event.button !== 0) return;
+    selectCell(row, col, event.shiftKey);
+    setIsDraggingSelection(true);
+  };
+
+  const extendDragSelection = (row: number, col: number) => {
+    if (!isDraggingSelection) return;
+    setSelection(prev => prev ? { ...prev, endRow: row, endCol: col } : { startRow: row, startCol: col, endRow: row, endCol: col });
+  };
+
+  useEffect(() => {
+    if (!isDraggingSelection) return;
+    const stopDragging = () => setIsDraggingSelection(false);
+    window.addEventListener("mouseup", stopDragging);
+    return () => window.removeEventListener("mouseup", stopDragging);
+  }, [isDraggingSelection]);
+
   const rows = snapshot.rows;
   const merged = snapshot.mergedCells;
+  const columnWidths = snapshot.columnWidths;
+  const headerRowCount = snapshot.headerRowCount;
   const maxColumns = rows[0]?.length || 1;
   const bounds = getSelectionBounds(selection);
   const selectedMerge = bounds ? getMergeContainingCell(merged, bounds.top, bounds.left) : null;
@@ -422,7 +516,7 @@ const EditableTableResult = ({
   const updateCell = (rowIndex: number, cellIndex: number, nextValue: string) => {
     const nextRows = rows.map(row => [...row]);
     nextRows[rowIndex][cellIndex] = nextValue;
-    commitSnapshot({ rows: nextRows, mergedCells: merged });
+    commitSnapshot({ rows: nextRows, mergedCells: merged, columnWidths, headerRowCount });
   };
 
   const insertRow = (where: "above" | "below") => {
@@ -439,7 +533,7 @@ const EditableTableResult = ({
       }
       return cell;
     });
-    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged, columnWidths, headerRowCount: insertIndex <= headerRowCount - 1 ? headerRowCount + 1 : headerRowCount });
     setSelection({ startRow: insertIndex, endRow: insertIndex, startCol: 0, endCol: 0 });
   };
 
@@ -471,7 +565,7 @@ const EditableTableResult = ({
         originalCells,
       }];
     });
-    commitSnapshot({ rows: nextRows.length > 0 ? nextRows : [["Column 1"]], mergedCells: nextMerged });
+    commitSnapshot({ rows: nextRows.length > 0 ? nextRows : [["Column 1"]], mergedCells: nextMerged, columnWidths, headerRowCount: Math.max(1, Math.min(headerRowCount, nextRows.length || 1)) });
     setSelection({ startRow: Math.min(deleteTop, Math.max(0, nextRows.length - 1)), endRow: Math.min(deleteTop, Math.max(0, nextRows.length - 1)), startCol: 0, endCol: 0 });
   };
 
@@ -495,7 +589,9 @@ const EditableTableResult = ({
       }
       return cell;
     });
-    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    const nextColumnWidths = [...columnWidths];
+    nextColumnWidths.splice(insertIndex, 0, 144);
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged, columnWidths: nextColumnWidths, headerRowCount });
     setSelection({ startRow: 0, endRow: 0, startCol: insertIndex, endCol: insertIndex });
   };
 
@@ -528,7 +624,8 @@ const EditableTableResult = ({
         originalCells,
       }];
     });
-    commitSnapshot({ rows: nextRows, mergedCells: nextMerged });
+    const nextColumnWidths = columnWidths.filter((_, index) => index < deleteLeft || index > deleteRight);
+    commitSnapshot({ rows: nextRows, mergedCells: nextMerged, columnWidths: nextColumnWidths, headerRowCount });
     setSelection({ startRow: 0, endRow: 0, startCol: Math.min(deleteLeft, Math.max(0, maxColumns - deletedCount - 1)), endCol: Math.min(deleteLeft, Math.max(0, maxColumns - deletedCount - 1)) });
   };
 
@@ -546,6 +643,8 @@ const EditableTableResult = ({
     }
     commitSnapshot({
       rows: nextRows,
+      columnWidths,
+      headerRowCount,
       mergedCells: [
         ...merged,
         {
@@ -576,23 +675,56 @@ const EditableTableResult = ({
     commitSnapshot({
       rows: nextRows,
       mergedCells: merged.filter(cell => cell.id !== selectedMerge.id),
+      columnWidths,
+      headerRowCount,
     });
     setSelection({ startRow: selectedMerge.row, startCol: selectedMerge.col, endRow: selectedMerge.row, endCol: selectedMerge.col });
+  };
+
+  const resizeColumn = (cellIndex: number, delta: number) => {
+    const nextWidths = [...columnWidths];
+    nextWidths[cellIndex] = Math.max(72, Math.min(420, (nextWidths[cellIndex] || 144) + delta));
+    commitSnapshot({ rows, mergedCells: merged, columnWidths: nextWidths, headerRowCount });
+  };
+
+  const autoFitColumn = (cellIndex: number) => {
+    const longest = Math.max(
+      getSpreadsheetColumnLabel(cellIndex).length,
+      ...rows.map(row => String(row[cellIndex] || "").length)
+    );
+    const nextWidths = [...columnWidths];
+    nextWidths[cellIndex] = Math.max(88, Math.min(420, longest * 8 + 36));
+    commitSnapshot({ rows, mergedCells: merged, columnWidths: nextWidths, headerRowCount });
+  };
+
+  const autoFitAllColumns = () => {
+    commitSnapshot({
+      rows,
+      mergedCells: merged,
+      headerRowCount,
+      columnWidths: columnWidths.map((_, index) => {
+        const longest = Math.max(getSpreadsheetColumnLabel(index).length, ...rows.map(row => String(row[index] || "").length));
+        return Math.max(88, Math.min(420, longest * 8 + 36));
+      }),
+    });
   };
 
   const renderEditableCell = (rowIndex: number, cellIndex: number) => {
     if (isCoveredByMergedCell(merged, rowIndex, cellIndex)) return null;
     const merge = getMergeAtAnchor(merged, rowIndex, cellIndex);
     const selected = isCellInSelection(rowIndex, cellIndex, selection);
-    const Tag = rowIndex === 0 ? "th" : "td";
+    const Tag = rowIndex < headerRowCount ? "th" : "td";
     return (
       <Tag
         key={`${rowIndex}-${cellIndex}`}
         rowSpan={merge?.rowSpan}
         colSpan={merge?.colSpan}
-        className={`min-w-32 border p-1.5 align-top ${
-          selected ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400" : rowIndex === 0 ? "border-slate-300 bg-slate-100" : "border-slate-300 bg-white"
+        style={{ width: columnWidths[cellIndex], minWidth: columnWidths[cellIndex] }}
+        className={`border p-1.5 align-top ${
+          selected ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400" : rowIndex < headerRowCount ? "border-slate-300 bg-slate-100" : "border-slate-300 bg-white"
         }`}
+        onMouseDown={(event) => startDragSelection(event, rowIndex, cellIndex)}
+        onMouseEnter={() => extendDragSelection(rowIndex, cellIndex)}
         onClick={(event) => selectCell(rowIndex, cellIndex, event.shiftKey)}
         onContextMenu={(event) => openContextMenu(event, rowIndex, cellIndex)}
       >
@@ -603,11 +735,11 @@ const EditableTableResult = ({
           }
           onClick={(event) => selectCell(rowIndex, cellIndex, event.shiftKey)}
           onChange={(event) => updateCell(rowIndex, cellIndex, event.target.value)}
-          className={`min-h-9 w-full resize-y rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
-            rowIndex === 0 ? "bg-white/80 font-black" : "bg-transparent font-medium"
+          className={`min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
+            rowIndex < headerRowCount ? "bg-white/80 font-black" : "bg-transparent font-medium"
           }`}
           rows={merge ? Math.max(1, merge.rowSpan) : 1}
-          placeholder={rowIndex === 0 ? `Column ${cellIndex + 1}` : ""}
+          placeholder={rowIndex < headerRowCount ? `Header ${rowIndex + 1}.${cellIndex + 1}` : ""}
           spellCheck={false}
           translate="no"
         />
@@ -622,10 +754,13 @@ const EditableTableResult = ({
   const isFullColumnSelected = (cellIndex: number) =>
     Boolean(bounds && bounds.left <= cellIndex && bounds.right >= cellIndex && bounds.top === 0 && bounds.bottom === rows.length - 1);
   const allSelected = Boolean(bounds && bounds.top === 0 && bounds.left === 0 && bounds.bottom === rows.length - 1 && bounds.right === maxColumns - 1);
+  const setHeaderRows = (nextCount: number) => {
+    commitSnapshot({ rows, mergedCells: merged, columnWidths, headerRowCount: Math.max(1, Math.min(rows.length, nextCount)) });
+  };
 
   return (
     <div
-      className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm"
+      className={`${isFullScreen ? "fixed inset-3 z-[9998] flex flex-col" : ""} overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm`}
       onKeyDown={handleKeyboardShortcuts}
       tabIndex={0}
     >
@@ -648,12 +783,24 @@ const EditableTableResult = ({
             <button type="button" onClick={splitSelectedCell} disabled={!selectedMerge} className={toolbarButtonClass}>
               แยกเซลล์
             </button>
+            <button type="button" onClick={() => setHeaderRows(headerRowCount - 1)} disabled={headerRowCount <= 1} className={toolbarButtonClass}>
+              Header -
+            </button>
+            <button type="button" onClick={() => setHeaderRows(headerRowCount + 1)} disabled={headerRowCount >= rows.length} className={toolbarButtonClass}>
+              Header +
+            </button>
+            <button type="button" onClick={autoFitAllColumns} className={toolbarButtonClass}>
+              <Columns3 size={12} /> Auto-fit
+            </button>
+            <button type="button" onClick={() => setIsFullScreen(value => !value)} className={toolbarButtonClass}>
+              <Maximize2 size={12} /> {isFullScreen ? "ออกเต็มจอ" : "เต็มจอ"}
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="max-h-[420px] overflow-auto">
-        <table className="min-w-full border-collapse text-left text-xs">
+      <div className={`${isFullScreen ? "min-h-0 flex-1" : "max-h-[420px]"} overflow-auto`}>
+        <table className="border-collapse text-left text-xs" style={{ minWidth: columnWidths.reduce((sum, width) => sum + width, 48) + 48 }}>
           <thead className="sticky top-0 z-30">
             <tr>
               <th
@@ -666,13 +813,20 @@ const EditableTableResult = ({
               {Array.from({ length: maxColumns }).map((_, cellIndex) => (
                 <th
                   key={cellIndex}
-                  className={`min-w-32 border border-slate-300 bg-slate-100 px-2 py-2 text-left text-[10px] font-black text-slate-600 ${
+                  style={{ width: columnWidths[cellIndex], minWidth: columnWidths[cellIndex] }}
+                  className={`relative border border-slate-300 bg-slate-100 px-2 py-2 text-left text-[10px] font-black text-slate-600 ${
                     isFullColumnSelected(cellIndex) ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""
                   }`}
                   onClick={() => selectColumn(cellIndex)}
+                  onDoubleClick={() => autoFitColumn(cellIndex)}
                   title="เลือกทั้งคอลัมน์"
                 >
                   {getSpreadsheetColumnLabel(cellIndex)}
+                  <span className="ml-1 text-[9px] font-semibold text-slate-400">{Math.round(columnWidths[cellIndex])}px</span>
+                  <span className="absolute right-0 top-0 flex h-full w-5 flex-col overflow-hidden">
+                    <button type="button" className="h-1/2 text-[9px] leading-none hover:bg-indigo-100" onClick={(event) => { event.stopPropagation(); resizeColumn(cellIndex, 12); }}>+</button>
+                    <button type="button" className="h-1/2 text-[9px] leading-none hover:bg-indigo-100" onClick={(event) => { event.stopPropagation(); resizeColumn(cellIndex, -12); }}>-</button>
+                  </span>
                 </th>
               ))}
             </tr>
@@ -864,17 +1018,20 @@ export default function GroundTruthEditorZone({
     let changed = false;
     const updated = ocrResults.map(item => {
       const rows = normalizeTableRows(item.tableRows);
-      const tableMarkdown = rows ? tableRowsToMarkdown(rows) : "";
-      const shouldUseTableMarkdown =
-        tableMarkdown && (!item.extractedText.trim() || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(item.extractedText.trim()));
+      const isTable = item.type === "table" || item.dataType === "table";
+      const structured = item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
+      const structuredJson = structured ? structuredTableToJson(structured) : "";
+      const shouldUseStructured =
+        Boolean(structuredJson) && (!item.extractedText.trim() || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(item.extractedText.trim()));
 
-      if (item.originalText === undefined || shouldUseTableMarkdown) {
+      if (item.originalText === undefined || shouldUseStructured || (structured && !item.tableStructured)) {
         changed = true;
         return {
           ...item,
-          originalText: item.originalText ?? (tableMarkdown || item.extractedText),
-          extractedText: shouldUseTableMarkdown ? tableMarkdown : item.extractedText,
+          originalText: item.originalText ?? (structuredJson || item.extractedText),
+          extractedText: shouldUseStructured ? structuredJson : item.extractedText,
           tableRows: rows || item.tableRows,
+          tableStructured: structured || item.tableStructured,
         };
       }
       return item;
@@ -1435,8 +1592,11 @@ export default function GroundTruthEditorZone({
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         const rawTableRows = tableRowsFromResult(res, getRawOcrText(res));
-                        const editedTableRows = normalizeTableRows(res.tableRows) || parseTableText(res.extractedText) || rawTableRows;
-                        const editedTableValue = res.extractedText || (editedTableRows ? tableRowsToMarkdown(editedTableRows) : getRawOcrText(res));
+                        const editedTableRows = normalizeTableRows(res.tableRows) || normalizeTableRows(res.tableStructured?.rows) || parseTableText(res.extractedText) || rawTableRows;
+                        const fallbackStructured = editedTableRows
+                          ? structuredTableFromSnapshot({ rows: editedTableRows, mergedCells: cloneMergedCells(res.tableMergedCells), columnWidths: res.tableStructured?.colWidths || [], headerRowCount: res.tableStructured?.headerRowCount ?? 1 }, res.tableStructured)
+                          : null;
+                        const editedTableValue = res.extractedText || (fallbackStructured ? structuredTableToJson(fallbackStructured) : getRawOcrText(res));
                         return (
                           <article
                             key={res.id}
@@ -1477,8 +1637,9 @@ export default function GroundTruthEditorZone({
                                 value={editedTableValue}
                                 rows={editedTableRows}
                                 mergedCells={res.tableMergedCells}
-                                onChange={(nextValue, nextRows, nextMergedCells) =>
-                                  setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells } : item))
+                                structured={res.tableStructured}
+                                onChange={(nextValue, nextRows, nextMergedCells, nextStructured) =>
+                                  setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells, tableStructured: nextStructured } : item))
                                 }
                               />
                             </div>

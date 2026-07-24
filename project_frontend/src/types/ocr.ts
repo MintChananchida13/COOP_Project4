@@ -35,8 +35,31 @@ export interface OCRResult {
   points?: { x: number; y: number }[];
   tableRows?: string[][];
   tableMergedCells?: TableMergedCell[];
+  tableStructured?: StructuredTableResult;
   tableHtml?: string;
   tableDebug?: Record<string, unknown>;
+}
+
+export interface StructuredTableCell {
+  row: number;
+  col: number;
+  text: string;
+  bbox?: number[];
+  rowSpan?: number;
+  colSpan?: number;
+  ocrText?: string;
+  groundTruth?: string;
+  hidden?: boolean;
+}
+
+export interface StructuredTableResult {
+  columns?: string[];
+  rows?: string[][];
+  cells?: StructuredTableCell[];
+  bbox?: number[];
+  rowSpans?: number[];
+  colWidths?: number[];
+  headerRowCount?: number;
 }
 
 export interface TableMergedCell {

@@ -71,7 +71,7 @@ def _post(endpoint: str, payload: Dict[str, Any], timeout: float = 120.0) -> Dic
     return data if isinstance(data, dict) else parsed
 
 
-def remote_analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> Optional[Dict[str, Any]]:
+def remote_analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_mode: str = "text_line") -> Optional[Dict[str, Any]]:
     if not _runtime_url():
         return None
     return _post(
@@ -79,6 +79,7 @@ def remote_analyze_layout(image: np.ndarray, expand_text_rois: bool = False) -> 
         {
             "image": _image_to_data_url(image),
             "expand_text_rois": expand_text_rois,
+            "auto_roi_mode": auto_roi_mode,
         },
     )
 

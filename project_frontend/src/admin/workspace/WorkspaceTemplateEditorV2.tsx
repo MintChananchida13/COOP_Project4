@@ -271,6 +271,7 @@ export default function WorkspaceTemplateEditorV2({
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
   const [autoDetectError, setAutoDetectError] = useState("");
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [autoRoiMode, setAutoRoiMode] = useState<"text_line" | "paragraph">("text_line");
   const [imageCategories, setImageCategories] = useState<ImageVerificationCategory[]>([]);
   const [categoryError, setCategoryError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -517,6 +518,7 @@ export default function WorkspaceTemplateEditorV2({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          auto_roi_mode: autoRoiMode,
           images: [
             {
               page_index: currentPage,
@@ -815,6 +817,28 @@ export default function WorkspaceTemplateEditorV2({
                   </div>
                   {mode === "extraction_fields" && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
+                      <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
+                        <button
+                          type="button"
+                          disabled={isAutoDetecting}
+                          onClick={() => setAutoRoiMode("text_line")}
+                          className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
+                            autoRoiMode === "text_line" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-white"
+                          }`}
+                        >
+                          Text Line
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isAutoDetecting}
+                          onClick={() => setAutoRoiMode("paragraph")}
+                          className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
+                            autoRoiMode === "paragraph" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-white"
+                          }`}
+                        >
+                          Paragraph
+                        </button>
+                      </div>
                       <button
                         type="button"
                         onClick={handleAutoDetectExtractionRoi}

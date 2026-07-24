@@ -48,6 +48,56 @@ interface TemplateDetectionNotice {
 
 type NoticeTone = "success" | "warning" | "danger" | "info";
 
+const USER_FLOW_STEPS = [
+  {
+    key: "upload",
+    title: "อัปโหลดเอกสาร",
+    description: "เลือกไฟล์ภาพหรือ PDF ครั้งละ 1 ไฟล์",
+    note: "PDF หนึ่งไฟล์รองรับหลายหน้า ระบบจะแปลงเป็นภาพก่อนทำงาน",
+  },
+  {
+    key: "adjust",
+    title: "ตรวจขอบเขตภาพ",
+    description: "ปรับกรอบให้ครอบเฉพาะตัวเอกสาร",
+    note: "กรอบที่แม่นยำช่วยให้การค้นหา Template และ OCR ดีขึ้น",
+  },
+  {
+    key: "studio",
+    title: "เลือกข้อมูลที่ต้องอ่าน",
+    description: "ใช้ ROI จาก Template หรือกำหนด ROI เอง",
+    note: "เลือกเฉพาะ Field ที่ต้องการ เพื่อลดเวลาและลดข้อมูลเกินจำเป็น",
+  },
+  {
+    key: "editor",
+    title: "ตรวจผลและส่งออก",
+    description: "แก้ไขผล OCR แล้วบันทึกก่อน Export",
+    note: "ผลลัพธ์ที่ส่งออกจะใช้ค่าที่ผู้ใช้แก้ไขล่าสุด",
+  },
+] as const;
+
+const USER_STEP_ACTIONS: Record<(typeof USER_FLOW_STEPS)[number]["key"], string[]> = {
+  upload: [
+    "คลิกพื้นที่อัปโหลดหรือวางไฟล์เอกสาร 1 ไฟล์ลงในช่องอัปโหลด",
+    "ตรวจสอบว่าไฟล์เป็นภาพหรือ PDF ที่อ่านได้ชัดเจน",
+    "หากเป็น PDF หลายหน้า ระบบจะเตรียมภาพให้ทีละหน้า",
+  ],
+  adjust: [
+    "ตรวจกรอบเอกสารที่ระบบจับให้อัตโนมัติ",
+    "ลากมุมหรือขอบกรอบให้ครอบเฉพาะตัวเอกสาร",
+    "กดยืนยันเมื่อภาพตรงและพร้อมค้นหา Template",
+  ],
+  studio: [
+    "เลือก Field หรือวาด ROI เฉพาะข้อมูลที่ต้องการอ่าน",
+    "ใช้ Auto ROI เมื่อต้องการให้ระบบช่วยสร้างกรอบเริ่มต้น",
+    "กดอ่านข้อมูลที่เลือกเพื่อเข้าสู่หน้าตรวจผล",
+  ],
+  editor: [
+    "ตรวจข้อความ ตาราง และรูปภาพที่ OCR อ่านได้",
+    "แก้ไขค่าที่ไม่ถูกต้อง แล้วกดบันทึกการเปลี่ยนแปลง",
+    "กด Export แล้วเลือกรูปแบบไฟล์ที่ต้องการ",
+  ],
+};
+
 const NoTemplateDetectionCard = ({ notice }: { notice: TemplateDetectionNotice }) => (
   <section className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
     <div className="flex items-start gap-3">
@@ -279,6 +329,116 @@ const downloadTextFile = (filename: string, content: string, mimeType = "applica
   URL.revokeObjectURL(url);
 };
 
+const downloadBlobFile = (filename: string, blob: Blob) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const escapeHtml = (value: unknown) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const safeFilename = (value: string) =>
+  (value || "image")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80) || "image";
+
+const dataUrlToBytes = (dataUrl: string) => {
+  const [, encoded = ""] = dataUrl.split(",", 2);
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+};
+
+const crc32 = (bytes: Uint8Array) => {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const writeUint16 = (target: number[], value: number) => {
+  target.push(value & 0xff, (value >>> 8) & 0xff);
+};
+
+const writeUint32 = (target: number[], value: number) => {
+  target.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+};
+
+const createZipBlob = (files: { name: string; bytes: Uint8Array }[]) => {
+  const encoder = new TextEncoder();
+  const output: number[] = [];
+  const centralDirectory: number[] = [];
+
+  files.forEach((file) => {
+    const nameBytes = encoder.encode(file.name);
+    const checksum = crc32(file.bytes);
+    const localHeaderOffset = output.length;
+
+    writeUint32(output, 0x04034b50);
+    writeUint16(output, 20);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint32(output, checksum);
+    writeUint32(output, file.bytes.length);
+    writeUint32(output, file.bytes.length);
+    writeUint16(output, nameBytes.length);
+    writeUint16(output, 0);
+    output.push(...nameBytes, ...file.bytes);
+
+    writeUint32(centralDirectory, 0x02014b50);
+    writeUint16(centralDirectory, 20);
+    writeUint16(centralDirectory, 20);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint32(centralDirectory, checksum);
+    writeUint32(centralDirectory, file.bytes.length);
+    writeUint32(centralDirectory, file.bytes.length);
+    writeUint16(centralDirectory, nameBytes.length);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint32(centralDirectory, 0);
+    writeUint32(centralDirectory, localHeaderOffset);
+    centralDirectory.push(...nameBytes);
+  });
+
+  const centralDirectoryOffset = output.length;
+  output.push(...centralDirectory);
+  writeUint32(output, 0x06054b50);
+  writeUint16(output, 0);
+  writeUint16(output, 0);
+  writeUint16(output, files.length);
+  writeUint16(output, files.length);
+  writeUint32(output, centralDirectory.length);
+  writeUint32(output, centralDirectoryOffset);
+  writeUint16(output, 0);
+  return new Blob([new Uint8Array(output)], { type: "application/zip" });
+};
+
 const parseExportTable = (value: string): string[][] | null => {
   const trimmed = value.trim();
   if (!trimmed || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(trimmed)) return null;
@@ -387,7 +547,9 @@ export default function Home() {
   const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string>("");
   const [saveNotice, setSaveNotice] = useState<{ tone: "success" | "error"; title: string; message: string } | null>(null);
   const [isExportWarningOpen, setIsExportWarningOpen] = useState<boolean>(false);
-  const [pendingExportType, setPendingExportType] = useState<"json" | "text">("json");
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
+  const [pendingExportType, setPendingExportType] = useState<"json" | "word" | "excel" | "images">("json");
+  const [excelExportMode, setExcelExportMode] = useState<"fields" | "tables" | "fields_tables">("fields_tables");
   const [matchedTemplate, setMatchedTemplate] = useState<{
     id: string;
     name: string;
@@ -482,7 +644,7 @@ export default function Home() {
         setClassificationStatus("ไม่พบภาพสำหรับแยกประเภทเอกสาร ระบบเปิด Custom OCR ให้ใช้งานต่อ");
         setTemplateDetectionNotice({
           title: "ไม่พบภาพสำหรับแยกประเภทเอกสาร",
-          message: "ระบบไม่สามารถเริ่มค้นหา Template ได้เพราะไม่มีภาพที่ยืนยันขอบเขตแล้ว",
+          message: "ระบบไม่สามารถเริ่มค้นหา Template ได้ เพราะไม่มีภาพที่ยืนยันขอบเขตแล้ว",
           detail: "โปรดกลับไปตรวจสอบภาพ หรือใช้งาน Custom OCR ต่อ",
         });
         return;
@@ -650,6 +812,12 @@ export default function Home() {
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
                 points: roi.points,
                 tableRows: rawTableRows || undefined,
+                tableStructured:
+                  resItem.table_structured && typeof resItem.table_structured === "object"
+                    ? resItem.table_structured
+                    : resItem.tableStructured && typeof resItem.tableStructured === "object"
+                      ? resItem.tableStructured
+                      : undefined,
                 tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
                 tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
               };
@@ -859,13 +1027,35 @@ export default function Home() {
       const rawValue = result.extractedText || "";
 
       if (fieldType === "table") {
+        if (result.tableStructured?.cells?.length) {
+          assignExportField(page.fields, fieldName, {
+            headerRowCount: result.tableStructured.headerRowCount ?? 1,
+            colWidths: result.tableStructured.colWidths ?? [],
+            cells: result.tableStructured.cells
+              .filter((cell) => !cell.hidden)
+              .map((cell) => ({
+                row: cell.row,
+                col: cell.col,
+                text: cell.text,
+                rowSpan: cell.rowSpan ?? 1,
+                colSpan: cell.colSpan ?? 1,
+                bbox: cell.bbox,
+                ocrText: cell.ocrText ?? cell.text,
+                groundTruth: cell.groundTruth ?? cell.text,
+              })),
+          });
+          return;
+        }
         const tableRows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(rawValue);
-        assignExportField(page.fields, fieldName, tableRows ? tableRowsToObjects(tableRows) : rawValue);
+        assignExportField(page.fields, fieldName, tableRows ? { rows: tableRows } : rawValue);
         return;
       }
 
       if (fieldType === "image") {
-        assignExportField(page.fields, fieldName, result.saved_path || rawValue || "image");
+        assignExportField(page.fields, fieldName, {
+          type: "image",
+          hasImage: true,
+        });
         return;
       }
 
@@ -877,6 +1067,121 @@ export default function Home() {
       page_count: pages.length,
       pages,
     };
+  };
+
+  const getResultFieldType = (result: OCRResult & { pageIndex?: number }) => {
+    const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+    return result.type || matchedRoi?.type || matchedRoi?.dataType || "text";
+  };
+
+  const getStructuredTableForExport = (result: OCRResult & { pageIndex?: number }) => {
+    if (result.tableStructured?.cells?.length) return result.tableStructured;
+    const rows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(result.extractedText || "");
+    if (!rows) return null;
+    return {
+      headerRowCount: 1,
+      rows,
+      cells: rows.flatMap((row, rowIndex) =>
+        row.map((text, colIndex) => ({
+          row: rowIndex,
+          col: colIndex,
+          text,
+          rowSpan: 1,
+          colSpan: 1,
+          ocrText: text,
+          groundTruth: text,
+          hidden: false,
+        }))
+      ),
+    };
+  };
+
+  const renderHtmlTable = (result: OCRResult & { pageIndex?: number }) => {
+    const structured = getStructuredTableForExport(result);
+    if (!structured?.cells?.length) return `<p>${escapeHtml(result.extractedText)}</p>`;
+    const headerRows = structured.headerRowCount ?? 1;
+    const cellsByPosition = new Map(structured.cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
+    const visibleCells = structured.cells.filter((cell) => !cell.hidden);
+    const rowCount = Math.max(...visibleCells.map((cell) => cell.row + (cell.rowSpan ?? 1)), structured.rows?.length || 1);
+    const colCount = Math.max(...visibleCells.map((cell) => cell.col + (cell.colSpan ?? 1)), structured.rows?.[0]?.length || 1);
+
+    const rowsHtml = Array.from({ length: rowCount }, (_, rowIndex) => {
+      const cellsHtml = Array.from({ length: colCount }, (_, colIndex) => {
+        const cell = cellsByPosition.get(`${rowIndex}:${colIndex}`);
+        if (!cell || cell.hidden) return "";
+        const tag = rowIndex < headerRows ? "th" : "td";
+        const spanAttrs = `${(cell.rowSpan ?? 1) > 1 ? ` rowspan="${cell.rowSpan}"` : ""}${(cell.colSpan ?? 1) > 1 ? ` colspan="${cell.colSpan}"` : ""}`;
+        return `<${tag}${spanAttrs}>${escapeHtml(cell.groundTruth ?? cell.text)}</${tag}>`;
+      }).join("");
+      return `<tr>${cellsHtml}</tr>`;
+    }).join("");
+    return `<table>${rowsHtml}</table>`;
+  };
+
+  const buildImageFieldCrops = async () => {
+    const imageResults = ocrResults.filter((result) => getResultFieldType(result) === "image");
+    const usedNames = new Map<string, number>();
+    const crops: { fieldName: string; filename: string; dataUrl: string }[] = [];
+
+    for (const result of imageResults) {
+      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
+      const sourceImage = imagesList[pageIndex] || imagesList[0] || previewUrl;
+      if (!matchedRoi || !sourceImage) continue;
+      const img = await loadImageElement(sourceImage);
+      const displayWidth = 750;
+      const displayHeight = img.naturalWidth > 0 ? (img.naturalHeight / img.naturalWidth) * displayWidth : 1000;
+      const cropped = cropRoiToImage(img, matchedRoi, img.naturalWidth / displayWidth, img.naturalHeight / displayHeight);
+      if (!cropped) continue;
+      const baseName = safeFilename(result.fieldName || matchedRoi.fieldName || "image");
+      const nextCount = (usedNames.get(baseName) || 0) + 1;
+      usedNames.set(baseName, nextCount);
+      crops.push({
+        fieldName: result.fieldName,
+        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.jpg`,
+        dataUrl: cropped,
+      });
+    }
+    return crops;
+  };
+
+  const buildWordHtml = async () => {
+    const imageCrops = await buildImageFieldCrops();
+    const imageByField = new Map(imageCrops.map((crop) => [crop.fieldName, crop]));
+    const body = ocrResults.map((result) => {
+      const fieldType = getResultFieldType(result);
+      if (fieldType === "table") {
+        return `<h2>${escapeHtml(result.fieldName)}</h2>${renderHtmlTable(result)}`;
+      }
+      if (fieldType === "image") {
+        const crop = imageByField.get(result.fieldName);
+        return `<h2>${escapeHtml(result.fieldName)}</h2>${crop ? `<p><img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:520px;height:auto"></p>` : "<p>Image field</p>"}`;
+      }
+      return `<h2>${escapeHtml(result.fieldName)}</h2><p>${escapeHtml(result.extractedText)}</p>`;
+    }).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}</style></head><body><h1>OCR Export</h1>${matchedTemplate?.name ? `<p><strong>Template:</strong> ${escapeHtml(matchedTemplate.name)}</p>` : ""}${body}</body></html>`;
+  };
+
+  const buildExcelHtml = (mode: "fields" | "tables" | "fields_tables") => {
+    const includeFields = mode === "fields" || mode === "fields_tables";
+    const includeTables = mode === "tables" || mode === "fields_tables";
+    const sections: string[] = [];
+    if (includeFields) {
+      const rows = ocrResults
+        .filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image")
+        .map((result) => `<tr><td>${escapeHtml(result.fieldName)}</td><td>${escapeHtml(result.extractedText)}</td></tr>`)
+        .join("");
+      sections.push(`<table><tr><th>Field</th><th>Ground Truth</th></tr>${rows || "<tr><td colspan=\"2\">No text fields</td></tr>"}</table>`);
+    }
+    if (includeTables) {
+      ocrResults
+        .filter((result) => getResultFieldType(result) === "table")
+        .forEach((result) => {
+          sections.push(`<h3>${escapeHtml(result.fieldName)}</h3>${renderHtmlTable(result)}`);
+        });
+    }
+    return `<!doctype html><html><head><meta charset="utf-8"><style>table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap}th{background:#e2e8f0}</style></head><body>${sections.join("")}</body></html>`;
   };
 
   useEffect(() => {
@@ -966,34 +1271,84 @@ export default function Home() {
     setExportText(buildExportPlainText());
   };
 
-  const requestExport = (type: "json" | "text") => {
-    setPendingExportType(type);
-    if (!isGroundTruthSaved) {
-      setIsExportWarningOpen(true);
+  const downloadWordExport = async () => {
+    setCopyStatus("");
+    setExportJson("");
+    setExportText("");
+    downloadTextFile(`ocr-export-${Date.now()}.doc`, await buildWordHtml(), "application/msword");
+  };
+
+  const downloadExcelExport = () => {
+    setCopyStatus("");
+    setExportJson("");
+    setExportText("");
+    downloadTextFile(`ocr-export-${Date.now()}.xls`, buildExcelHtml(excelExportMode), "application/vnd.ms-excel");
+  };
+
+  const downloadImageZipExport = async () => {
+    setCopyStatus("");
+    setExportJson("");
+    setExportText("");
+    const crops = await buildImageFieldCrops();
+    if (crops.length === 0) {
+      setOperationNotice({
+        tone: "warning",
+        title: "ไม่มี Image Field",
+        message: "ไม่พบ field ประเภทรูปภาพที่สามารถ crop เพื่อดาวน์โหลดได้",
+      });
       return;
     }
+    downloadBlobFile(
+      `ocr-image-fields-${Date.now()}.zip`,
+      createZipBlob(crops.map((crop) => ({ name: crop.filename, bytes: dataUrlToBytes(crop.dataUrl) })))
+    );
+  };
+
+  const runExport = async (type: "json" | "word" | "excel" | "images") => {
     if (type === "json") {
       openExportJson();
       return;
     }
-    openExportText();
+    if (type === "word") {
+      await downloadWordExport();
+      return;
+    }
+    if (type === "excel") {
+      downloadExcelExport();
+      return;
+    }
+    await downloadImageZipExport();
+  };
+
+  const requestExport = (type: "json" | "word" | "excel" | "images") => {
+    setPendingExportType(type);
+    setIsExportMenuOpen(false);
+    if (!isGroundTruthSaved) {
+      setIsExportWarningOpen(true);
+      return;
+    }
+    void runExport(type);
   };
 
   const handleOpenExportJson = () => {
     requestExport("json");
   };
 
-  const handleOpenExportText = () => {
-    requestExport("text");
+  const handleOpenExportWord = () => {
+    requestExport("word");
+  };
+
+  const handleOpenExportExcel = () => {
+    requestExport("excel");
+  };
+
+  const handleOpenExportImages = () => {
+    requestExport("images");
   };
 
   const continuePendingExport = () => {
     setIsExportWarningOpen(false);
-    if (pendingExportType === "text") {
-      openExportText();
-      return;
-    }
-    openExportJson();
+    void runExport(pendingExportType);
   };
 
   const handleCopyExportJson = async () => {
@@ -1016,6 +1371,57 @@ export default function Home() {
     }
   };
 
+  const currentFlowIndex = Math.max(0, USER_FLOW_STEPS.findIndex((step) => step.key === currentStep));
+  const currentFlowStep = USER_FLOW_STEPS[currentFlowIndex] || USER_FLOW_STEPS[0];
+  const completedStepCount = currentFlowIndex;
+
+  const renderUserWorkflowGuide = () => (
+    <section className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+      <div className="grid gap-2 lg:grid-cols-[minmax(180px,260px)_1fr] lg:items-center">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-wide text-blue-600">ขั้นตอนปัจจุบัน</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <h2 className="text-sm font-black text-slate-950">{currentFlowStep.title}</h2>
+            <span className="hidden text-xs font-semibold text-slate-500 sm:inline">{currentFlowStep.description}</span>
+          </div>
+        </div>
+        <div className="grid min-w-0 grid-cols-2 gap-1 sm:grid-cols-4">
+          {USER_FLOW_STEPS.map((step, index) => {
+            const active = index === currentFlowIndex;
+            const completed = index < currentFlowIndex;
+            return (
+              <div
+                key={step.key}
+                className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                  active
+                    ? "border-blue-300 bg-blue-50 text-blue-950"
+                    : completed
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+                      : "border-slate-200 bg-slate-50 text-slate-500"
+                }`}
+              >
+                <span
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${
+                    active
+                      ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                      : completed
+                        ? "bg-emerald-600 text-white"
+                        : "bg-white text-slate-400 ring-1 ring-slate-200"
+                  }`}
+                >
+                  {completed ? "✓" : index + 1}
+                </span>
+                <span className="truncate text-[11px] font-black leading-tight">{step.title}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <p className="mt-2 hidden border-t border-slate-100 pt-2 text-xs font-semibold leading-relaxed text-slate-500 md:block">
+        หมายเหตุ: {USER_STEP_ACTIONS[currentFlowStep.key][0]}
+      </p>
+    </section>
+  );
   const getUserFlowStatus = (): { tone: NoticeTone; title: string; message: string } => {
     if (currentStep === "upload") {
       return {
@@ -1110,6 +1516,8 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        {currentStep !== "upload" && renderUserWorkflowGuide()}
 
         <InlineState tone={userFlowStatus.tone} title={userFlowStatus.title} message={userFlowStatus.message} />
         {operationNotice && (
@@ -1246,23 +1654,55 @@ export default function Home() {
               <div>
                 <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Actions</h2>
                 <p className="text-xs font-semibold text-slate-500">
-                  ส่งออกผลลัพธ์เป็น JSON หรือส่งคำขอให้ผู้ดูแลระบบตรวจสอบ Template
+                  ส่งออกผลลัพธ์หรือส่งคำขอให้ผู้ดูแลระบบตรวจสอบ Template
                 </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExportMenuOpen(true)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenExportWord}
+                  className="hidden rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Export Word
+                </button>
+                <div className="hidden rounded-xl border border-slate-200 bg-white p-2">
+                  <select
+                    value={excelExportMode}
+                    onChange={(event) => setExcelExportMode(event.target.value as "fields" | "tables" | "fields_tables")}
+                    className="mb-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[10px] font-bold text-slate-600 outline-none"
+                  >
+                    <option value="fields_tables">Fields + Tables</option>
+                    <option value="fields">Fields</option>
+                    <option value="tables">Tables</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleOpenExportExcel}
+                    className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+                  >
+                    Export Excel
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={handleOpenExportJson}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                  className="hidden rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
                   ส่งออก JSON
                 </button>
                 <button
                   type="button"
-                  onClick={handleOpenExportText}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                  onClick={handleOpenExportImages}
+                  className="hidden rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
-                  Export Text
+                  Export Images ZIP
                 </button>
                 <button
                   type="button"
@@ -1280,6 +1720,77 @@ export default function Home() {
               isOpen={isTemplateRequestOpen}
               onClose={() => setIsTemplateRequestOpen(false)}
             />
+            {isExportMenuOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <section className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+                    <div>
+                      <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export</h2>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        เลือกรูปแบบไฟล์ที่ต้องการส่งออกจากค่าที่แก้ไขแล้ว
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsExportMenuOpen(false)}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="grid gap-3 p-5 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenExportWord}
+                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
+                    >
+                      <span className="block text-xs font-black text-slate-900">Word</span>
+                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">รวม text, table และ image crop</span>
+                      <span className="mt-2 block text-[10px] font-bold text-slate-400">เหมาะสำหรับส่งต่อเป็นรายงานหรือเอกสารตรวจทาน</span>
+                    </button>
+                    <div className="rounded-xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs font-black text-slate-900">Excel</div>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-500">เลือกข้อมูลที่จะใส่ในไฟล์ Excel</p>
+                      <select
+                        value={excelExportMode}
+                        onChange={(event) => setExcelExportMode(event.target.value as "fields" | "tables" | "fields_tables")}
+                        className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-600 outline-none"
+                      >
+                        <option value="fields_tables">Fields + Tables</option>
+                        <option value="fields">Fields</option>
+                        <option value="tables">Tables</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleOpenExportExcel}
+                        className="mt-3 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+                      >
+                        Download Excel
+                      </button>
+                      <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400">หมายเหตุ: Image field ไม่ถูกใส่ใน Excel ให้ดาวน์โหลดผ่าน Images ZIP</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenExportJson}
+                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
+                    >
+                      <span className="block text-xs font-black text-slate-900">JSON</span>
+                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">ส่ง text/table และ image metadata เท่านั้น</span>
+                      <span className="mt-2 block text-[10px] font-bold text-slate-400">ไม่แนบ path, Base64 หรือไฟล์รูปภาพจริง</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenExportImages}
+                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
+                    >
+                      <span className="block text-xs font-black text-slate-900">Images ZIP</span>
+                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">ดาวน์โหลด crop ของ image fields</span>
+                      <span className="mt-2 block text-[10px] font-bold text-slate-400">ไฟล์ใน ZIP จะตั้งชื่อตามชื่อ Field</span>
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
             {exportJson && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
                 <section className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">

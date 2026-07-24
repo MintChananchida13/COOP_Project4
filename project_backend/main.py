@@ -52,6 +52,7 @@ class LayoutImagePayload(BaseModel):
 
 class LayoutAnalysisPayload(BaseModel):
     images: List[LayoutImagePayload]
+    auto_roi_mode: str = "text_line"
 
 
 app = FastAPI(title="OCR AI Engine")
@@ -529,7 +530,8 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
     try:
         for page in payload.images:
             _, opencv_img = decode_base64_image(page.image)
-            analysis = analyze_layout(opencv_img, expand_text_rois=True)
+            auto_roi_mode = "paragraph" if payload.auto_roi_mode == "paragraph" else "text_line"
+            analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode=auto_roi_mode)
             regions = []
             for index, region in enumerate(analysis["regions"], start=1):
                 region_type = region["type"]
@@ -548,6 +550,7 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
                         "extraction_method": extraction_method,
                         "confidence": region.get("confidence", 0.0),
                         "roi_expansion": region.get("roi_expansion"),
+                        "auto_roi_group": region.get("auto_roi_group"),
                         "roi": {
                             "page_number": int(page.page_index) + 1,
                             **region["roi"],
@@ -572,6 +575,7 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
             "success": True,
             "engine": "paddleocr",
             "model": "PP-DocLayoutV3+PP-OCRv5",
+            "auto_roi_mode": "paragraph" if payload.auto_roi_mode == "paragraph" else "text_line",
             "pages": pages,
         }
     except LayoutAnalysisUnavailableError as err:
