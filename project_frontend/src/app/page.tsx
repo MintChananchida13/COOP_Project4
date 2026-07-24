@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import AdjustZone from "../user/components/AdjustZone";
 import WorkspaceZone from "../user/components/WorkspaceZone";
@@ -47,6 +47,16 @@ interface TemplateDetectionNotice {
 }
 
 type NoticeTone = "success" | "warning" | "danger" | "info";
+type ExportFormat = "word" | "excel" | "json" | "images";
+type ExportContentOptions = {
+  text: boolean;
+  tables: boolean;
+  images: boolean;
+};
+type ExportDisplayOptions = {
+  showFieldNames: boolean;
+  showDocumentTitle: boolean;
+};
 
 const USER_FLOW_STEPS = [
   {
@@ -548,8 +558,12 @@ export default function Home() {
   const [saveNotice, setSaveNotice] = useState<{ tone: "success" | "error"; title: string; message: string } | null>(null);
   const [isExportWarningOpen, setIsExportWarningOpen] = useState<boolean>(false);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
-  const [pendingExportType, setPendingExportType] = useState<"json" | "word" | "excel" | "images">("json");
+  const [pendingExportType, setPendingExportType] = useState<ExportFormat>("json");
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("word");
+  const [exportContent, setExportContent] = useState<ExportContentOptions>({ text: true, tables: true, images: true });
+  const [exportOptions, setExportOptions] = useState<ExportDisplayOptions>({ showFieldNames: true, showDocumentTitle: true });
   const [excelExportMode, setExcelExportMode] = useState<"fields" | "tables" | "fields_tables">("fields_tables");
+  const [textPreviewCopyStatus, setTextPreviewCopyStatus] = useState<string>("");
   const [matchedTemplate, setMatchedTemplate] = useState<{
     id: string;
     name: string;
@@ -1012,13 +1026,32 @@ export default function Home() {
     }
   };
 
-  const buildExportPayload = () => {
+  const getIncludedExportResults = (content: ExportContentOptions = exportContent) =>
+    ocrResults.filter((result) => {
+      const fieldType = getResultFieldType(result);
+      if (fieldType === "table") return content.tables;
+      if (fieldType === "image") return content.images;
+      return content.text;
+    });
+
+  const buildExportPayload = (
+    content: ExportContentOptions = exportContent,
+    options: ExportDisplayOptions = exportOptions
+  ) => {
     const pages = Array.from({ length: Math.max(imagesList.length, 1) }, (_, index) => ({
       page: index + 1,
-      fields: {} as Record<string, unknown>,
+      fields: options.showFieldNames ? ({} as Record<string, unknown>) : ([] as unknown[]),
     }));
 
-    ocrResults.forEach((result) => {
+    const addField = (page: { fields: Record<string, unknown> | unknown[] }, fieldName: string, value: unknown) => {
+      if (Array.isArray(page.fields)) {
+        page.fields.push(value);
+        return;
+      }
+      assignExportField(page.fields, fieldName, value);
+    };
+
+    getIncludedExportResults(content).forEach((result) => {
       const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
       const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
       const page = pages[pageIndex] || pages[0];
@@ -1028,7 +1061,7 @@ export default function Home() {
 
       if (fieldType === "table") {
         if (result.tableStructured?.cells?.length) {
-          assignExportField(page.fields, fieldName, {
+          addField(page, fieldName, {
             headerRowCount: result.tableStructured.headerRowCount ?? 1,
             colWidths: result.tableStructured.colWidths ?? [],
             cells: result.tableStructured.cells
@@ -1047,23 +1080,23 @@ export default function Home() {
           return;
         }
         const tableRows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(rawValue);
-        assignExportField(page.fields, fieldName, tableRows ? { rows: tableRows } : rawValue);
+        addField(page, fieldName, tableRows ? { rows: tableRows } : rawValue);
         return;
       }
 
       if (fieldType === "image") {
-        assignExportField(page.fields, fieldName, {
+        addField(page, fieldName, {
           type: "image",
           hasImage: true,
         });
         return;
       }
 
-      assignExportField(page.fields, fieldName, rawValue);
+      addField(page, fieldName, rawValue);
     });
 
     return {
-      template: matchedTemplate?.name ?? null,
+      ...(options.showDocumentTitle ? { template: matchedTemplate?.name ?? "OCR Export" } : {}),
       page_count: pages.length,
       pages,
     };
@@ -1118,8 +1151,26 @@ export default function Home() {
     return `<table>${rowsHtml}</table>`;
   };
 
-  const buildImageFieldCrops = async () => {
-    const imageResults = ocrResults.filter((result) => getResultFieldType(result) === "image");
+  const buildImageFieldPreviewList = (content: ExportContentOptions = exportContent) => {
+    if (!content.images) return [];
+    const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
+    const usedNames = new Map<string, number>();
+    return imageResults.map((result) => {
+      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      const baseName = safeFilename(result.fieldName || matchedRoi?.fieldName || "image");
+      const nextCount = (usedNames.get(baseName) || 0) + 1;
+      usedNames.set(baseName, nextCount);
+      return {
+        fieldName: result.fieldName || matchedRoi?.fieldName || "Image",
+        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.jpg`,
+        page: Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0) + 1,
+      };
+    });
+  };
+
+  const buildImageFieldCrops = async (content: ExportContentOptions = exportContent) => {
+    if (!content.images) return [];
+    const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
     const usedNames = new Map<string, number>();
     const crops: { fieldName: string; filename: string; dataUrl: string }[] = [];
 
@@ -1145,43 +1196,64 @@ export default function Home() {
     return crops;
   };
 
-  const buildWordHtml = async () => {
-    const imageCrops = await buildImageFieldCrops();
+  const buildWordHtml = async (
+    content: ExportContentOptions = exportContent,
+    options: ExportDisplayOptions = exportOptions
+  ) => {
+    const imageCrops = await buildImageFieldCrops(content);
     const imageByField = new Map(imageCrops.map((crop) => [crop.fieldName, crop]));
-    const body = ocrResults.map((result) => {
+    const body = getIncludedExportResults(content).map((result) => {
       const fieldType = getResultFieldType(result);
+      const heading = options.showFieldNames ? `<h2>${escapeHtml(result.fieldName)}</h2>` : "";
       if (fieldType === "table") {
-        return `<h2>${escapeHtml(result.fieldName)}</h2>${renderHtmlTable(result)}`;
+        return `${heading}${renderHtmlTable(result)}`;
       }
       if (fieldType === "image") {
         const crop = imageByField.get(result.fieldName);
-        return `<h2>${escapeHtml(result.fieldName)}</h2>${crop ? `<p><img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:520px;height:auto"></p>` : "<p>Image field</p>"}`;
+        return `${heading}${crop ? `<p><img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:520px;height:auto"></p>` : "<p>Image field</p>"}`;
       }
-      return `<h2>${escapeHtml(result.fieldName)}</h2><p>${escapeHtml(result.extractedText)}</p>`;
+      return `${heading}<p>${escapeHtml(result.extractedText)}</p>`;
     }).join("");
 
-    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}</style></head><body><h1>OCR Export</h1>${matchedTemplate?.name ? `<p><strong>Template:</strong> ${escapeHtml(matchedTemplate.name)}</p>` : ""}${body}</body></html>`;
+    const title = options.showDocumentTitle ? `<h1>${escapeHtml(matchedTemplate?.name || "OCR Export")}</h1>` : "";
+    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}</style></head><body>${title}${body || "<p>No content selected</p>"}</body></html>`;
   };
 
-  const buildExcelHtml = (mode: "fields" | "tables" | "fields_tables") => {
-    const includeFields = mode === "fields" || mode === "fields_tables";
-    const includeTables = mode === "tables" || mode === "fields_tables";
+  const buildExcelHtml = (
+    content: ExportContentOptions = exportContent,
+    options: ExportDisplayOptions = exportOptions
+  ) => {
     const sections: string[] = [];
-    if (includeFields) {
-      const rows = ocrResults
-        .filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image")
-        .map((result) => `<tr><td>${escapeHtml(result.fieldName)}</td><td>${escapeHtml(result.extractedText)}</td></tr>`)
-        .join("");
-      sections.push(`<table><tr><th>Field</th><th>Ground Truth</th></tr>${rows || "<tr><td colspan=\"2\">No text fields</td></tr>"}</table>`);
+    if (options.showDocumentTitle) {
+      sections.push(`<h1>${escapeHtml(matchedTemplate?.name || "OCR Export")}</h1>`);
     }
-    if (includeTables) {
-      ocrResults
+    if (content.text) {
+      const rows = getIncludedExportResults(content)
+        .filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image")
+        .map((result) =>
+          options.showFieldNames
+            ? `<tr><td>${escapeHtml(result.fieldName)}</td><td>${escapeHtml(result.extractedText)}</td></tr>`
+            : `<tr><td>${escapeHtml(result.extractedText)}</td></tr>`
+        )
+        .join("");
+      const header = options.showFieldNames ? "<tr><th>Field</th><th>Ground Truth</th></tr>" : "<tr><th>Ground Truth</th></tr>";
+      sections.push(`<h3>Text</h3><table>${header}${rows || "<tr><td colspan=\"2\">No text fields</td></tr>"}</table>`);
+    }
+    if (content.tables) {
+      getIncludedExportResults(content)
         .filter((result) => getResultFieldType(result) === "table")
         .forEach((result) => {
-          sections.push(`<h3>${escapeHtml(result.fieldName)}</h3>${renderHtmlTable(result)}`);
+          sections.push(`${options.showFieldNames ? `<h3>${escapeHtml(result.fieldName)}</h3>` : ""}${renderHtmlTable(result)}`);
         });
     }
-    return `<!doctype html><html><head><meta charset="utf-8"><style>table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap}th{background:#e2e8f0}</style></head><body>${sections.join("")}</body></html>`;
+    if (content.images) {
+      const rows = buildImageFieldPreviewList(content)
+        .map((image) => `<tr>${options.showFieldNames ? `<td>${escapeHtml(image.fieldName)}</td>` : ""}<td>${escapeHtml(image.filename)}</td><td>${image.page}</td></tr>`)
+        .join("");
+      const header = `<tr>${options.showFieldNames ? "<th>Field</th>" : ""}<th>Filename</th><th>Page</th></tr>`;
+      sections.push(`<h3>Images</h3><table>${header}${rows || "<tr><td colspan=\"3\">No image fields</td></tr>"}</table>`);
+    }
+    return `<!doctype html><html><head><meta charset="utf-8"><style>h1{font-size:18pt}h3{font-size:12pt;margin-top:16px}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap}th{background:#e2e8f0}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
   };
 
   useEffect(() => {
@@ -1275,21 +1347,21 @@ export default function Home() {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    downloadTextFile(`ocr-export-${Date.now()}.doc`, await buildWordHtml(), "application/msword");
+    downloadTextFile(`ocr-export-${Date.now()}.doc`, await buildWordHtml(exportContent, exportOptions), "application/msword");
   };
 
   const downloadExcelExport = () => {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    downloadTextFile(`ocr-export-${Date.now()}.xls`, buildExcelHtml(excelExportMode), "application/vnd.ms-excel");
+    downloadTextFile(`ocr-export-${Date.now()}.xls`, buildExcelHtml(exportContent, exportOptions), "application/vnd.ms-excel");
   };
 
   const downloadImageZipExport = async () => {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    const crops = await buildImageFieldCrops();
+    const crops = await buildImageFieldCrops(exportContent);
     if (crops.length === 0) {
       setOperationNotice({
         tone: "warning",
@@ -1304,9 +1376,10 @@ export default function Home() {
     );
   };
 
-  const runExport = async (type: "json" | "word" | "excel" | "images") => {
+  const runExport = async (type: ExportFormat) => {
     if (type === "json") {
-      openExportJson();
+      const json = JSON.stringify(buildExportPayload(exportContent, exportOptions), null, 2);
+      downloadTextFile(`ocr-export-${Date.now()}.json`, json);
       return;
     }
     if (type === "word") {
@@ -1320,34 +1393,39 @@ export default function Home() {
     await downloadImageZipExport();
   };
 
-  const requestExport = (type: "json" | "word" | "excel" | "images") => {
+  const requestExport = (type: ExportFormat) => {
     setPendingExportType(type);
-    setIsExportMenuOpen(false);
     if (!isGroundTruthSaved) {
       setIsExportWarningOpen(true);
       return;
     }
+    setIsExportMenuOpen(false);
     void runExport(type);
   };
 
   const handleOpenExportJson = () => {
-    requestExport("json");
+    setExportFormat("json");
+    setIsExportMenuOpen(true);
   };
 
   const handleOpenExportWord = () => {
-    requestExport("word");
+    setExportFormat("word");
+    setIsExportMenuOpen(true);
   };
 
   const handleOpenExportExcel = () => {
-    requestExport("excel");
+    setExportFormat("excel");
+    setIsExportMenuOpen(true);
   };
 
   const handleOpenExportImages = () => {
-    requestExport("images");
+    setExportFormat("images");
+    setIsExportMenuOpen(true);
   };
 
   const continuePendingExport = () => {
     setIsExportWarningOpen(false);
+    setIsExportMenuOpen(false);
     void runExport(pendingExportType);
   };
 
@@ -1374,6 +1452,134 @@ export default function Home() {
   const currentFlowIndex = Math.max(0, USER_FLOW_STEPS.findIndex((step) => step.key === currentStep));
   const currentFlowStep = USER_FLOW_STEPS[currentFlowIndex] || USER_FLOW_STEPS[0];
   const completedStepCount = currentFlowIndex;
+  const exportFormats: { key: ExportFormat; label: string }[] = [
+    { key: "word", label: "Word" },
+    { key: "excel", label: "Excel" },
+    { key: "json", label: "JSON" },
+    { key: "images", label: "Images" },
+  ];
+  const exportPreviewJson = JSON.stringify(buildExportPayload(exportContent, exportOptions), null, 2);
+  const exportPreviewImages = buildImageFieldPreviewList(exportContent);
+  const exportPreviewResults = getIncludedExportResults(exportContent);
+  const textPreviewItems = useMemo(() => {
+    return ocrResults
+      .filter((result) => (result.pageIndex !== undefined ? Number(result.pageIndex) : 0) === currentIndex)
+      .filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image")
+      .map((result) => ({
+        id: result.id,
+        key: result.fieldName?.trim() || `field_${result.id}`,
+        value: result.extractedText || "",
+      }));
+  }, [ocrResults, currentIndex, rois]);
+  const textPreviewCopyText = useMemo(() => {
+    return textPreviewItems.map((item) => `${item.key}: ${item.value || "-"}`).join("\n");
+  }, [textPreviewItems]);
+
+  const handleCopyTextPreview = async () => {
+    if (!textPreviewCopyText) return;
+    try {
+      await navigator.clipboard.writeText(textPreviewCopyText);
+      setTextPreviewCopyStatus("คัดลอกแล้ว");
+    } catch {
+      setTextPreviewCopyStatus("คัดลอกไม่สำเร็จ");
+    }
+    window.setTimeout(() => setTextPreviewCopyStatus(""), 1800);
+  };
+
+  const toggleExportContent = (key: keyof ExportContentOptions) => {
+    setExportContent((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleExportOption = (key: keyof ExportDisplayOptions) => {
+    setExportOptions((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const renderExportPreview = () => {
+    if (exportFormat === "json") {
+      return (
+        <pre className="max-h-[46vh] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
+          {exportPreviewJson}
+        </pre>
+      );
+    }
+
+    if (exportFormat === "images") {
+      return (
+        <div className="max-h-[46vh] overflow-auto rounded-xl border border-slate-200 bg-white">
+          {exportPreviewImages.length === 0 ? (
+            <p className="p-4 text-xs font-semibold text-slate-500">ไม่มีรูปภาพที่จะอยู่ใน ZIP</p>
+          ) : (
+            exportPreviewImages.map((image) => (
+              <div key={`${image.filename}-${image.page}`} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-black text-slate-900">{image.filename}</p>
+                  {exportOptions.showFieldNames && <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">{image.fieldName}</p>}
+                </div>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">หน้า {image.page}</span>
+              </div>
+            ))
+          )}
+        </div>
+      );
+    }
+
+    if (exportFormat === "excel") {
+      const textCount = exportPreviewResults.filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image").length;
+      const tableResults = exportPreviewResults.filter((result) => getResultFieldType(result) === "table");
+      return (
+        <div className="max-h-[46vh] space-y-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4">
+          {exportOptions.showDocumentTitle && <h3 className="text-sm font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
+          {exportContent.text && (
+            <div className="rounded-lg border border-slate-200">
+              <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700">Sheet: Text Fields</div>
+              <p className="px-3 py-2 text-xs font-semibold text-slate-500">{textCount} rows</p>
+            </div>
+          )}
+          {exportContent.tables && tableResults.map((result) => (
+            <div key={result.roiId || result.fieldName} className="rounded-lg border border-slate-200">
+              <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700">
+                Sheet: {exportOptions.showFieldNames ? result.fieldName : "Table"}
+              </div>
+              <div className="overflow-auto p-3" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
+            </div>
+          ))}
+          {exportContent.images && (
+            <div className="rounded-lg border border-slate-200">
+              <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700">Sheet: Images</div>
+              <p className="px-3 py-2 text-xs font-semibold text-slate-500">{exportPreviewImages.length} image rows</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-h-[46vh] overflow-auto rounded-xl border border-slate-200 bg-white p-5">
+        {exportOptions.showDocumentTitle && <h3 className="text-lg font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
+        <div className="mt-4 space-y-4">
+          {exportPreviewResults.length === 0 ? (
+            <p className="text-sm font-semibold text-slate-500">ไม่มีเนื้อหาที่เลือกสำหรับ Export</p>
+          ) : (
+            exportPreviewResults.map((result) => {
+              const fieldType = getResultFieldType(result);
+              return (
+                <section key={result.roiId || result.fieldName} className="border-b border-slate-100 pb-4 last:border-b-0">
+                  {exportOptions.showFieldNames && <h4 className="text-xs font-black uppercase tracking-wide text-slate-500">{result.fieldName}</h4>}
+                  {fieldType === "table" ? (
+                    <div className="mt-2 overflow-auto" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
+                  ) : fieldType === "image" ? (
+                    <p className="mt-2 text-sm font-semibold text-slate-600">Image crop จะถูกใส่ในเอกสาร Word</p>
+                  ) : (
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{result.extractedText || "-"}</p>
+                  )}
+                </section>
+              );
+            })
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const renderUserWorkflowGuide = () => (
     <section className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
@@ -1650,6 +1856,44 @@ export default function Home() {
               currentImageIndex={currentIndex}
               onImageIndexChange={(nextIdx) => setCurrentIndex(nextIdx)}
             />
+            {textPreviewItems.length > 0 && (
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-2 border-b border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-black text-slate-900">Text Preview</h2>
+                    <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                      แสดงค่าข้อความแบบ Key-Value จาก Ground Truth ปัจจุบันของหน้า {currentIndex + 1}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {textPreviewCopyStatus && (
+                      <span className="text-[10px] font-black text-emerald-600">{textPreviewCopyStatus}</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleCopyTextPreview}
+                      className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+                    >
+                      คัดลอก
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-56 overflow-auto bg-slate-50/60 p-3">
+                  <dl className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {textPreviewItems.map((item) => (
+                      <div key={item.id} className="grid gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(120px,0.45fr)_minmax(0,1fr)]">
+                        <dt className="min-w-0 truncate text-[11px] font-black text-slate-700" title={item.key}>
+                          {item.key}
+                        </dt>
+                        <dd className="min-w-0 whitespace-pre-wrap break-words text-xs font-semibold leading-relaxed text-slate-600" title={item.value || "-"}>
+                          {item.value || <span className="text-slate-400">-</span>}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              </section>
+            )}
             <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
               <div>
                 <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Actions</h2>
@@ -1722,12 +1966,12 @@ export default function Home() {
             />
             {isExportMenuOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                <section className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                <section className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                   <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div>
-                      <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export</h2>
+                      <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Preview</h2>
                       <p className="mt-1 text-xs font-semibold text-slate-500">
-                        เลือกรูปแบบไฟล์ที่ต้องการส่งออกจากค่าที่แก้ไขแล้ว
+                        ตรวจตัวอย่างจากค่า OCR/Ground Truth ปัจจุบันก่อนสร้างไฟล์จริง
                       </p>
                     </div>
                     <button
@@ -1738,54 +1982,95 @@ export default function Home() {
                       Close
                     </button>
                   </div>
-                  <div className="grid gap-3 p-5 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenExportWord}
-                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
-                    >
-                      <span className="block text-xs font-black text-slate-900">Word</span>
-                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">รวม text, table และ image crop</span>
-                      <span className="mt-2 block text-[10px] font-bold text-slate-400">เหมาะสำหรับส่งต่อเป็นรายงานหรือเอกสารตรวจทาน</span>
-                    </button>
-                    <div className="rounded-xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs font-black text-slate-900">Excel</div>
-                      <p className="mt-1 text-[11px] font-semibold text-slate-500">เลือกข้อมูลที่จะใส่ในไฟล์ Excel</p>
-                      <select
-                        value={excelExportMode}
-                        onChange={(event) => setExcelExportMode(event.target.value as "fields" | "tables" | "fields_tables")}
-                        className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-600 outline-none"
-                      >
-                        <option value="fields_tables">Fields + Tables</option>
-                        <option value="fields">Fields</option>
-                        <option value="tables">Tables</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={handleOpenExportExcel}
-                        className="mt-3 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
-                      >
-                        Download Excel
-                      </button>
-                      <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400">หมายเหตุ: Image field ไม่ถูกใส่ใน Excel ให้ดาวน์โหลดผ่าน Images ZIP</p>
+
+                  <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[280px_1fr]">
+                    <aside className="space-y-5 overflow-auto border-b border-slate-200 bg-slate-50 p-5 lg:border-b-0 lg:border-r">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Format</p>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {exportFormats.map((format) => (
+                            <button
+                              key={format.key}
+                              type="button"
+                              onClick={() => setExportFormat(format.key)}
+                              className={`rounded-lg border px-3 py-2 text-xs font-black ${
+                                exportFormat === format.key
+                                  ? "border-blue-300 bg-blue-50 text-blue-700"
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                              }`}
+                            >
+                              {format.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Content</p>
+                        <div className="mt-2 space-y-2">
+                          {[
+                            ["text", "Text"],
+                            ["tables", "Tables"],
+                            ["images", "Images"],
+                          ].map(([key, label]) => (
+                            <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={exportContent[key as keyof ExportContentOptions]}
+                                onChange={() => toggleExportContent(key as keyof ExportContentOptions)}
+                                className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Options</p>
+                        <div className="mt-2 space-y-2">
+                          {[
+                            ["showFieldNames", "Show Field Names"],
+                            ["showDocumentTitle", "Show Document Title"],
+                          ].map(([key, label]) => (
+                            <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={exportOptions[key as keyof ExportDisplayOptions]}
+                                onChange={() => toggleExportOption(key as keyof ExportDisplayOptions)}
+                                className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </aside>
+
+                    <div className="min-h-0 overflow-auto bg-slate-100 p-5">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Preview</p>
+                          <h3 className="text-sm font-black text-slate-950">{exportFormats.find((format) => format.key === exportFormat)?.label}</h3>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black text-slate-500 shadow-sm">
+                          {exportPreviewResults.length} fields
+                        </span>
+                      </div>
+                      {renderExportPreview()}
                     </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs font-semibold text-slate-500">
+                      Preview จะอัปเดตทันทีเมื่อเปลี่ยน Format, Content หรือ Options
+                    </p>
                     <button
                       type="button"
-                      onClick={handleOpenExportJson}
-                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
+                      onClick={() => requestExport(exportFormat)}
+                      className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white shadow-sm hover:bg-indigo-700"
                     >
-                      <span className="block text-xs font-black text-slate-900">JSON</span>
-                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">ส่ง text/table และ image metadata เท่านั้น</span>
-                      <span className="mt-2 block text-[10px] font-bold text-slate-400">ไม่แนบ path, Base64 หรือไฟล์รูปภาพจริง</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenExportImages}
-                      className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-indigo-200 hover:bg-indigo-50"
-                    >
-                      <span className="block text-xs font-black text-slate-900">Images ZIP</span>
-                      <span className="mt-1 block text-[11px] font-semibold text-slate-500">ดาวน์โหลด crop ของ image fields</span>
-                      <span className="mt-2 block text-[10px] font-bold text-slate-400">ไฟล์ใน ZIP จะตั้งชื่อตามชื่อ Field</span>
+                      Export {exportFormats.find((format) => format.key === exportFormat)?.label}
                     </button>
                   </div>
                 </section>
