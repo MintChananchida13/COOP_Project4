@@ -185,11 +185,51 @@ const normalizeEditableRows = (rows?: string[][] | null): string[][] => {
   return usefulRows.map(row => [...row.map(cell => String(cell ?? "")), ...Array(maxColumns - row.length).fill("")]);
 };
 
+const TABLE_COLUMN_MIN_WIDTH = 88;
+const TABLE_COLUMN_MAX_WIDTH = 640;
+
 const normalizeColumnWidths = (widths: number[] | undefined, columnCount: number): number[] =>
   Array.from({ length: columnCount }, (_, index) => {
     const value = widths?.[index];
-    return Number.isFinite(value) ? Math.max(72, Math.min(420, Number(value))) : 144;
+    return Number.isFinite(value) ? Math.max(TABLE_COLUMN_MIN_WIDTH, Math.min(TABLE_COLUMN_MAX_WIDTH, Number(value))) : 144;
   });
+
+const measureTableTextWidth = (() => {
+  let canvas: HTMLCanvasElement | null = null;
+  return (value: string, isHeader = false) => {
+    if (typeof document === "undefined") return value.length * 8;
+    canvas = canvas || document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return value.length * 8;
+    ctx.font = `${isHeader ? 800 : 500} 12px Arial, sans-serif`;
+    return Math.max(
+      0,
+      ...String(value || "")
+        .split(/\r?\n/)
+        .map(line => ctx.measureText(line || " ").width)
+    );
+  };
+})();
+
+const getAutoFitColumnWidth = (rows: string[][], cellIndex: number, headerRowCount = 1) => {
+  const labelWidth = measureTableTextWidth(getSpreadsheetColumnLabel(cellIndex), true);
+  const contentWidth = Math.max(
+    labelWidth,
+    ...rows.map((row, rowIndex) => measureTableTextWidth(row[cellIndex] || "", rowIndex < headerRowCount))
+  );
+  return Math.max(TABLE_COLUMN_MIN_WIDTH, Math.min(TABLE_COLUMN_MAX_WIDTH, Math.ceil(contentWidth + 56)));
+};
+
+const getAutoFitColumnWidths = (rows: string[][], headerRowCount = 1) => {
+  const columnCount = rows[0]?.length || 1;
+  return Array.from({ length: columnCount }, (_, index) => getAutoFitColumnWidth(rows, index, headerRowCount));
+};
+
+const fitTextareaToContent = (textarea: HTMLTextAreaElement | null) => {
+  if (!textarea) return;
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.max(36, textarea.scrollHeight)}px`;
+};
 
 const cloneMergedCells = (cells?: TableMergedCell[]): TableMergedCell[] =>
   (cells || []).map(cell => ({
@@ -360,12 +400,19 @@ const EditableTableResult = ({
   onChange: (nextValue: string, nextRows: string[][], nextMergedCells: TableMergedCell[], nextStructured: StructuredTableResult) => void;
 }) => {
   const sourceSnapshot = useMemo(
-    () => sanitizeTableSnapshot({
-      rows: normalizeEditableRows(sourceRows || structured?.rows || parseTableText(value)),
-      mergedCells: cloneMergedCells(mergedCells),
-      columnWidths: normalizeColumnWidths(structured?.colWidths, normalizeEditableRows(sourceRows || structured?.rows || parseTableText(value))[0]?.length || 1),
-      headerRowCount: structured?.headerRowCount ?? 1,
-    }),
+    () => {
+      const normalizedRows = normalizeEditableRows(sourceRows || structured?.rows || parseTableText(value));
+      const headerRowCount = structured?.headerRowCount ?? 1;
+      const sourceWidths = structured?.colWidths?.length
+        ? normalizeColumnWidths(structured.colWidths, normalizedRows[0]?.length || 1)
+        : getAutoFitColumnWidths(normalizedRows, headerRowCount);
+      return sanitizeTableSnapshot({
+        rows: normalizedRows,
+        mergedCells: cloneMergedCells(mergedCells),
+        columnWidths: sourceWidths,
+        headerRowCount,
+      });
+    },
     [sourceRows, structured, value, mergedCells]
   );
   const sourceKey = snapshotToKey(sourceSnapshot);
@@ -377,6 +424,7 @@ const EditableTableResult = ({
   const [isDraggingSelection, setIsDraggingSelection] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (sourceKey === snapshotToKey(snapshot)) return;
@@ -443,6 +491,15 @@ const EditableTableResult = ({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      editorRootRef.current
+        ?.querySelectorAll<HTMLTextAreaElement>("textarea[data-table-cell='true']")
+        .forEach(fitTextareaToContent);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [snapshot, isFullScreen]);
 
   const selectCell = (row: number, col: number, extend: boolean) => {
     setSelection(prev =>
@@ -516,7 +573,9 @@ const EditableTableResult = ({
   const updateCell = (rowIndex: number, cellIndex: number, nextValue: string) => {
     const nextRows = rows.map(row => [...row]);
     nextRows[rowIndex][cellIndex] = nextValue;
-    commitSnapshot({ rows: nextRows, mergedCells: merged, columnWidths, headerRowCount });
+    const nextColumnWidths = [...columnWidths];
+    nextColumnWidths[cellIndex] = getAutoFitColumnWidth(nextRows, cellIndex, headerRowCount);
+    commitSnapshot({ rows: nextRows, mergedCells: merged, columnWidths: nextColumnWidths, headerRowCount });
   };
 
   const insertRow = (where: "above" | "below") => {
@@ -683,17 +742,13 @@ const EditableTableResult = ({
 
   const resizeColumn = (cellIndex: number, delta: number) => {
     const nextWidths = [...columnWidths];
-    nextWidths[cellIndex] = Math.max(72, Math.min(420, (nextWidths[cellIndex] || 144) + delta));
+    nextWidths[cellIndex] = Math.max(TABLE_COLUMN_MIN_WIDTH, Math.min(TABLE_COLUMN_MAX_WIDTH, (nextWidths[cellIndex] || 144) + delta));
     commitSnapshot({ rows, mergedCells: merged, columnWidths: nextWidths, headerRowCount });
   };
 
   const autoFitColumn = (cellIndex: number) => {
-    const longest = Math.max(
-      getSpreadsheetColumnLabel(cellIndex).length,
-      ...rows.map(row => String(row[cellIndex] || "").length)
-    );
     const nextWidths = [...columnWidths];
-    nextWidths[cellIndex] = Math.max(88, Math.min(420, longest * 8 + 36));
+    nextWidths[cellIndex] = getAutoFitColumnWidth(rows, cellIndex, headerRowCount);
     commitSnapshot({ rows, mergedCells: merged, columnWidths: nextWidths, headerRowCount });
   };
 
@@ -702,10 +757,7 @@ const EditableTableResult = ({
       rows,
       mergedCells: merged,
       headerRowCount,
-      columnWidths: columnWidths.map((_, index) => {
-        const longest = Math.max(getSpreadsheetColumnLabel(index).length, ...rows.map(row => String(row[index] || "").length));
-        return Math.max(88, Math.min(420, longest * 8 + 36));
-      }),
+      columnWidths: getAutoFitColumnWidths(rows, headerRowCount),
     });
   };
 
@@ -714,13 +766,17 @@ const EditableTableResult = ({
     const merge = getMergeAtAnchor(merged, rowIndex, cellIndex);
     const selected = isCellInSelection(rowIndex, cellIndex, selection);
     const Tag = rowIndex < headerRowCount ? "th" : "td";
+    const columnSpan = merge?.colSpan ?? 1;
+    const cellWidth = columnWidths
+      .slice(cellIndex, cellIndex + columnSpan)
+      .reduce((sum, width) => sum + width, 0) || columnWidths[cellIndex] || 144;
     return (
       <Tag
         key={`${rowIndex}-${cellIndex}`}
         rowSpan={merge?.rowSpan}
         colSpan={merge?.colSpan}
-        style={{ width: columnWidths[cellIndex], minWidth: columnWidths[cellIndex] }}
-        className={`border p-1.5 align-top ${
+        style={{ width: cellWidth, minWidth: cellWidth }}
+        className={`h-auto border p-1.5 align-top ${
           selected ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400" : rowIndex < headerRowCount ? "border-slate-300 bg-slate-100" : "border-slate-300 bg-white"
         }`}
         onMouseDown={(event) => startDragSelection(event, rowIndex, cellIndex)}
@@ -729,13 +785,19 @@ const EditableTableResult = ({
         onContextMenu={(event) => openContextMenu(event, rowIndex, cellIndex)}
       >
         <textarea
+          data-table-cell="true"
           value={rows[rowIndex]?.[cellIndex] ?? ""}
+          ref={fitTextareaToContent}
           onFocus={() =>
             setSelection(prev => prev ?? { startRow: rowIndex, startCol: cellIndex, endRow: rowIndex, endCol: cellIndex })
           }
           onClick={(event) => selectCell(rowIndex, cellIndex, event.shiftKey)}
-          onChange={(event) => updateCell(rowIndex, cellIndex, event.target.value)}
-          className={`min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
+          onInput={(event) => fitTextareaToContent(event.currentTarget)}
+          onChange={(event) => {
+            fitTextareaToContent(event.currentTarget);
+            updateCell(rowIndex, cellIndex, event.target.value);
+          }}
+          className={`block min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
             rowIndex < headerRowCount ? "bg-white/80 font-black" : "bg-transparent font-medium"
           }`}
           rows={merge ? Math.max(1, merge.rowSpan) : 1}
@@ -760,6 +822,7 @@ const EditableTableResult = ({
 
   return (
     <div
+      ref={editorRootRef}
       className={`${isFullScreen ? "fixed inset-3 z-[9998] flex flex-col" : ""} overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm`}
       onKeyDown={handleKeyboardShortcuts}
       tabIndex={0}
@@ -800,7 +863,7 @@ const EditableTableResult = ({
       </div>
 
       <div className={`${isFullScreen ? "min-h-0 flex-1" : "max-h-[420px]"} overflow-auto`}>
-        <table className="border-collapse text-left text-xs" style={{ minWidth: columnWidths.reduce((sum, width) => sum + width, 48) + 48 }}>
+        <table className="border-collapse text-left text-xs" style={{ minWidth: columnWidths.reduce((sum, width) => sum + width, 48) + 48, tableLayout: "fixed" }}>
           <thead className="sticky top-0 z-30">
             <tr>
               <th
@@ -923,13 +986,17 @@ const CroppedRoiPreview = ({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const polygonPoints = roi.points && roi.points.length > 2 ? roi.points : null;
+      const hasPolygonMask = Boolean(polygonPoints);
+      if (!hasPolygonMask) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
 
       ctx.save();
-      if (roi.points && roi.points.length > 2) {
+      if (polygonPoints) {
         ctx.beginPath();
-        roi.points.forEach((p, idx) => {
+        polygonPoints.forEach((p, idx) => {
           const px = p.x * scaleX - realX;
           const py = p.y * scaleY - realY;
           if (idx === 0) {
@@ -956,7 +1023,7 @@ const CroppedRoiPreview = ({
       ctx.restore();
 
       if (!cancelled) {
-        setCropSrc(canvas.toDataURL("image/jpeg", 0.9));
+        setCropSrc(polygonPoints ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.9));
       }
     };
 

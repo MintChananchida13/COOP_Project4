@@ -159,13 +159,17 @@ const cropRoiToImage = (
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const polygonPoints = roi.points && roi.points.length > 2 ? roi.points : null;
+  const hasPolygonMask = Boolean(polygonPoints);
+  if (!hasPolygonMask) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
   ctx.save();
-  if (roi.points && roi.points.length > 2) {
+  if (polygonPoints) {
     ctx.beginPath();
-    roi.points.forEach((p, idx) => {
+    polygonPoints.forEach((p, idx) => {
       const px = p.x * scaleX - realX;
       const py = p.y * scaleY - realY;
       if (idx === 0) {
@@ -191,7 +195,7 @@ const cropRoiToImage = (
   );
   ctx.restore();
 
-  return canvas.toDataURL("image/jpeg", 0.95);
+  return polygonPoints ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.95);
 };
 
 const dataUrlToFile = async (dataUrl: string, filename: string) => {
@@ -1160,9 +1164,10 @@ export default function Home() {
       const baseName = safeFilename(result.fieldName || matchedRoi?.fieldName || "image");
       const nextCount = (usedNames.get(baseName) || 0) + 1;
       usedNames.set(baseName, nextCount);
+      const extension = matchedRoi?.points && matchedRoi.points.length > 2 ? "png" : "jpg";
       return {
         fieldName: result.fieldName || matchedRoi?.fieldName || "Image",
-        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.jpg`,
+        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.${extension}`,
         page: Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0) + 1,
       };
     });
@@ -1187,9 +1192,10 @@ export default function Home() {
       const baseName = safeFilename(result.fieldName || matchedRoi.fieldName || "image");
       const nextCount = (usedNames.get(baseName) || 0) + 1;
       usedNames.set(baseName, nextCount);
+      const extension = cropped.startsWith("data:image/png") ? "png" : "jpg";
       crops.push({
         fieldName: result.fieldName,
-        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.jpg`,
+        filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.${extension}`,
         dataUrl: cropped,
       });
     }

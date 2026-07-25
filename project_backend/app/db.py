@@ -258,6 +258,8 @@ _POSTGRES_SCHEMA = [
         template_request_id TEXT NOT NULL REFERENCES template_requests(id) ON DELETE CASCADE,
         page_number INTEGER NOT NULL,
         sample_image_url TEXT,
+        source_file_id TEXT,
+        source_file_name TEXT,
         image_source TEXT NOT NULL DEFAULT 'user_request',
         review_status TEXT NOT NULL DEFAULT 'pending',
         is_canonical INTEGER NOT NULL DEFAULT 0,

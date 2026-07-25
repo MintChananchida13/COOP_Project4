@@ -15,6 +15,8 @@ interface ApiTemplateRequestPage {
   template_request_id: string;
   page_number: number;
   sample_image_url?: string | null;
+  source_file_id?: string | null;
+  source_file_name?: string | null;
   image_source?: "user_request" | "admin_upload" | null;
   review_status?: "pending" | "approved" | "rejected" | null;
   is_canonical?: boolean | number | null;
@@ -521,6 +523,8 @@ export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    sourceFileId: page.source_file_id || undefined,
+    sourceFileName: page.source_file_name || undefined,
     imageSource: page.image_source || undefined,
     reviewStatus: page.review_status || undefined,
     isCanonical: Boolean(page.is_canonical),
@@ -817,7 +821,9 @@ export const fetchTemplateRequestPages = async (requestId: string) => {
 export const addTemplateRequestImage = async (
   requestId: string,
   sampleImageUrl: string,
-  imageSource: "user_request" | "admin_upload" = "admin_upload"
+  imageSource: "user_request" | "admin_upload" = "admin_upload",
+  sourceFileId?: string,
+  sourceFileName?: string
 ) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images`, {
     method: "POST",
@@ -825,6 +831,8 @@ export const addTemplateRequestImage = async (
     body: JSON.stringify({
       sample_image_url: sampleImageUrl,
       image_source: imageSource,
+      source_file_id: sourceFileId,
+      source_file_name: sourceFileName,
       review_status: "pending",
       is_canonical: false,
     }),
@@ -839,6 +847,8 @@ export const addTemplateRequestImage = async (
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    sourceFileId: page.source_file_id || undefined,
+    sourceFileName: page.source_file_name || undefined,
     imageSource: page.image_source || undefined,
     reviewStatus: page.review_status || undefined,
     isCanonical: Boolean(page.is_canonical),
@@ -854,6 +864,8 @@ export const updateTemplateRequestImage = async (
     reviewStatus?: "pending" | "approved" | "rejected";
     isCanonical?: boolean;
     imageSource?: "user_request" | "admin_upload";
+    sourceFileId?: string;
+    sourceFileName?: string;
   }
 ) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
@@ -864,6 +876,8 @@ export const updateTemplateRequestImage = async (
       review_status: patch.reviewStatus,
       is_canonical: patch.isCanonical,
       image_source: patch.imageSource,
+      source_file_id: patch.sourceFileId,
+      source_file_name: patch.sourceFileName,
     }),
   });
   const json = await response.json().catch(() => null);
@@ -876,6 +890,8 @@ export const updateTemplateRequestImage = async (
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    sourceFileId: page.source_file_id || undefined,
+    sourceFileName: page.source_file_name || undefined,
     imageSource: page.image_source || undefined,
     reviewStatus: page.review_status || undefined,
     isCanonical: Boolean(page.is_canonical),

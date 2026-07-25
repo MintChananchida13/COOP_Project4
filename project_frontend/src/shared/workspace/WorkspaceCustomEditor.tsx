@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, Grid, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2, Loader2, ScanSearch } from 'lucide-react';
+import { Square, Trash2, Move, Hand, X, ArrowLeft, ZoomIn, ZoomOut, Maximize2, Cpu, FileText, Table, Image as ImageIcon, PenTool, ChevronUp, ChevronDown, Eye, EyeOff, Undo2, Redo2, Loader2, ScanSearch } from 'lucide-react';
 import { Rnd } from "react-rnd";
 import { ROI } from '../../types/ocr';
 import { WorkspaceImageMetrics } from './roiGeometry';
@@ -112,7 +112,7 @@ export interface WorkspaceCustomEditorProps {
     selectedId: number | null;
     triggerOCRProcessing: () => void;
   }) => React.ReactNode;
-  getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'quad' | 'polygon') => string;
+  getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'polygon') => string;
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
   getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
   allowedRoiTypes?: Array<"text" | "table" | "image">;
@@ -162,7 +162,7 @@ export default function WorkspaceCustomEditor({
   onCanvasRoiSelect,
 }: WorkspaceCustomEditorProps) {
   const isUserLayout = layoutVariant === "user";
-  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'quad' | 'polygon'>(readOnly || hideDrawTools ? 'pan' : 'box');
+  const [activeTool, setActiveTool] = useState<'pan' | 'box' | 'polygon'>(readOnly || hideDrawTools ? 'pan' : 'box');
   const [activeDrawPoints, setActiveDrawPoints] = useState<{ x: number; y: number }[]>([]);
 
   // Calculate the bounding box for custom ROI points.
@@ -258,7 +258,7 @@ export default function WorkspaceCustomEditor({
     }
     
     // Record only real ROI changes to avoid loops.
-    if (rois.length > 0 && JSON.stringify(rois) !== JSON.stringify(lastRoisRef.current)) {
+    if (JSON.stringify(rois) !== JSON.stringify(lastRoisRef.current)) {
       const newHistory = history.slice(0, historyIndex + 1);
       setHistory([...newHistory, rois]);
       setHistoryIndex(newHistory.length);
@@ -286,6 +286,28 @@ export default function WorkspaceCustomEditor({
     }
   };
 
+  const createPolygonRoi = (points: { x: number; y: number }[]) => {
+    if (points.length < 3) return;
+    const bbox = getBoundingBoxOfPoints(points);
+    if (bbox.width <= 1 || bbox.height <= 1) return;
+    const newBox = {
+      id: Date.now(),
+      fieldName: `field_${rois.length + 1}`,
+      x: bbox.x,
+      y: bbox.y,
+      width: bbox.width,
+      height: bbox.height,
+      pageIndex: currentIndex,
+      type: 'text' as const,
+      dataType: 'text' as const,
+      extractionMethod: 'paddle_thai_ocr' as const,
+      points,
+    };
+    setRois(prev => [...prev, newBox]);
+    setSelectedId(newBox.id);
+    setActiveDrawPoints([]);
+  };
+
 
   useEffect(() => {
     setSelectedId(null);
@@ -296,10 +318,9 @@ export default function WorkspaceCustomEditor({
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       const isInputActive = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
-      if (isInputActive) return;
 
       // Delete selected ROI.
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!isInputActive && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (selectedId !== null) {
           e.preventDefault();
           deleteROI(selectedId);
@@ -309,6 +330,7 @@ export default function WorkspaceCustomEditor({
 
       // Undo.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        if (isInputActive) return;
         e.preventDefault();
         handleUndo();
       }
@@ -318,6 +340,7 @@ export default function WorkspaceCustomEditor({
         ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
       ) {
+        if (isInputActive) return;
         e.preventDefault();
         handleRedo();
       }
@@ -465,23 +488,7 @@ export default function WorkspaceCustomEditor({
     if (activeTool === 'polygon' && activeDrawPoints.length >= 3) {
       e.preventDefault();
       e.stopPropagation();
-      const bbox = getBoundingBoxOfPoints(activeDrawPoints);
-      const newBox = {
-        id: Date.now(),
-        fieldName: `field_${rois.length + 1}`,
-        x: bbox.x,
-        y: bbox.y,
-        width: bbox.width,
-        height: bbox.height,
-        pageIndex: currentIndex,
-        type: 'text' as const,
-        dataType: 'text' as const,
-        extractionMethod: 'paddle_thai_ocr' as const,
-        points: activeDrawPoints
-      };
-      setRois(prev => [...prev, newBox]);
-      setSelectedId(newBox.id);
-      setActiveDrawPoints([]);
+      createPolygonRoi(activeDrawPoints);
     }
   };
 
@@ -510,61 +517,19 @@ export default function WorkspaceCustomEditor({
     const x = (e.clientX - rect.left) / currentZoom;
     const y = (e.clientY - rect.top) / currentZoom;
 
-    if (activeTool === 'quad' || activeTool === 'polygon') {
+    if (activeTool === 'polygon') {
       const newPoint = { x, y };
       const updatedPoints = [...activeDrawPoints, newPoint];
       
-      if (activeTool === 'quad') {
-        if (updatedPoints.length === 4) {
-          const bbox = getBoundingBoxOfPoints(updatedPoints);
-          const newBox = {
-            id: Date.now(),
-            fieldName: `field_${rois.length + 1}`,
-            x: bbox.x,
-            y: bbox.y,
-            width: bbox.width,
-            height: bbox.height,
-            pageIndex: currentIndex,
-            type: 'text' as const,
-            dataType: 'text' as const,
-            extractionMethod: 'paddle_thai_ocr' as const,
-            points: updatedPoints
-          };
-          setRois(prev => [...prev, newBox]);
-          setSelectedId(newBox.id);
-          setActiveDrawPoints([]);
-        } else {
-          setActiveDrawPoints(updatedPoints);
+      if (updatedPoints.length >= 4) {
+        const firstPoint = updatedPoints[0];
+        const dist = Math.sqrt((x - firstPoint.x) ** 2 + (y - firstPoint.y) ** 2);
+        if (dist < 12) {
+          createPolygonRoi(updatedPoints.slice(0, -1));
+          return;
         }
-      } else {
-        // polygon: click to add points
-        if (updatedPoints.length >= 4) {
-          const firstPoint = updatedPoints[0];
-          const dist = Math.sqrt((x - firstPoint.x) ** 2 + (y - firstPoint.y) ** 2);
-          if (dist < 12) { // 12px closure radius
-            const finalPoints = updatedPoints.slice(0, -1);
-            const bbox = getBoundingBoxOfPoints(finalPoints);
-            const newBox = {
-              id: Date.now(),
-              fieldName: `field_${rois.length + 1}`,
-              x: bbox.x,
-              y: bbox.y,
-              width: bbox.width,
-              height: bbox.height,
-              pageIndex: currentIndex,
-              type: 'text' as const,
-              dataType: 'text' as const,
-              extractionMethod: 'paddle_thai_ocr' as const,
-              points: finalPoints
-            };
-            setRois(prev => [...prev, newBox]);
-            setSelectedId(newBox.id);
-            setActiveDrawPoints([]);
-            return;
-          }
-        }
-        setActiveDrawPoints(updatedPoints);
       }
+      setActiveDrawPoints(updatedPoints);
       return;
     }
 
@@ -925,14 +890,6 @@ export default function WorkspaceCustomEditor({
               </button>
               <button 
                 type="button"
-                onClick={() => { setActiveTool('quad'); setSelectedId(null); setActiveDrawPoints([]); }}
-                className={`p-2.5 rounded-lg transition-all ${activeTool === 'quad' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-                title="4-Corner Quad Tool (Tilted Text)"
-              >
-                <Grid size={20} />
-              </button>
-              <button 
-                type="button"
                 onClick={() => { setActiveTool('polygon'); setSelectedId(null); setActiveDrawPoints([]); }}
                 className={`p-2.5 rounded-lg transition-all ${activeTool === 'polygon' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
                 title="Freeform Polygon Tool"
@@ -1046,7 +1003,7 @@ export default function WorkspaceCustomEditor({
           >
             <div 
               ref={containerRef}
-              className={`relative inline-block ${centerCanvas ? "mx-auto" : ""} ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'quad' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
+              className={`relative inline-block ${centerCanvas ? "mx-auto" : ""} ${selectedId ? 'cursor-default' : (activeTool === 'box' || activeTool === 'polygon') ? 'cursor-crosshair select-none' : isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} 
               style={{ 
                 transform: `scale(${currentZoom})`, 
                 transformOrigin: "top left",
@@ -1080,8 +1037,8 @@ export default function WorkspaceCustomEditor({
                 />
               )}
 
-              {/* Temporary drawing overlay for Quad/Polygon */}
-              {(activeTool === 'quad' || activeTool === 'polygon') && activeDrawPoints.length > 0 && (
+              {/* Temporary drawing overlay for freeform polygon */}
+              {activeTool === 'polygon' && activeDrawPoints.length > 0 && (
                 <svg className="absolute inset-0 w-full h-full pointer-events-none z-50">
                   <polygon
                     points={activeDrawPoints.map(p => `${p.x},${p.y}`).join(' ')}
@@ -1193,7 +1150,7 @@ export default function WorkspaceCustomEditor({
                               <button
                                 type="button"
                                 onClick={() => updateROI(roi.id, roiTypePatch('text'))}
-                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("table") ? "hidden" : ""} ${
+                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("text") ? "hidden" : ""} ${
                                   (roi.type || 'text') === 'text' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
@@ -1204,7 +1161,7 @@ export default function WorkspaceCustomEditor({
                               <button
                                 type="button"
                                 onClick={() => updateROI(roi.id, roiTypePatch('table'))}
-                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("image") ? "hidden" : ""} ${
+                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("table") ? "hidden" : ""} ${
                                   roi.type === 'table' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'
@@ -1215,7 +1172,7 @@ export default function WorkspaceCustomEditor({
                               <button
                                 type="button"
                                 onClick={() => updateROI(roi.id, roiTypePatch('image'))}
-                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${
+                                className={`py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all ${!allowedRoiTypes.includes("image") ? "hidden" : ""} ${
                                   roi.type === 'image' 
                                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20' 
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200/80 hover:text-slate-700'

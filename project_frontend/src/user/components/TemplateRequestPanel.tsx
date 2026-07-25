@@ -35,6 +35,14 @@ interface TemplateRequestCreateResponse {
 const API_BASE_URL = "http://localhost:8000";
 const WORKSPACE_RENDERED_WIDTH = 750;
 
+interface RequestImageItem {
+  src: string;
+  sourceFileId: string;
+  sourceFileName: string;
+}
+
+const createSourceFileId = () => `source_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
 
 const roiTypeToDataType = (roi: PageAwareRoi): RoiDataType => {
@@ -81,6 +89,7 @@ const toRequestedField = (
 
 export default function TemplateRequestPanel({ imagesList, rois, ocrResults = [], isOpen, onClose }: TemplateRequestPanelProps) {
   const [requestImages, setRequestImages] = useState<string[]>([]);
+  const [requestImageItems, setRequestImageItems] = useState<RequestImageItem[]>([]);
   const [requestTitle, setRequestTitle] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [userNote, setUserNote] = useState("");
@@ -98,30 +107,53 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     }, {});
   }, [enabledRois]);
 
+  const imageGroups = useMemo(() => {
+    const groups = new Map<string, { sourceFileId: string; sourceFileName: string; items: Array<RequestImageItem & { index: number }> }>();
+    requestImageItems.forEach((item, index) => {
+      const group = groups.get(item.sourceFileId) || {
+        sourceFileId: item.sourceFileId,
+        sourceFileName: item.sourceFileName || "Source file",
+        items: [],
+      };
+      group.items.push({ ...item, index });
+      groups.set(item.sourceFileId, group);
+    });
+    return Array.from(groups.values());
+  }, [requestImageItems]);
+
   useEffect(() => {
     if (isOpen) {
+      const sourceFileId = createSourceFileId();
+      const sourceFileName = "ไฟล์ต้นทาง";
+      const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName }));
+      setRequestImageItems(items);
       setRequestImages(imagesList);
     }
   }, [imagesList, isOpen]);
 
-  const canSubmit = requestImages.length > 0 && requestTitle.trim().length > 0 && status !== "submitting";
+  const canSubmit = requestImageItems.length > 0 && requestTitle.trim().length > 0 && status !== "submitting";
 
   const handleAddImages = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const dataUrls = await Promise.all(
+    const items = await Promise.all(
       Array.from(files)
         .filter((file) => file.type.startsWith("image/"))
         .map(
           (file) =>
-            new Promise<string>((resolve, reject) => {
+            new Promise<RequestImageItem>((resolve, reject) => {
               const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result || ""));
+              reader.onload = () => resolve({
+                src: String(reader.result || ""),
+                sourceFileId: createSourceFileId(),
+                sourceFileName: file.name || "รูปภาพที่เพิ่มใหม่",
+              });
               reader.onerror = reject;
               reader.readAsDataURL(file);
             })
         )
     );
-    setRequestImages((current) => [...current, ...dataUrls.filter(Boolean)]);
+    setRequestImageItems((current) => [...current, ...items.filter(item => item.src)]);
+    setRequestImages((current) => [...current, ...items.map(item => item.src).filter(Boolean)]);
   };
 
   const buildRequestedFields = async () => {
@@ -145,14 +177,16 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
       body: JSON.stringify({
         request_title: requestTitle.trim(),
         document_type: documentType.trim() || null,
-        sample_file_url: requestImages[0] || null,
+        sample_file_url: requestImageItems[0]?.src || null,
         request_mode: requestMode,
-        page_count: requestImages.length,
+        page_count: requestImageItems.length,
         user_note: userNote.trim() || null,
-        pages: requestImages.map((src, index) => ({
+        pages: requestImageItems.map((item, index) => ({
           page_number: index + 1,
-          original_image_url: src,
-          normalized_image_url: src,
+          original_image_url: item.src,
+          normalized_image_url: item.src,
+          source_file_id: item.sourceFileId,
+          source_file_name: item.sourceFileName,
         })),
       }),
     });
@@ -237,6 +271,10 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     setStatus("idle");
     setStatusMessage("");
     setSubmittedRequestId("");
+    const sourceFileId = createSourceFileId();
+    const sourceFileName = requestTitle.trim() || "ไฟล์ต้นทาง";
+    const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName }));
+    setRequestImageItems(items);
     setRequestImages(imagesList);
     onClose();
   };
@@ -302,7 +340,44 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                 </label>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="mt-3 space-y-3">
+                {imageGroups.map((group) => (
+                  <div key={group.sourceFileId} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-black text-slate-800">{group.sourceFileName}</p>
+                        <p className="mt-0.5 text-[10px] font-bold text-slate-400">{group.items.length} pages</p>
+                      </div>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-500">Document Group</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {group.items.map((item) => (
+                        <div key={`${item.sourceFileId}_${item.index}`} className="rounded-xl border border-slate-200 bg-white p-2">
+                          <div className="aspect-[4/3] overflow-hidden rounded-lg bg-slate-50">
+                            <img src={item.src} alt={`Document page ${item.index + 1}`} className="h-full w-full object-contain" />
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black text-slate-500">Page {item.index + 1}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRequestImageItems((current) => current.filter((_, itemIndex) => itemIndex !== item.index));
+                                setRequestImages((current) => current.filter((_, itemIndex) => itemIndex !== item.index));
+                              }}
+                              disabled={status === "submitting" || requestImageItems.length <= 1}
+                              className="rounded-lg border border-red-100 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden">
                 {requestImages.map((src, index) => (
                   <div key={`${src.slice(0, 32)}_${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
                     <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">

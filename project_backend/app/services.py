@@ -106,6 +106,10 @@ def _ensure_template_request_page_review_columns(conn: Any) -> None:
         conn.execute("ALTER TABLE template_request_pages ADD COLUMN is_canonical INTEGER DEFAULT 0")
     if columns and "layout_signature_json" not in columns:
         conn.execute("ALTER TABLE template_request_pages ADD COLUMN layout_signature_json TEXT")
+    if columns and "source_file_id" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN source_file_id TEXT")
+    if columns and "source_file_name" not in columns:
+        conn.execute("ALTER TABLE template_request_pages ADD COLUMN source_file_name TEXT")
     conn.commit()
 
 
@@ -239,6 +243,8 @@ def _page_row_to_api(row: Any) -> Dict[str, Any]:
         "template_request_id": item["template_request_id"],
         "page_number": item["page_number"],
         "sample_image_url": item["sample_image_url"],
+        "source_file_id": item.get("source_file_id"),
+        "source_file_name": item.get("source_file_name"),
         "image_source": item.get("image_source", "user_request"),
         "review_status": item.get("review_status", "pending"),
         "is_canonical": bool(item.get("is_canonical", 0)),
@@ -1853,8 +1859,12 @@ class TemplateRequestService:
                 "page_number": 1,
                 "original_image_url": payload.sample_file_url,
                 "normalized_image_url": payload.sample_file_url,
+                "source_file_id": f"{request_id}_source_1",
+                "source_file_name": payload.request_title,
             }
         ]
+        default_source_file_id = f"{request_id}_source_1"
+        default_source_file_name = payload.request_title
 
         with _connect() as conn:
             conn.execute(
@@ -1884,15 +1894,22 @@ class TemplateRequestService:
                     if hasattr(page, "normalized_image_url")
                     else page.get("normalized_image_url") or page.get("original_image_url")
                 )
+                source_file_id = (
+                    page.source_file_id if hasattr(page, "source_file_id") else page.get("source_file_id")
+                ) or default_source_file_id
+                source_file_name = (
+                    page.source_file_name if hasattr(page, "source_file_name") else page.get("source_file_name")
+                ) or default_source_file_name
                 conn.execute(
                     """
                     INSERT INTO template_request_pages (
                         id, template_request_id, page_number, sample_image_url,
+                        source_file_id, source_file_name,
                         image_source, review_status, is_canonical, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, 'user_request', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, 'user_request', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (_stub_id("tpl_req_page"), request_id, page_number, sample_image_url),
+                    (_stub_id("tpl_req_page"), request_id, page_number, sample_image_url, source_file_id, source_file_name),
                 )
 
             conn.commit()
@@ -2031,15 +2048,18 @@ class TemplateRequestService:
                 """
                 INSERT INTO template_request_pages (
                     id, template_request_id, page_number, sample_image_url,
+                    source_file_id, source_file_name,
                     image_source, review_status, is_canonical, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     image_id,
                     request_id,
                     page_number,
                     payload.sample_image_url,
+                    payload.source_file_id or image_id,
+                    payload.source_file_name or f"Uploaded image {page_number}",
                     image_source,
                     review_status,
                     1 if payload.is_canonical else 0,
@@ -2076,6 +2096,10 @@ class TemplateRequestService:
             column_values["review_status"] = self._normalize_review_status(patch["review_status"])
         if "is_canonical" in patch:
             column_values["is_canonical"] = 1 if patch["is_canonical"] else 0
+        if "source_file_id" in patch:
+            column_values["source_file_id"] = patch["source_file_id"]
+        if "source_file_name" in patch:
+            column_values["source_file_name"] = patch["source_file_name"]
 
         with _connect() as conn:
             row = conn.execute(

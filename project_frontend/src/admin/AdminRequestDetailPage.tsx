@@ -62,6 +62,12 @@ const extractionMethodLabel = (value?: string) =>
     (option) => option.value === normalizeExtractionMethod(value)
   )?.label || "OCR Text inside ROI";
 
+const getPageSourceFileId = (page: TemplateRequestPage) =>
+  page.sourceFileId || `${page.templateRequestId || "request"}_source_${page.pageNumber}`;
+
+const getPageSourceFileName = (page: TemplateRequestPage) =>
+  page.sourceFileName || (page.imageSource === "admin_upload" ? `Admin upload ${page.pageNumber}` : "Source file");
+
 export default function AdminRequestDetailPage({
   requestId,
 }: {
@@ -162,6 +168,24 @@ export default function AdminRequestDetailPage({
     }, {});
   }, [request?.requestedFields]);
 
+  const documentGroups = useMemo(() => {
+    const groups = new Map<string, { sourceFileId: string; sourceFileName: string; pages: TemplateRequestPage[] }>();
+    pages.forEach((page) => {
+      const sourceFileId = getPageSourceFileId(page);
+      const group = groups.get(sourceFileId) || {
+        sourceFileId,
+        sourceFileName: getPageSourceFileName(page),
+        pages: [],
+      };
+      group.pages.push(page);
+      groups.set(sourceFileId, group);
+    });
+    return Array.from(groups.values()).map(group => ({
+      ...group,
+      pages: group.pages.sort((a, b) => a.pageNumber - b.pageNumber),
+    }));
+  }, [pages]);
+
   const reloadImages = async () => {
     const requestPages = await fetchTemplateRequestPages(requestId);
     setPages(requestPages);
@@ -190,9 +214,12 @@ export default function AdminRequestDetailPage({
     setActionStatus("");
     setIsUpdatingImages(true);
     try {
-      const dataUrls = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map(fileToDataUrl));
-      for (const src of dataUrls.filter(Boolean)) {
-        await addTemplateRequestImage(request.id, src, "admin_upload");
+      const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
+      const dataUrls = await Promise.all(imageFiles.map(fileToDataUrl));
+      for (const [index, src] of dataUrls.filter(Boolean).entries()) {
+        const sourceFileId = `admin_source_${Date.now()}_${index}`;
+        const sourceFileName = imageFiles[index]?.name || `Admin upload ${index + 1}`;
+        await addTemplateRequestImage(request.id, src, "admin_upload", sourceFileId, sourceFileName);
       }
       await reloadImages();
       setActionStatus("Reference image added.");
@@ -213,6 +240,8 @@ export default function AdminRequestDetailPage({
       await updateTemplateRequestImage(request.id, imageId, {
         sampleImageUrl: src,
         imageSource: "admin_upload",
+        sourceFileId: `admin_source_${Date.now()}`,
+        sourceFileName: files[0].name || "Replacement image",
         reviewStatus: "pending",
         isCanonical: false,
       });
@@ -242,6 +271,30 @@ export default function AdminRequestDetailPage({
       setActionStatus("Reference image updated.");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Update image failed.");
+    } finally {
+      setIsUpdatingImages(false);
+    }
+  };
+
+  const handleUpdateGroup = async (
+    groupPages: TemplateRequestPage[],
+    patch: { reviewStatus: "approved" | "rejected" | "pending"; isCanonical?: boolean }
+  ) => {
+    if (!request || groupPages.length === 0) return;
+    setActionError("");
+    setActionStatus("");
+    setIsUpdatingImages(true);
+    try {
+      for (const [index, page] of groupPages.entries()) {
+        await updateTemplateRequestImage(request.id, page.id, {
+          reviewStatus: patch.reviewStatus,
+          isCanonical: patch.reviewStatus === "rejected" ? false : patch.isCanonical && index === 0,
+        });
+      }
+      await reloadImages();
+      setActionStatus("Document group updated.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Update document group failed.");
     } finally {
       setIsUpdatingImages(false);
     }
@@ -512,6 +565,107 @@ export default function AdminRequestDetailPage({
             </div>
 
             <div className="space-y-3">
+              {pages.length > 0 && documentGroups.map((group) => {
+                const approvedCount = group.pages.filter((page) => page.reviewStatus === "approved").length;
+                const rejectedCount = group.pages.filter((page) => page.reviewStatus === "rejected").length;
+                const pendingCount = group.pages.filter((page) => (page.reviewStatus || "pending") === "pending").length;
+                return (
+                  <div key={group.sourceFileId} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <h4 className="truncate text-xs font-black text-slate-900">{group.sourceFileName}</h4>
+                        <p className="mt-1 text-[11px] font-bold text-slate-500">
+                          {group.pages.length} pages · {approvedCount} approved · {pendingCount} pending · {rejectedCount} rejected
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={isUpdatingImages}
+                          onClick={() => void handleUpdateGroup(group.pages, { reviewStatus: "approved", isCanonical: true })}
+                          className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300"
+                        >
+                          Approve File
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isUpdatingImages}
+                          onClick={() => void handleUpdateGroup(group.pages, { reviewStatus: "rejected" })}
+                          className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300"
+                        >
+                          Reject File
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {group.pages.map((page) => (
+                        <div key={page.id} className="rounded-xl border border-slate-200 bg-white p-2">
+                          <div className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setCurrentPage(Math.max(page.pageNumber - 1, 0))}
+                              className="h-20 w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white"
+                            >
+                              <img
+                                src={page.sampleImageUrl || samplePage}
+                                alt={`Reference ${page.pageNumber}`}
+                                className="h-full w-full object-contain"
+                              />
+                            </button>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap gap-1">
+                                <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-black text-slate-600">
+                                  Page {page.pageNumber}
+                                </span>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                                    page.reviewStatus === "approved"
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : page.reviewStatus === "rejected"
+                                        ? "bg-red-50 text-red-700"
+                                        : "bg-amber-50 text-amber-700"
+                                  }`}
+                                >
+                                  {page.reviewStatus || "pending"}
+                                </span>
+                                {page.isCanonical && (
+                                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                                    primary
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <button type="button" disabled={isUpdatingImages} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved" })} className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300">
+                                  Approve
+                                </button>
+                                <button type="button" disabled={isUpdatingImages || page.reviewStatus === "rejected"} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved", isCanonical: true })} className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300">
+                                  Primary
+                                </button>
+                                <button type="button" disabled={isUpdatingImages} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "rejected", isCanonical: false })} className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300">
+                                  Reject
+                                </button>
+                                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600">
+                                  Replace
+                                  <input type="file" accept="image/*" className="hidden" disabled={isUpdatingImages} onChange={(event) => { void handleReplaceImage(page.id, event.target.files); event.target.value = ""; }} />
+                                </label>
+                                <button type="button" disabled={isUpdatingImages} onClick={() => void handleRemoveImage(page.id)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300">
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden">
               {pages.length === 0 ? (
                 <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
                   No reference images were uploaded.

@@ -180,6 +180,8 @@ export interface TemplateRequestPage {
   templateRequestId: string;
   pageNumber: number;
   sampleImageUrl?: string;
+  sourceFileId?: string;
+  sourceFileName?: string;
   imageSource?: 'user_request' | 'admin_upload';
   reviewStatus?: 'pending' | 'approved' | 'rejected';
   isCanonical?: boolean;

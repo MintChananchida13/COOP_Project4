@@ -21,6 +21,8 @@ class PageInput(BaseModel):
     page_number: int = Field(..., ge=1)
     original_image_url: Optional[str] = None
     normalized_image_url: Optional[str] = None
+    source_file_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_id", "sourceFileId"))
+    source_file_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_name", "sourceFileName"))
 
 
 class DocumentUploadRequest(BaseModel):
@@ -76,6 +78,8 @@ class TemplateRequestImageCreate(BaseModel):
     image_source: str = "admin_upload"
     review_status: str = "pending"
     is_canonical: bool = False
+    source_file_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_id", "sourceFileId"))
+    source_file_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_name", "sourceFileName"))
 
 
 class TemplateRequestImageUpdate(BaseModel):
@@ -83,6 +87,8 @@ class TemplateRequestImageUpdate(BaseModel):
     image_source: Optional[str] = None
     review_status: Optional[str] = None
     is_canonical: Optional[bool] = None
+    source_file_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_id", "sourceFileId"))
+    source_file_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("source_file_name", "sourceFileName"))
 
 
 class RequestedFieldCreate(BaseModel):

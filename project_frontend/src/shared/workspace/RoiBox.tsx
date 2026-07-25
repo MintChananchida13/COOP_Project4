@@ -75,7 +75,7 @@ export default function RoiBox({
       aria-label={roi.fieldName}
     >
       <div
-        className={`relative w-full h-full border ${boxClass} ${readonly ? "border-dashed" : "border-solid"}`}
+        className={`relative w-full h-full ${hasPoints ? "" : `border ${boxClass} ${readonly ? "border-dashed" : "border-solid"}`}`}
       >
         {hasPoints && (
           <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
