@@ -1,111 +1,136 @@
 "use client";
 
-import { useState } from "react";
+import { FormEvent, Suspense, useMemo, useState } from "react";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { demoAccounts, writeAuthSession } from "../../auth/session";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleLogin = (event: React.FormEvent) => {
+  const nextPath = useMemo(() => searchParams.get("next") || "", [searchParams]);
+
+  const handleLogin = (event: FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
     setError("");
 
-    setTimeout(() => {
+    window.setTimeout(() => {
+      const account = demoAccounts.find(
+        (item) => item.email.toLowerCase() === email.trim().toLowerCase() && item.password === password
+      );
       setIsLoading(false);
-      if (email === "user@ocr.com" && password === "user123") {
-        router.push("/");
+      if (!account) {
+        setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
         return;
       }
-      setError("Email or password is incorrect.");
-    }, 500);
+
+      writeAuthSession({ email: account.email, role: account.role, name: account.name });
+      const fallbackPath = account.role === "admin" ? "/admin" : "/";
+      const safeNext =
+        nextPath &&
+        nextPath.startsWith("/") &&
+        !nextPath.startsWith("//") &&
+        (account.role === "admin" || !nextPath.startsWith("/admin"))
+          ? nextPath
+          : fallbackPath;
+      router.replace(safeNext);
+    }, 300);
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="flex min-h-screen flex-col justify-center bg-slate-100 px-4 py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="mx-auto h-12 w-12 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-md">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md">
           <ShieldCheck size={28} />
         </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900">Intelligent OCR System</h2>
-        <p className="mt-2 text-sm text-slate-600">Sign in to process documents with OCR.</p>
+        <h1 className="mt-6 text-3xl font-extrabold text-slate-900">OCR Studio</h1>
+        <p className="mt-2 text-sm font-semibold text-slate-600">เข้าสู่ระบบเพื่อใช้งาน OCR และจัดการ Template</p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow sm:rounded-xl sm:px-10 border border-slate-200">
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 shadow sm:px-10">
           <form className="space-y-6" onSubmit={handleLogin}>
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-                Email Address
-              </label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+            <label className="block">
+              <span className="text-sm font-bold text-slate-700">อีเมล</span>
+              <div className="relative mt-1 rounded-md shadow-sm">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                   <Mail size={18} />
                 </div>
                 <input
-                  id="email"
                   type="email"
                   required
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="user@ocr.com"
-                  className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-slate-50 focus:bg-white transition-colors"
+                  className="block w-full rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-3 text-sm transition-colors focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-            </div>
+            </label>
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-                Password
-              </label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+            <label className="block">
+              <span className="text-sm font-bold text-slate-700">รหัสผ่าน</span>
+              <div className="relative mt-1 rounded-md shadow-sm">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                   <Lock size={18} />
                 </div>
                 <input
-                  id="password"
                   type={showPassword ? "text" : "password"}
                   required
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   placeholder="password"
-                  className="block w-full pl-10 pr-10 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-slate-50 focus:bg-white transition-colors"
+                  className="block w-full rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-10 text-sm transition-colors focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((current) => !current)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+                  aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-            </div>
+            </label>
 
-            {error && <div className="text-red-600 text-xs bg-red-50 p-2.5 rounded-lg border border-red-200">{error}</div>}
+            {error && <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-bold text-red-600">{error}</div>}
 
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed"
+              className="flex w-full justify-center rounded-lg border border-transparent bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {isLoading ? "Signing in..." : "Sign In"}
+              {isLoading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
             </button>
           </form>
 
-          <div className="mt-6 border-t border-slate-200 pt-4">
-            <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1 font-mono">
-              <p className="font-bold text-slate-700">Demo account:</p>
-              <p>User: user@ocr.com / user123</p>
-            </div>
+          <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+            <p className="font-black text-slate-800">บัญชีทดสอบ</p>
+            <p className="mt-1">User: user@ocr.com / user123</p>
+            <p>Admin: admin@ocr.com / admin123</p>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6 text-sm font-semibold text-slate-500">
+          กำลังเปิดหน้าเข้าสู่ระบบ...
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

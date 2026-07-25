@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileImage } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { FileImage, Loader2, UploadCloud } from "lucide-react";
 import { Template, TemplateStatus } from "../types/ocr";
-import { deleteTemplateApi, fetchTemplates, updateTemplateStatus } from "./adminApi";
+import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
-import { useAdminState } from "./AdminState";
 import { ActionButton, EmptyState, InlineState, LoadingState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 const statusFilterOptions: { value: AdminStatusFilter; label: string }[] = [
@@ -17,6 +17,76 @@ const statusFilterOptions: { value: AdminStatusFilter; label: string }[] = [
 
 const manageableStatuses: TemplateStatus[] = ["active", "nonactive", "disabled"];
 
+interface PdfJsLib {
+  GlobalWorkerOptions: { workerSrc: string };
+  getDocument: (options: { data: ArrayBuffer }) => {
+    promise: Promise<{
+      numPages: number;
+      getPage: (pageNumber: number) => Promise<{
+        getViewport: (options: { scale: number }) => { width: number; height: number };
+        render: (options: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<void> };
+      }>;
+    }>;
+  };
+}
+
+declare global {
+  interface Window {
+    pdfjsLib?: PdfJsLib;
+  }
+}
+
+const isPdfFile = (file: File) =>
+  file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("อ่านไฟล์ไม่สำเร็จ"));
+    reader.readAsDataURL(file);
+  });
+
+const loadPdfEngine = (): Promise<PdfJsLib> =>
+  new Promise((resolve, reject) => {
+    if (window.pdfjsLib) {
+      resolve(window.pdfjsLib);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    script.onload = () => {
+      const pdfjs = window.pdfjsLib;
+      if (!pdfjs) {
+        reject(new Error("โหลดตัวอ่าน PDF ไม่สำเร็จ"));
+        return;
+      }
+      pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      resolve(pdfjs);
+    };
+    script.onerror = () => reject(new Error("โหลดตัวอ่าน PDF ไม่สำเร็จ"));
+    document.head.appendChild(script);
+  });
+
+const convertPdfToImages = async (file: File): Promise<string[]> => {
+  const pdfjsLib = await loadPdfEngine();
+  const loadingTask = pdfjsLib.getDocument({ data: await file.arrayBuffer() });
+  const pdf = await loadingTask.promise;
+  const imageUrls: string[] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("ไม่สามารถเตรียมภาพจาก PDF ได้");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    imageUrls.push(canvas.toDataURL("image/png"));
+  }
+  return imageUrls;
+};
+
 const statusSelectLabel = (status: TemplateStatus) => {
   if (status === "active") return "ใช้งานอยู่";
   if (status === "nonactive" || status === "disabled") return "ปิดใช้งานชั่วคราว";
@@ -27,16 +97,20 @@ const statusSelectLabel = (status: TemplateStatus) => {
 };
 
 export default function AdminTemplatesPage() {
-  const { templates: fallbackTemplates } = useAdminState();
+  const router = useRouter();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<AdminStatusFilter>("all");
-  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback">("loading");
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [statusUpdatingTemplateId, setStatusUpdatingTemplateId] = useState<string | null>(null);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState("");
+  const [newTemplateTitle, setNewTemplateTitle] = useState("");
+  const [newTemplateType, setNewTemplateType] = useState("");
+  const [isCreatingRequest, setIsCreatingRequest] = useState(false);
+  const [createRequestError, setCreateRequestError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -49,10 +123,10 @@ export default function AdminTemplatesPage() {
         setTemplates(persistedTemplates);
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn("Using demo templates because backend templates are unavailable.", error);
+        console.warn("Templates load failed.", error);
         if (cancelled) return;
-        setTemplates(fallbackTemplates);
-        setLoadStatus("fallback");
+        setTemplates([]);
+        setLoadStatus("error");
       }
     };
 
@@ -61,7 +135,7 @@ export default function AdminTemplatesPage() {
     return () => {
       cancelled = true;
     };
-  }, [fallbackTemplates]);
+  }, []);
 
   const filteredTemplates = templates.filter((template) => {
     if (selectedStatus === "all") return true;
@@ -104,6 +178,58 @@ export default function AdminTemplatesPage() {
     }
   };
 
+  const handleCreateTemplateRequest = async (files: FileList | null) => {
+    if (!files?.length) return;
+    if (loadStatus !== "loaded") {
+      setCreateRequestError("ต้องเชื่อมต่อ Backend ก่อนสร้าง Template Request ใหม่");
+      return;
+    }
+
+    const acceptedFiles = Array.from(files).filter((file) => file.type.startsWith("image/") || isPdfFile(file));
+    if (acceptedFiles.length === 0) {
+      setCreateRequestError("กรุณาเลือกไฟล์รูปภาพหรือ PDF");
+      return;
+    }
+
+    setIsCreatingRequest(true);
+    setCreateRequestError("");
+    setDeleteMessage("");
+    setDeleteError("");
+    setStatusMessage("");
+    setStatusError("");
+
+    try {
+      const firstFile = acceptedFiles[0];
+      const requestTitle = newTemplateTitle.trim() || firstFile.name.replace(/\.[^.]+$/, "") || "Template ใหม่";
+      const request = await createTemplateRequest({
+        requestTitle,
+        documentType: newTemplateType.trim() || "เอกสารทั่วไป",
+        requestMode: "image_only",
+        pageCount: 1,
+        userNote: "สร้างโดยผู้ดูแลระบบจากหน้า Template",
+        requestedBy: "admin",
+      });
+
+      for (const [fileIndex, file] of acceptedFiles.entries()) {
+        const sourceFileId = `admin_template_file_${Date.now()}_${fileIndex}`;
+        const sourceFileName = file.name || `ไฟล์ Template ${fileIndex + 1}`;
+        const pageImages = isPdfFile(file) ? await convertPdfToImages(file) : [await fileToDataUrl(file)];
+        for (const imageUrl of pageImages) {
+          await addTemplateRequestImage(request.id, imageUrl, "admin_upload", sourceFileId, sourceFileName);
+        }
+      }
+
+      setNewTemplateTitle("");
+      setNewTemplateType("");
+      router.push(`/admin/requests/${request.id}`);
+    } catch (error) {
+      console.warn("Admin create template request failed.", error);
+      setCreateRequestError(error instanceof Error ? error.message : "สร้าง Template Request ไม่สำเร็จ");
+    } finally {
+      setIsCreatingRequest(false);
+    }
+  };
+
   const handleDeleteTemplate = async (template: Template) => {
     if (loadStatus !== "loaded") {
       setDeleteError("ไม่สามารถลบ Template ตัวอย่างได้ เพราะไม่ได้มาจากฐานข้อมูลจริง");
@@ -137,6 +263,66 @@ export default function AdminTemplatesPage() {
         description="จัดการ Template ฉบับร่าง Template ที่ใช้งานจริง และ Template ที่ยังไม่พร้อมใช้งาน การลบข้อมูลจะมีผลกับฐานข้อมูลจริงเท่านั้น"
       />
 
+      <div className={`${cardClassName} overflow-hidden p-0`}>
+        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="space-y-3 p-5">
+            <div>
+              <h2 className="text-base font-black text-slate-900">สร้าง Template ใหม่</h2>
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                อัปโหลดรูปภาพหรือ PDF เพื่อสร้าง Template Request ใหม่ จากนั้นระบบจะพาไปหน้า Request Detail สำหรับตรวจไฟล์ ตั้งหน้าหลัก และ Convert เป็น Template
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อ Template</span>
+                <input
+                  type="text"
+                  value={newTemplateTitle}
+                  onChange={(event) => setNewTemplateTitle(event.target.value)}
+                  placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร</span>
+                <input
+                  type="text"
+                  value={newTemplateType}
+                  onChange={(event) => setNewTemplateType(event.target.value)}
+                  placeholder="เช่น Invoice, ใบสมัคร, ใบรับรอง"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+            </div>
+            {createRequestError && <InlineState tone="danger" message={createRequestError} />}
+          </div>
+          <div className="border-t border-slate-100 bg-slate-50 p-5 lg:border-l lg:border-t-0">
+            <label
+              className={`flex h-full min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 text-center transition-colors ${
+                isCreatingRequest || loadStatus !== "loaded"
+                  ? "cursor-not-allowed border-slate-200 bg-white text-slate-400"
+                  : "border-indigo-200 bg-white text-indigo-700 hover:border-indigo-400 hover:bg-indigo-50"
+              }`}
+            >
+              {isCreatingRequest ? <Loader2 size={28} className="animate-spin" /> : <UploadCloud size={32} />}
+              <span className="mt-3 text-sm font-black">{isCreatingRequest ? "กำลังสร้าง Template Request..." : "เลือกไฟล์เพื่อสร้าง Template"}</span>
+              <span className="mt-1 text-xs font-semibold text-slate-500">รองรับ PNG, JPG, WebP และ PDF หลายหน้า</span>
+              <input
+                type="file"
+                multiple
+                accept="image/*,application/pdf"
+                disabled={isCreatingRequest || loadStatus !== "loaded"}
+                onChange={(event) => {
+                  handleCreateTemplateRequest(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                className="sr-only"
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+
       <div className={`${cardClassName} p-4 space-y-4`}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -167,8 +353,8 @@ export default function AdminTemplatesPage() {
       </div>
 
       {loadStatus === "loading" && <LoadingState message="กำลังโหลด Template จากฐานข้อมูล..." />}
-      {loadStatus === "fallback" && (
-        <InlineState tone="warning" message="เชื่อมต่อ Backend ไม่ได้ กำลังแสดง Template ตัวอย่างสำหรับทดสอบเท่านั้น" />
+      {loadStatus === "error" && (
+        <InlineState tone="warning" message="โหลดรายการ Template จาก Backend ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่" />
       )}
       {deleteMessage && (
         <InlineState tone="success" message={deleteMessage} />
@@ -208,8 +394,8 @@ export default function AdminTemplatesPage() {
               <div className="line-clamp-2 min-h-10 text-sm font-black leading-5 text-slate-900">{template.name}</div>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 <StatusBadge status={template.status} />
-                {loadStatus === "fallback" && (
-                  <StatusBadge status="demo fallback" tone="warning" />
+                {loadStatus === "error" && (
+                  <StatusBadge status="backend error" tone="warning" />
                 )}
               </div>
             </div>

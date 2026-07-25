@@ -1,6 +1,8 @@
+
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
   BadgeCheck,
@@ -8,31 +10,64 @@ import {
   FileClock,
   FilePenLine,
 } from "lucide-react";
-import { useAdminState } from "./AdminState";
+import { AdminTemplateRequest, Template } from "../types/ocr";
+import { fetchTemplateRequests, fetchTemplates } from "./adminApi";
 import { EmptyState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 export default function AdminDashboard() {
-  const { dashboard, requests, templates } = useAdminState();
+  const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDashboard = async () => {
+      try {
+        const [nextRequests, nextTemplates] = await Promise.all([fetchTemplateRequests(), fetchTemplates()]);
+        if (cancelled) return;
+        setRequests(nextRequests);
+        setTemplates(nextTemplates);
+      } catch (error) {
+        console.warn("Admin dashboard load failed.", error);
+        if (cancelled) return;
+        setRequests([]);
+        setTemplates([]);
+      }
+    };
+    loadDashboard();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dashboard = useMemo(
+    () => ({
+      pendingRequests: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
+      draftTemplates: templates.filter((template) => template.status === "draft").length,
+      activeTemplates: templates.filter((template) => template.status === "active").length,
+      rejectedRequests: requests.filter((request) => request.status === "rejected").length,
+    }),
+    [requests, templates]
+  );
 
   const stats = [
-    ["Pending", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
-    ["Draft", dashboard.draftTemplates, FilePenLine, "bg-blue-50 text-blue-600"],
-    ["Approved", dashboard.approvedTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
-    ["Rejected", dashboard.rejectedTemplates, CircleX, "bg-red-50 text-red-600"],
+    ["รอตรวจ", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
+    ["ฉบับร่าง", dashboard.draftTemplates, FilePenLine, "bg-blue-50 text-blue-600"],
+    ["ใช้งานอยู่", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
+    ["ปฏิเสธ", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
   ] as const;
 
   return (
     <section className="space-y-4">
       <PageHeader
-        eyebrow="Admin Overview"
-        title="Template OCR Dashboard"
-        description="Monitor template requests, drafts, approvals, and rejected items."
+        eyebrow="ภาพรวมผู้ดูแล"
+        title="แดชบอร์ด Template OCR"
+        description="ติดตามคำขอสร้าง Template, ฉบับร่าง, Template ที่ใช้งานอยู่ และรายการที่ถูกปฏิเสธ"
         actions={
           <Link
             href="/admin/requests"
             className="inline-flex w-fit items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
           >
-            Review Requests
+            {"ตรวจคำขอ"}
             <ArrowUpRight size={13} />
           </Link>
         }
@@ -40,30 +75,18 @@ export default function AdminDashboard() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map(([label, value, Icon, tone]) => (
-          <div
-            key={label}
-            className={`${cardClassName} p-4`}
-          >
+          <div key={label} className={`${cardClassName} p-4`}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  {label}
-                </p>
-                <p className="mt-2 text-3xl font-black text-slate-900">
-                  {value}
-                </p>
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</p>
+                <p className="mt-2 text-3xl font-black text-slate-900">{value}</p>
               </div>
-
               <div className={`rounded-xl p-2.5 ${tone}`}>
                 <Icon size={18} />
               </div>
             </div>
-
             <div className="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-slate-300"
-                style={{ width: `${Math.min(Number(value) * 12, 100)}%` }}
-              />
+              <div className="h-full rounded-full bg-slate-300" style={{ width: `${Math.min(Number(value) * 12, 100)}%` }} />
             </div>
           </div>
         ))}
@@ -71,34 +94,32 @@ export default function AdminDashboard() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <DashboardList
-          title="Recent Requests"
-          subtitle="Latest template requests."
+          title="คำขอล่าสุด"
+          subtitle="คำขอสร้าง Template ที่เพิ่งส่งเข้ามา"
           href="/admin/requests"
           items={requests.slice(0, 4).map((request) => ({
             id: request.id,
             title: request.requestTitle,
-            meta: `${request.pageCount} page${
-              request.pageCount === 1 ? "" : "s"
-            } · ${request.documentType || "Uncategorized"}`,
+            meta: `${request.pageCount} หน้า ? ${request.documentType || "ยังไม่ระบุประเภท"}`,
             status: request.status,
             tone: "amber",
           }))}
-          emptyText="No requests."
+          emptyText="ยังไม่มีคำขอ"
         />
 
         <DashboardList
-          title="Recent Templates"
-          subtitle="Recently updated templates."
+          title="Template ล่าสุด"
+          subtitle="Template ที่มีการอัปเดตล่าสุด"
           href="/admin/templates"
           items={templates.slice(0, 4).map((template) => ({
             id: template.id,
             title: template.name,
-            meta: template.documentType || "Uncategorized",
+            meta: template.documentType || "ยังไม่ระบุประเภท",
             status: template.status,
             tone: "indigo",
             editHref: `/admin/templates/${template.id}/edit`,
           }))}
-          emptyText="No templates."
+          emptyText="ยังไม่มี Template"
         />
       </div>
     </section>
@@ -127,50 +148,32 @@ function DashboardList({
 }) {
   return (
     <div className={`${cardClassName} p-4`}>
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
-            {title}
-          </h2>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">{title}</h2>
           <p className="text-xs font-semibold text-slate-400">{subtitle}</p>
         </div>
-
-        <Link
-          href={href}
-          className="inline-flex items-center gap-1 text-xs font-black text-indigo-600 hover:text-indigo-700"
-        >
-          View All
+        <Link href={href} className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-indigo-600 hover:text-indigo-700">
+          {"ดูทั้งหมด"}
           <ArrowUpRight size={12} />
         </Link>
       </div>
 
       <div className="space-y-2">
         {items.length === 0 ? (
-          <EmptyState title={emptyText} message="Items will appear here after backend data is available." />
+          <EmptyState title={emptyText} message="ข้อมูลจะแสดงที่นี่เมื่อโหลดจาก Backend สำเร็จ" />
         ) : (
           items.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3"
-            >
+            <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-black text-slate-800">
-                  {item.title}
-                </p>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                  {item.meta}
-                </p>
+                <p className="truncate text-sm font-black text-slate-800">{item.title}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{item.meta}</p>
               </div>
-
               <div className="flex shrink-0 items-center gap-2">
                 <StatusBadge status={item.status} tone={item.tone === "amber" ? "warning" : "primary"} />
-
                 {item.editHref && (
-                  <Link
-                    href={item.editHref}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50"
-                  >
-                    Edit
+                  <Link href={item.editHref} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">
+                    {"แก้ไข"}
                   </Link>
                 )}
               </div>

@@ -12,6 +12,7 @@ import {
   ADMIN_API_BASE_URL,
   PrepublishCandidate,
   PrepublishDetectionTestResult,
+  PrepublishLayoutSignaturePage,
   PrepublishSimulationResult,
   confirmTemplatePublish,
   fetchTemplateBundle,
@@ -19,8 +20,9 @@ import {
   runPrepublishSimulation,
   updateTemplateApi,
 } from "./adminApi";
-import { samplePage } from "./adminMockData";
-import { useAdminState } from "./AdminState";
+
+const samplePage =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1000' viewBox='0 0 750 1000'%3E%3Crect width='750' height='1000' fill='%23ffffff'/%3E%3Crect x='70' y='70' width='610' height='90' rx='8' fill='%23e2e8f0'/%3E%3Crect x='70' y='210' width='270' height='34' rx='5' fill='%23cbd5e1'/%3E%3Crect x='70' y='275' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='325' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='420' width='610' height='220' rx='8' fill='%23f1f5f9' stroke='%23cbd5e1'/%3E%3Ctext x='375' y='910' text-anchor='middle' font-family='Arial' font-size='24' fill='%2364758b'%3ETemplate Sample Page%3C/text%3E%3C/svg%3E";
 
 interface OcrPreviewResult {
   id: string;
@@ -333,7 +335,20 @@ function MatchingWeightsPanel({
             onTouchEnd={onWeightBlur}
             className="mt-3 w-full accent-emerald-600 disabled:opacity-50"
           />
-          <span className="mt-1 block text-sm font-black text-slate-800">{textPercent}%</span>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              max={remaining}
+              step="1"
+              value={textPercent}
+              disabled={!hasText || !textImageLocked}
+              onChange={(event) => onTextChange(Number(event.target.value) / 100)}
+              onBlur={onWeightBlur}
+              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-black text-slate-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            />
+            <span className="text-sm font-black text-slate-800">%</span>
+          </div>
           <span className="mt-1 block text-[10px] font-semibold text-slate-500">
             {!hasText ? "No Text Anchor" : textImageLocked ? "Moving Text updates Image automatically" : "Uses all Remaining"}
           </span>
@@ -353,7 +368,20 @@ function MatchingWeightsPanel({
             onTouchEnd={onWeightBlur}
             className="mt-3 w-full accent-sky-600 disabled:opacity-50"
           />
-          <span className="mt-1 block text-sm font-black text-slate-800">{imagePercent}%</span>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              max={remaining}
+              step="1"
+              value={imagePercent}
+              disabled={!hasImage || !textImageLocked}
+              onChange={(event) => onImageChange(Number(event.target.value) / 100)}
+              onBlur={onWeightBlur}
+              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-black text-slate-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            />
+            <span className="text-sm font-black text-slate-800">%</span>
+          </div>
           <span className="mt-1 block text-[10px] font-semibold text-slate-500">
             {!hasImage ? "No Image Anchor" : textImageLocked ? "Moving Image updates Text automatically" : "Uses all Remaining"}
           </span>
@@ -557,15 +585,13 @@ function DraftCandidateCard({
 }
 
 export default function AdminTemplateTestPage({ templateId }: { templateId: string }) {
-  const { templates, pages: statePages, fields: stateFields } = useAdminState();
-  const fallbackTemplate = templates.find((item) => item.id === templateId) || null;
-  const [template, setTemplate] = useState<Template | null>(fallbackTemplate);
-  const [pages, setPages] = useState<TemplatePage[]>(statePages.filter((page) => page.templateId === templateId));
-  const [fields, setFields] = useState<TemplateField[]>(stateFields.filter((field) => field.templateId === templateId));
+  const [template, setTemplate] = useState<Template | null>(null);
+  const [pages, setPages] = useState<TemplatePage[]>([]);
+  const [fields, setFields] = useState<TemplateField[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
-  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback" | "error">("loading");
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [ocrResults, setOcrResults] = useState<OcrPreviewResult[]>([]);
   const [anchorPreviewResults, setAnchorPreviewResults] = useState<OcrPreviewResult[]>([]);
   const [ocrStatus, setOcrStatus] = useState("");
@@ -596,16 +622,19 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         setFields(bundle.fields);
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn("Using template pre-publish fallback because backend template data is unavailable.", error);
+        console.warn("Template pre-publish load failed.", error);
         if (cancelled) return;
-        setLoadStatus(fallbackTemplate ? "fallback" : "error");
+        setTemplate(null);
+        setPages([]);
+        setFields([]);
+        setLoadStatus("error");
       }
     };
     load();
     return () => {
       cancelled = true;
     };
-  }, [fallbackTemplate, templateId]);
+  }, [templateId]);
 
   useEffect(() => {
     if (simulationAction !== "run") return;
@@ -679,13 +708,14 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     { step: 3, label: "New Document Test", enabled: simulationPassed, done: Boolean(detectionTest) },
     { step: 4, label: "Publish Review", enabled: Boolean(detectionTest), done: overallReady },
   ];
-  const layoutSignaturePages =
+  const layoutSignaturePages: PrepublishLayoutSignaturePage[] =
     simulation?.layoutSignaturePages?.length
       ? simulation.layoutSignaturePages
       : simulation?.temporaryEmbedding.layoutSignaturePages?.length
         ? simulation.temporaryEmbedding.layoutSignaturePages
         : safePages.map((page) => ({
             templatePageId: page.id,
+            templateLayoutReferenceId: null,
             pageNumber: page.pageNumber,
             status: simulationAction === "run" ? "running" : "pending",
             engine: "layout_signature",
@@ -693,6 +723,9 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             modelName: null,
             labelCount: null,
             imageUrl: page.normalizedImageUrl || page.sampleImageUrl || samplePage,
+            imageSource: "template_page",
+            isCanonical: true,
+            referenceRole: "main",
             persisted: false,
             reason: null,
           }));
@@ -953,7 +986,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             <p className="mt-1 text-xs font-semibold text-slate-500">
               Draft-only validation. Detection Lab remains separate and only tests published Active templates.
             </p>
-            {loadStatus === "fallback" && <p className="mt-2 text-xs font-bold text-amber-600">Showing local fallback because backend template data is unavailable.</p>}
             {statusMessage && <p className="mt-2 text-xs font-bold text-emerald-600">{statusMessage}</p>}
             {simulationError && <p className="mt-2 text-xs font-bold text-red-600">{simulationError}</p>}
           </div>
@@ -1174,6 +1206,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                         {pageAnchors.map((anchor) => {
                           const preview = pagePreviews.find((item) => item.id === anchor.id);
                           const isImageAnchor = anchor.dataType === "image";
+                          const anchorPassed = Boolean(preview?.passed);
+                          const imageCategories = Array.isArray(anchor.imageCategory)
+                            ? anchor.imageCategory.filter(Boolean)
+                            : anchor.imageCategory
+                              ? [anchor.imageCategory]
+                              : [];
                           return (
                             <button
                               key={anchor.id}
@@ -1194,12 +1232,27 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                                   </div>
                                 )}
                                 <div className="min-w-0 flex-1">
-                                  <div className="truncate font-black text-slate-900">{anchor.displayLabel}</div>
-                                  <div className="mt-0.5 text-[10px] font-bold text-slate-500">{anchor.fieldName}</div>
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="truncate font-black text-slate-900">{anchor.displayLabel}</div>
+                                      <div className="mt-0.5 text-[10px] font-bold text-slate-500">{anchor.fieldName}</div>
+                                    </div>
+                                    <DraftStatusPill passed={anchorPassed} label={anchorPassed ? "PASS" : "FAIL"} />
+                                  </div>
                                   <div className="mt-2 flex flex-wrap gap-1">
                                     <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[9px] font-black uppercase text-orange-700">
-                                      {isImageAnchor ? "Image Anchor" : "Text Anchor"}
+                                      Type: {isImageAnchor ? "Image" : "Text"}
                                     </span>
+                                    {isImageAnchor && imageCategories.length > 0 && (
+                                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">
+                                        Category: {imageCategories.join(", ")}
+                                      </span>
+                                    )}
+                                    {!isImageAnchor && (
+                                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[9px] font-black uppercase text-sky-700">
+                                        Method: OCR Text
+                                      </span>
+                                    )}
                                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-black uppercase text-slate-600">
                                       Weight {anchor.verificationWeight ?? 1}
                                     </span>
@@ -1264,8 +1317,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
-            title="Temporary Layout Signature Simulation"
-            subtitle="ขั้นนี้ทำงานได้หลังจาก ROI & OCR Preview ผ่านแล้วเท่านั้น และไม่บันทึกลง production storage."
+            title="Layout References Simulation"
+            subtitle="สร้างและทดสอบ Layout Signature จาก Main และ Reference ทั้งหมด หลังจาก ROI & OCR Preview ผ่านแล้วเท่านั้น"
           />
           <button
             type="button"
@@ -1339,8 +1392,9 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
               const isGenerated = status === "generated";
               const isRunning = status === "running";
               const isFailed = status === "failed";
+              const isReferenceOnly = page.referenceRole === "reference_only" || page.isCanonical === false;
               return (
-                <div key={`${page.templatePageId || "page"}-${page.pageNumber}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                <div key={`${page.templateLayoutReferenceId || page.templatePageId || "page"}-${page.pageNumber}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
                   <div className="flex items-start gap-3">
                     <div className="h-20 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
                       {page.imageUrl ? (
@@ -1352,22 +1406,32 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-xs font-black text-slate-900">Page {page.pageNumber}</div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
-                            isGenerated
-                              ? "bg-emerald-100 text-emerald-700"
-                              : isRunning
-                                ? "bg-indigo-100 text-indigo-700"
-                                : isFailed
-                                  ? "bg-red-100 text-red-700"
-                                  : "bg-slate-200 text-slate-600"
-                          }`}
-                        >
-                          {isGenerated ? "Generated" : isRunning ? "Running" : isFailed ? "Failed" : "Pending"}
-                        </span>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                              isReferenceOnly ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                            }`}
+                          >
+                            {isReferenceOnly ? "Reference Only" : "Main"}
+                          </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                              isGenerated
+                                ? "bg-emerald-100 text-emerald-700"
+                                : isRunning
+                                  ? "bg-indigo-100 text-indigo-700"
+                                  : isFailed
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-slate-200 text-slate-600"
+                            }`}
+                          >
+                            {isGenerated ? "Generated" : isRunning ? "Running" : isFailed ? "Failed" : "Pending"}
+                          </span>
+                        </div>
                       </div>
                       <div className="mt-2 space-y-1 text-[10px] font-semibold text-slate-500">
                         <p>Engine: {page.engine || "layout_signature"}</p>
+                        <p>Source: {page.imageSource || (page.templateLayoutReferenceId ? "layout_reference" : "template_page")}</p>
                         <p>Model: {page.modelName || "N/A"}</p>
                         <p>Layout boxes: {page.labelCount ?? "N/A"}</p>
                         {page.reason && <p className="text-red-600">Reason: {page.reason}</p>}
@@ -1494,7 +1558,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <td className="px-3 py-2 font-black text-slate-900">#{candidate.rank}</td>
                     <td className="px-3 py-2 font-bold text-slate-800">{candidate.templateName || candidate.templateId}</td>
                     <td className="px-3 py-2 font-semibold text-slate-600">
-                      {candidate.isCurrentDraft ? "Draft / Temporary Layout Signature" : candidate.sourceLabel || "Published / Layout Signature"}
+                      <div>{candidate.sourceLabel || (candidate.isCurrentDraft ? "Draft / Layout References" : "Published / Layout Signature")}</div>
+                      {candidate.isCurrentDraft && candidate.layoutReferenceCount ? (
+                        <div className="mt-1 text-[10px] font-black uppercase text-indigo-500">
+                          {candidate.layoutReferenceCount} Layout References
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 font-black text-slate-900">{formatPrepublishScore(candidate.finalScore)}</td>
                     <td className="px-3 py-2">{formatPrepublishScore(candidate.globalScore)}</td>

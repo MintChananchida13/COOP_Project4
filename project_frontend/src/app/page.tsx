@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
 import AdjustZone from "../user/components/AdjustZone";
 import WorkspaceZone from "../user/components/WorkspaceZone";
 import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWorkspaceZone";
@@ -15,7 +17,9 @@ import {
   type DetectionCandidate,
   type DetectionDevResult,
 } from "../admin/adminApi";
-import { ActionButton, InlineState } from "../shared/ui";
+import { InlineState } from "../shared/ui";
+import AuthGate from "../auth/AuthGate";
+import { AuthSession, clearAuthSession, readAuthSession } from "../auth/session";
 
 interface PageConfig {
   rotation: number;
@@ -533,7 +537,9 @@ const assignExportField = (fields: Record<string, unknown>, name: string, value:
   fields[name] = Array.isArray(fields[name]) ? [...fields[name], value] : [fields[name], value];
 };
 
-export default function Home() {
+function HomeWorkspace() {
+  const router = useRouter();
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
   const [imagesList, setImagesList] = useState<string[]>([]);
   const [originalImagesList, setOriginalImagesList] = useState<string[]>([]);
@@ -577,6 +583,20 @@ export default function Home() {
     decisionReason?: string | null;
     alignmentStatus?: string | null;
   } | null>(null);
+
+  useEffect(() => {
+    const session = readAuthSession();
+    if (session?.role === "admin") {
+      router.replace("/admin");
+      return;
+    }
+    setAuthSession(session);
+  }, [router]);
+
+  const handleLogout = () => {
+    clearAuthSession();
+    router.replace("/login");
+  };
 
   const handleGroundTruthResultsChange = (next: Parameters<typeof setOcrResults>[0]) => {
     setIsGroundTruthSaved(false);
@@ -1721,7 +1741,11 @@ export default function Home() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <ActionButton href="/admin">ผู้ดูแลระบบ</ActionButton>
+              {authSession && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                  {authSession.email} / user
+                </div>
+              )}
               {imagesList.length > 0 && (
                 <button
                   type="button"
@@ -1731,6 +1755,14 @@ export default function Home() {
                   เอกสารใหม่
                 </button>
               )}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <LogOut size={14} />
+                ออกจากระบบ
+              </button>
             </div>
           </div>
         </div>
@@ -2266,5 +2298,13 @@ export default function Home() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <AuthGate requiredRole="user">
+      <HomeWorkspace />
+    </AuthGate>
   );
 }

@@ -25,7 +25,7 @@ from .image_verification_category_service import (
     list_image_verification_categories,
 )
 from .layout_analysis_service import analyze_layout
-from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_to_json
+from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_from_json, signature_to_json
 from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
 from .siglip_image_verification_adapter import (
@@ -467,12 +467,65 @@ def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dic
     return build_layout_signature(analysis)
 
 
-def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
-    reference_count_row = conn.execute(
-        "SELECT COUNT(*) AS reference_count FROM template_layout_references WHERE template_id = ?",
+def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, page_number, normalized_image_url, sample_image_url, layout_signature_json
+        FROM template_pages
+        WHERE template_id = ?
+        ORDER BY page_number ASC
+        """,
         (template_id,),
-    ).fetchone()
-    should_bootstrap_references = bool(reference_count_row and not reference_count_row["reference_count"])
+    ).fetchall()
+    for row in rows:
+        source = row["normalized_image_url"] or row["sample_image_url"]
+        if not source:
+            continue
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM template_layout_references
+            WHERE template_id = ? AND template_page_id = ?
+            LIMIT 1
+            """,
+            (template_id, row["id"]),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE template_layout_references
+                SET page_number = ?,
+                    image_url = ?,
+                    image_source = 'template_page',
+                    review_status = 'approved',
+                    is_canonical = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (row["page_number"], source, existing["id"]),
+            )
+            continue
+        conn.execute(
+            """
+            INSERT INTO template_layout_references (
+                id, template_id, template_page_id, page_number, image_url,
+                image_source, review_status, is_canonical, layout_signature_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'template_page', 'approved', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                _stub_id("tpl_ref"),
+                template_id,
+                row["id"],
+                row["page_number"],
+                source,
+                row["layout_signature_json"],
+            ),
+        )
+
+
+def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT id, page_number, normalized_image_url, sample_image_url
@@ -505,26 +558,6 @@ def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dic
             """,
             (signature_json, row["id"]),
         )
-        if should_bootstrap_references and source:
-            conn.execute(
-                """
-                INSERT INTO template_layout_references (
-                    id, template_id, template_page_id, page_number, image_url,
-                    image_source, review_status, is_canonical, layout_signature_json,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, 'admin_upload', 'approved', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                (
-                    _stub_id("tpl_ref"),
-                    template_id,
-                    row["id"],
-                    row["page_number"],
-                    source,
-                    1 if row["page_number"] == 1 else 0,
-                    signature_json,
-                ),
-            )
         refreshed.append(
             {
                 "template_page_id": row["id"],
@@ -534,13 +567,14 @@ def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dic
                 "model": signature.get("model"),
             }
         )
+    _ensure_template_pages_layout_references(conn, template_id)
     return refreshed
 
 
 def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT id, page_number, image_url
+        SELECT id, template_page_id, page_number, image_url, image_source, is_canonical
         FROM template_layout_references
         WHERE template_id = ? AND review_status = 'approved'
         ORDER BY is_canonical DESC, page_number ASC, created_at ASC
@@ -554,8 +588,13 @@ def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -
             refreshed.append(
                 {
                     "template_layout_reference_id": row["id"],
+                    "template_page_id": row["template_page_id"],
                     "page_number": row["page_number"],
                     "status": "failed",
+                    "image_url": row["image_url"],
+                    "image_source": row["image_source"],
+                    "is_canonical": bool(row["is_canonical"]),
+                    "reference_role": "main" if row["is_canonical"] else "reference_only",
                     "reason": "reference_image_unavailable_or_invalid",
                 }
             )
@@ -572,10 +611,21 @@ def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -
         refreshed.append(
             {
                 "template_layout_reference_id": row["id"],
+                "template_page_id": row["template_page_id"],
                 "page_number": row["page_number"],
                 "status": "generated",
+                "engine": "layout_signature",
+                "version": signature.get("version"),
+                "model_name": signature.get("model"),
+                "label_count": len(signature.get("boxes") or []),
                 "region_count": signature.get("region_count", 0),
                 "model": signature.get("model"),
+                "image_url": row["image_url"],
+                "image_source": row["image_source"],
+                "is_canonical": bool(row["is_canonical"]),
+                "reference_role": "main" if row["is_canonical"] else "reference_only",
+                "persisted": False,
+                "reason": None,
             }
         )
     return refreshed
@@ -793,19 +843,20 @@ class EmbeddingService:
 
             template_id = job_row["template_id"]
             self._fetch_template_or_404(conn, template_id)
-            generated_pages = _refresh_template_layout_signatures(conn, template_id)
-            if not generated_pages or any(item.get("status") != "generated" for item in generated_pages):
-                failed_pages = [item for item in generated_pages if item.get("status") != "generated"]
+            _refresh_template_layout_signatures(conn, template_id)
+            generated_references = _refresh_template_layout_reference_signatures(conn, template_id)
+            if not generated_references or any(item.get("status") != "generated" for item in generated_references):
+                failed_pages = [item for item in generated_references if item.get("status") != "generated"]
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Layout signature generation failed: {failed_pages or 'no template pages'}",
+                    detail=f"Layout reference signature generation failed: {failed_pages or 'no layout references'}",
                 )
             metadata = {
                 "engine": "layout_signature",
                 "version": "layout-signature-v1",
                 "template_id": template_id,
-                "page_count": len(generated_pages),
-                "layout_signature_pages": generated_pages,
+                "page_count": len(generated_references),
+                "layout_signature_pages": generated_references,
                 "global_vector_store": "disabled",
                 "image_anchor_verification": "siglip_image_category",
                 "completed_by": "complete-dev",
@@ -859,17 +910,18 @@ class EmbeddingService:
 
         try:
             with _connect() as conn:
-                generated_pages = _refresh_template_layout_signatures(conn, template_id)
-                if not generated_pages or any(item.get("status") != "generated" for item in generated_pages):
-                    failed_pages = [item for item in generated_pages if item.get("status") != "generated"]
-                    raise RuntimeError(f"Layout signature generation failed: {failed_pages or 'no template pages'}")
+                _refresh_template_layout_signatures(conn, template_id)
+                generated_references = _refresh_template_layout_reference_signatures(conn, template_id)
+                if not generated_references or any(item.get("status") != "generated" for item in generated_references):
+                    failed_pages = [item for item in generated_references if item.get("status") != "generated"]
+                    raise RuntimeError(f"Layout reference signature generation failed: {failed_pages or 'no layout references'}")
                 conn.commit()
             metadata = {
                 "engine": "layout_signature",
                 "version": "layout-signature-v1",
                 "template_id": template_id,
-                "page_count": len(generated_pages),
-                "layout_signature_pages": generated_pages,
+                "page_count": len(generated_references),
+                "layout_signature_pages": generated_references,
                 "global_vector_store": "disabled",
                 "image_anchor_verification": "siglip_image_category",
             }
@@ -2512,6 +2564,66 @@ class AdminTemplateService:
         page_paths = self._template_page_image_paths(template["id"], template.get("pages") or [])
         return self._layout_signature_for_page_paths(page_paths, page_number)
 
+    def _draft_layout_reference_match(
+        self,
+        template_id: str,
+        query_signature: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        with _connect() as conn:
+            _ensure_template_pages_layout_references(conn, template_id)
+            refreshed = _refresh_template_layout_reference_signatures(conn, template_id)
+            if not refreshed or any(item.get("status") != "generated" for item in refreshed):
+                failed_refs = [item for item in refreshed if item.get("status") != "generated"]
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Layout reference signature generation failed: {failed_refs or 'no layout references'}",
+                )
+            rows = conn.execute(
+                """
+                SELECT id, template_page_id, page_number, image_url, image_source,
+                       is_canonical, layout_signature_json
+                FROM template_layout_references
+                WHERE template_id = ?
+                  AND review_status = 'approved'
+                  AND layout_signature_json IS NOT NULL
+                ORDER BY is_canonical DESC, page_number ASC, created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
+
+        best_score = 0.0
+        best_reference: Optional[Dict[str, Any]] = None
+        compared_references: List[Dict[str, Any]] = []
+        for row in rows:
+            signature = signature_from_json(row["layout_signature_json"])
+            if not signature:
+                continue
+            comparison = compare_layout_signatures(query_signature, signature)
+            score = float(comparison.get("score") or 0.0)
+            reference = {
+                "template_layout_reference_id": row["id"],
+                "template_page_id": row["template_page_id"],
+                "page_number": row["page_number"],
+                "image_url": row["image_url"],
+                "image_source": row["image_source"],
+                "is_canonical": bool(row["is_canonical"]),
+                "reference_role": "main" if row["is_canonical"] else "reference_only",
+                "score": round(score, 4),
+            }
+            compared_references.append(reference)
+            if best_reference is None or score > best_score:
+                best_score = score
+                best_reference = {**reference, "layout_debug": comparison}
+
+        if best_reference is None:
+            raise HTTPException(status_code=409, detail="Unable to compare draft layout references")
+        return {
+            "score": best_score,
+            "best_reference": best_reference,
+            "reference_count": len(compared_references),
+            "references": compared_references,
+        }
+
     def _align_query_pages_for_candidate(
         self,
         candidate_template: Dict[str, Any],
@@ -2775,19 +2887,24 @@ class AdminTemplateService:
         if not fields:
             raise HTTPException(status_code=409, detail="Template must have fields before simulation")
 
+        with _connect() as conn:
+            _ensure_template_pages_layout_references(conn, template_id)
+            reference_signature_pages = _refresh_template_layout_reference_signatures(conn, template_id)
+
         query_page_paths = self._template_page_image_paths(template_id, pages)
         if not query_page_paths:
             raise HTTPException(status_code=409, detail="Unable to prepare template page images for verification simulation")
         query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
-        layout_signature_pages: List[Dict[str, Any]] = []
+        page_layout_signature_pages: List[Dict[str, Any]] = []
         pages_by_number = {int(page.get("page_number") or index + 1): page for index, page in enumerate(pages)}
         for page_number in sorted(query_page_paths):
             page = pages_by_number.get(int(page_number), {})
             signature = query_signature if int(page_number) == 1 else self._layout_signature_for_page_paths(query_page_paths, int(page_number))
             page_status = "generated" if signature else "failed"
-            layout_signature_pages.append(
+            page_layout_signature_pages.append(
                 {
                     "template_page_id": page.get("id"),
+                    "template_layout_reference_id": None,
                     "page_number": int(page_number),
                     "status": page_status,
                     "engine": "layout_signature",
@@ -2795,10 +2912,14 @@ class AdminTemplateService:
                     "model_name": signature.get("model") if signature else None,
                     "label_count": len(signature.get("boxes") or []) if signature else 0,
                     "image_url": page.get("normalized_image_url") or page.get("sample_image_url"),
+                    "image_source": "template_page",
+                    "is_canonical": True,
+                    "reference_role": "main",
                     "persisted": False,
                     "reason": None if signature else "layout_signature_unavailable",
                 }
             )
+        layout_signature_pages = reference_signature_pages if reference_signature_pages else page_layout_signature_pages
 
         active_candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
@@ -2869,7 +2990,7 @@ class AdminTemplateService:
                 "version": query_signature.get("version"),
                 "model_name": query_signature.get("model"),
                 "embedding_dimension": 0,
-                "input_count": len(query_page_paths),
+                "input_count": len(layout_signature_pages),
                 "generated_at": _now(),
                 "persisted": False,
                 "note": "Temporary layout signature was used only for this pre-publish simulation.",
@@ -2910,8 +3031,8 @@ class AdminTemplateService:
         draft_paths = [draft_page_paths[key] for key in sorted(draft_page_paths)]
 
         query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
-        draft_signature = self._layout_signature_for_page_paths(draft_page_paths, 1)
-        draft_global_score = compare_layout_signatures(query_signature, draft_signature)["score"]
+        draft_reference_match = self._draft_layout_reference_match(template_id, query_signature)
+        draft_global_score = float(draft_reference_match["score"])
 
         candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
@@ -2937,7 +3058,9 @@ class AdminTemplateService:
 
         draft_candidate = self._build_simulation_candidate(draft, draft_global_score, query_page_paths, is_current_draft=True)
         draft_candidate["source"] = "draft"
-        draft_candidate["source_label"] = "Draft / Temporary Layout Signature"
+        draft_candidate["source_label"] = "Draft / Layout References"
+        draft_candidate["matched_layout_reference"] = draft_reference_match["best_reference"]
+        draft_candidate["layout_reference_count"] = draft_reference_match["reference_count"]
 
         candidates = sorted([draft_candidate, *candidates], key=lambda item: item["final_score"], reverse=True)[:5]
         for index, candidate in enumerate(candidates, start=1):
@@ -2993,6 +3116,7 @@ class AdminTemplateService:
                 "query_page_paths": [str(path) for path in uploaded_page_paths],
                 "normalized_query_page_paths": query_paths,
                 "draft_global_score": round(draft_global_score, 4),
+                "draft_layout_reference_match": draft_reference_match,
             },
         }
 

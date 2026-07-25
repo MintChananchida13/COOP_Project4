@@ -26,8 +26,9 @@ import {
   fetchTemplateRequestPages,
   updateTemplateRequestImage,
 } from "./adminApi";
-import { samplePage } from "./adminMockData";
-import { useAdminState } from "./AdminState";
+
+const samplePage =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1000' viewBox='0 0 750 1000'%3E%3Crect width='750' height='1000' fill='%23ffffff'/%3E%3Crect x='70' y='70' width='610' height='90' rx='8' fill='%23e2e8f0'/%3E%3Crect x='70' y='210' width='270' height='34' rx='5' fill='%23cbd5e1'/%3E%3Crect x='70' y='275' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='325' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='420' width='610' height='220' rx='8' fill='%23f1f5f9' stroke='%23cbd5e1'/%3E%3Ctext x='375' y='910' text-anchor='middle' font-family='Arial' font-size='24' fill='%2364758b'%3ETemplate Sample Page%3C/text%3E%3C/svg%3E";
 
 interface PdfJsLib {
   GlobalWorkerOptions: { workerSrc: string };
@@ -149,23 +150,15 @@ export default function AdminRequestDetailPage({
   requestId: string;
 }) {
   const router = useRouter();
-  const { requests } = useAdminState();
-
-  const fallbackRequest = requests.find((request) => request.id === requestId);
-
-  const [request, setRequest] = useState<AdminTemplateRequest | null>(
-    fallbackRequest || null
-  );
-  const [pages, setPages] = useState<TemplateRequestPage[]>(
-    fallbackRequest?.pages || []
-  );
+  const [request, setRequest] = useState<AdminTemplateRequest | null>(null);
+  const [pages, setPages] = useState<TemplateRequestPage[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(
     DEFAULT_WORKSPACE_IMAGE_METRICS
   );
   const [adminNote, setAdminNote] = useState("");
   const [loadStatus, setLoadStatus] = useState<
-    "loading" | "loaded" | "fallback" | "error"
+    "loading" | "loaded" | "error"
   >("loading");
   const [actionStatus, setActionStatus] = useState("");
   const [actionError, setActionError] = useState("");
@@ -195,15 +188,12 @@ export default function AdminRequestDetailPage({
         setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn(
-          "Using admin request fallback because backend detail is unavailable.",
-          error
-        );
+        console.warn("Admin request detail load failed.", error);
 
         if (!cancelled) {
-          setRequest(fallbackRequest || null);
-          setPages(fallbackRequest?.pages || []);
-          setLoadStatus(fallbackRequest ? "fallback" : "error");
+          setRequest(null);
+          setPages([]);
+          setLoadStatus("error");
         }
       }
     };
@@ -213,7 +203,7 @@ export default function AdminRequestDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [fallbackRequest, requestId]);
+  }, [requestId]);
 
   const workspacePages: WorkspacePage[] = useMemo(() => {
     const sourcePages = pages.length > 0 ? pages : request?.pages || [];
@@ -512,11 +502,6 @@ export default function AdminRequestDetailPage({
               </span>
             </div>
 
-            {loadStatus === "fallback" && (
-              <p className="mt-2 text-xs font-bold text-amber-600">
-                กำลังแสดงข้อมูลตัวอย่าง เพราะยังเชื่อมต่อ backend ไม่ได้
-              </p>
-            )}
           </div>
 
           <Link

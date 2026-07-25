@@ -1,16 +1,45 @@
-# Node modules
+# =========================
+# Node
+# =========================
 node_modules/
 .next/
-.env
 
-# Python/Backend files
+# Environment
+.env
+.env.*
+
+# =========================
+# Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Virtual Environment
+venv/
+.venv/
+
+# =========================
+# Generated Files
+# =========================
+project_backend/storage/
 project_backend/cropped_rois/
 project_backend/qdrant_local_db/
 
-# Git warning files
-.DS_Store
+# Model cache (ถ้ามี)
+project_backend/model_cache/
+project_backend/.cache/
 
-# Generated storage (ignore everything)
-project_backend/storage/
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/

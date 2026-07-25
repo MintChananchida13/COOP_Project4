@@ -327,6 +327,8 @@ export interface PrepublishCandidate {
   sourceLabel?: string | null;
   pageCount?: number | null;
   fieldCount?: number | null;
+  matchedLayoutReference?: Record<string, unknown> | null;
+  layoutReferenceCount?: number | null;
   verification?: Record<string, unknown>;
   verificationDetails?: Record<string, unknown>[];
 }
@@ -374,6 +376,7 @@ export interface PrepublishSimulationResult {
 
 export interface PrepublishLayoutSignaturePage {
   templatePageId?: string | null;
+  templateLayoutReferenceId?: string | null;
   pageNumber: number;
   status: string;
   engine?: string | null;
@@ -381,6 +384,9 @@ export interface PrepublishLayoutSignaturePage {
   modelName?: string | null;
   labelCount?: number | null;
   imageUrl?: string | null;
+  imageSource?: string | null;
+  isCanonical?: boolean;
+  referenceRole?: "main" | "reference_only" | string | null;
   persisted?: boolean;
   reason?: string | null;
 }
@@ -815,6 +821,33 @@ export const fetchTemplateRequests = async () => {
   return (apiRequests || []).map(mapApiRequest);
 };
 
+export const createTemplateRequest = async (payload: {
+  requestTitle: string;
+  documentType?: string;
+  requestMode?: "image_only" | "image_with_roi";
+  pageCount?: number;
+  userNote?: string;
+  requestedBy?: string;
+}) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requested_by: payload.requestedBy || "admin",
+      request_title: payload.requestTitle,
+      document_type: payload.documentType || "เอกสารทั่วไป",
+      request_mode: payload.requestMode || "image_only",
+      page_count: payload.pageCount || 1,
+      user_note: payload.userNote,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(json?.detail || json?.error?.message || `Create template request failed with ${response.status}`);
+  }
+  return mapApiRequest(json?.data as ApiTemplateRequest);
+};
+
 export const fetchTemplateRequest = async (requestId: string) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`);
   if (!response.ok) {
@@ -1212,6 +1245,8 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
   sourceLabel: (candidate.source_label as string | null | undefined) ?? null,
   pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
   fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
+  matchedLayoutReference: (candidate.matched_layout_reference as Record<string, unknown> | null | undefined) ?? null,
+  layoutReferenceCount: typeof candidate.layout_reference_count === "number" ? candidate.layout_reference_count : null,
   verification: (candidate.verification as Record<string, unknown> | undefined) || {},
   verificationDetails: Array.isArray(candidate.verification_details)
     ? (candidate.verification_details as Record<string, unknown>[])
@@ -1220,6 +1255,7 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
 
 const mapPrepublishLayoutSignaturePage = (page: Record<string, unknown>): PrepublishLayoutSignaturePage => ({
   templatePageId: (page.template_page_id as string | null | undefined) ?? null,
+  templateLayoutReferenceId: (page.template_layout_reference_id as string | null | undefined) ?? null,
   pageNumber: Number(page.page_number || 0),
   status: String(page.status || "pending"),
   engine: (page.engine as string | null | undefined) ?? null,
@@ -1227,6 +1263,9 @@ const mapPrepublishLayoutSignaturePage = (page: Record<string, unknown>): Prepub
   modelName: (page.model_name as string | null | undefined) ?? null,
   labelCount: typeof page.label_count === "number" ? page.label_count : null,
   imageUrl: (page.image_url as string | null | undefined) ?? null,
+  imageSource: (page.image_source as string | null | undefined) ?? null,
+  isCanonical: Boolean(page.is_canonical),
+  referenceRole: (page.reference_role as string | null | undefined) ?? null,
   persisted: Boolean(page.persisted),
   reason: (page.reason as string | null | undefined) ?? null,
 });

@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import WorkspaceTemplateEditor from "./workspace/WorkspaceTemplateEditorV2";
 import AdjustZone from "../user/components/AdjustZone";
-import { samplePage } from "./adminMockData";
-import { useAdminState } from "./AdminState";
 import {
   createIgnoreRegionApi,
   createTemplateFieldApi,
@@ -22,8 +20,11 @@ import {
 } from "./adminApi";
 import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage } from "../types/ocr";
 
-type LoadStatus = "loading" | "loaded" | "fallback" | "error";
+type LoadStatus = "loading" | "loaded" | "error";
 type AdminEditorStage = "adjust" | "roi";
+
+const samplePage =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1000' viewBox='0 0 750 1000'%3E%3Crect width='750' height='1000' fill='%23ffffff'/%3E%3Crect x='70' y='70' width='610' height='90' rx='8' fill='%23e2e8f0'/%3E%3Crect x='70' y='210' width='270' height='34' rx='5' fill='%23cbd5e1'/%3E%3Crect x='70' y='275' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='325' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='420' width='610' height='220' rx='8' fill='%23f1f5f9' stroke='%23cbd5e1'/%3E%3Ctext x='375' y='910' text-anchor='middle' font-family='Arial' font-size='24' fill='%2364758b'%3ETemplate Sample Page%3C/text%3E%3C/svg%3E";
 
 interface AdminAdjustPageConfig {
   rotation: number;
@@ -79,24 +80,10 @@ const defaultAdjustPageConfig = (): AdminAdjustPageConfig => ({
 
 export default function AdminTemplateEditPage({ templateId }: { templateId: string }) {
   const router = useRouter();
-  const {
-    templates,
-    pages,
-    fields,
-    ignoreRegions,
-    generateEmbedding,
-    markTesting,
-  } = useAdminState();
-
-  const fallbackTemplate = templates.find((template) => template.id === templateId) || null;
-  const fallbackPages = pages.filter((page) => page.templateId === templateId);
-  const fallbackFields = fields.filter((field) => field.templateId === templateId);
-  const fallbackIgnoreRegions = ignoreRegions.filter((region) => region.templateId === templateId);
-
-  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(fallbackTemplate);
-  const [selectedTemplatePages, setSelectedTemplatePages] = useState<TemplatePage[]>(fallbackPages);
-  const [selectedTemplateFields, setSelectedTemplateFields] = useState<TemplateField[]>(fallbackFields);
-  const [selectedIgnoreRegions, setSelectedIgnoreRegions] = useState<IgnoreRegion[]>(fallbackIgnoreRegions);
+  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+  const [selectedTemplatePages, setSelectedTemplatePages] = useState<TemplatePage[]>([]);
+  const [selectedTemplateFields, setSelectedTemplateFields] = useState<TemplateField[]>([]);
+  const [selectedIgnoreRegions, setSelectedIgnoreRegions] = useState<IgnoreRegion[]>([]);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [saveStatus, setSaveStatus] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
@@ -122,13 +109,13 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
         applyBundle(bundle);
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn("Using template editor fallback because backend template data is unavailable.", error);
+        console.warn("Template editor load failed.", error);
         if (cancelled) return;
-        setSelectedTemplate(fallbackTemplate);
-        setSelectedTemplatePages(fallbackPages);
-        setSelectedTemplateFields(fallbackFields);
-        setSelectedIgnoreRegions(fallbackIgnoreRegions);
-        setLoadStatus(fallbackTemplate ? "fallback" : "error");
+        setSelectedTemplate(null);
+        setSelectedTemplatePages([]);
+        setSelectedTemplateFields([]);
+        setSelectedIgnoreRegions([]);
+        setLoadStatus("error");
       }
     };
 
@@ -665,11 +652,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
           </div>
         </div>
 
-        {loadStatus === "fallback" && (
-          <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-            Backend unavailable. Showing local fallback data.
-          </p>
-        )}
         {saveStatus && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{saveStatus}</p>}
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -773,11 +755,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onAddIgnoreRegion={handleAddIgnoreRegion}
               onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
               onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
-              onGenerateEmbedding={() => generateEmbedding(templateId, currentTemplatePage.id)}
-              onRunTestMode={() => {
-                markTesting(templateId);
-                router.push(`/admin/templates/${templateId}/test`);
-              }}
+              onGenerateEmbedding={() => router.push(`/admin/templates/${templateId}/test`)}
+              onRunTestMode={() => router.push(`/admin/templates/${templateId}/test`)}
             />
           )}
         </div>

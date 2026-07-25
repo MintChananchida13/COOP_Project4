@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AdminTemplateRequest } from "../types/ocr";
 import { fetchTemplateRequests } from "./adminApi";
-import { useAdminState } from "./AdminState";
 
 type RequestFilter = "pending" | "converted" | "rejected" | "all";
 
@@ -16,9 +15,8 @@ const formatDate = (value?: string) => {
 };
 
 export default function AdminRequestsPage() {
-  const { requests: fallbackRequests } = useAdminState();
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
-  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "fallback">("loading");
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [filter, setFilter] = useState<RequestFilter>("pending");
 
   useEffect(() => {
@@ -32,10 +30,10 @@ export default function AdminRequestsPage() {
         setRequests(persistedRequests);
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn("Using mock template request fallback because backend is unavailable.", error);
+        console.warn("Template requests load failed.", error);
         if (cancelled) return;
-        setRequests(fallbackRequests);
-        setLoadStatus("fallback");
+        setRequests([]);
+        setLoadStatus("error");
       }
     };
 
@@ -44,7 +42,7 @@ export default function AdminRequestsPage() {
     return () => {
       cancelled = true;
     };
-  }, [fallbackRequests]);
+  }, []);
 
   const counts = {
     pending: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
@@ -108,9 +106,9 @@ export default function AdminRequestsPage() {
           กำลังโหลดคำขอจากฐานข้อมูล...
         </div>
       )}
-      {loadStatus === "fallback" && (
+      {loadStatus === "error" && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-700 shadow-sm">
-          เชื่อมต่อ Backend ไม่ได้ กำลังแสดงคำขอตัวอย่างสำหรับทดสอบเท่านั้น
+          โหลดคำขอจาก Backend ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่
         </div>
       )}
 

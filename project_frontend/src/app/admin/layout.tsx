@@ -1,11 +1,11 @@
 import { ReactNode } from "react";
 import AdminShell from "../../admin/AdminShell";
-import { AdminStateProvider } from "../../admin/AdminState";
+import AuthGate from "../../auth/AuthGate";
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
-    <AdminStateProvider>
+    <AuthGate requiredRole="admin">
       <AdminShell>{children}</AdminShell>
-    </AdminStateProvider>
+    </AuthGate>
   );
 }
