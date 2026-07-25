@@ -38,9 +38,9 @@ interface OcrPreviewResult {
 
 const DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.75;
 const DEFAULT_MATCHING_WEIGHTS = {
-  layoutWeight: 0.5,
-  textAnchorWeight: 0.35,
-  imageAnchorWeight: 0.15,
+  layoutWeight: 0.4,
+  textAnchorWeight: 0.3,
+  imageAnchorWeight: 0.3,
 };
 
 const stableNumericId = (value: string) =>
@@ -74,6 +74,41 @@ const normalizeMatchingWeights = (weights: {
 };
 
 const formatWeightPercent = (value: number) => `${Math.round(value * 100)}%`;
+
+const roundWeight = (value: number) => Number(clampUnit(value).toFixed(4));
+
+const calculateMatchingWeights = ({
+  layoutWeight,
+  textAnchorCount,
+  imageAnchorCount,
+  preferredTextWeight,
+}: {
+  layoutWeight: number;
+  textAnchorCount: number;
+  imageAnchorCount: number;
+  preferredTextWeight?: number;
+}) => {
+  const hasText = textAnchorCount > 0;
+  const hasImage = imageAnchorCount > 0;
+  if (!hasText && !hasImage) {
+    return { layoutWeight: 1, textAnchorWeight: 0, imageAnchorWeight: 0 };
+  }
+
+  const layout = roundWeight(Math.max(0.3, Math.min(0.5, layoutWeight)));
+  const remaining = roundWeight(1 - layout);
+  if (hasText && hasImage) {
+    const text = preferredTextWeight === undefined
+      ? roundWeight(remaining / 2)
+      : roundWeight(Math.max(0, Math.min(remaining, preferredTextWeight)));
+    return {
+      layoutWeight: layout,
+      textAnchorWeight: text,
+      imageAnchorWeight: roundWeight(remaining - text),
+    };
+  }
+  if (hasText) return { layoutWeight: layout, textAnchorWeight: remaining, imageAnchorWeight: 0 };
+  return { layoutWeight: layout, textAnchorWeight: 0, imageAnchorWeight: remaining };
+};
 
 const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): WorkspaceRoi & { kind: string; pageNumber: number } => {
   const box = ratioToImageBox(field.roi, metrics);
@@ -205,29 +240,33 @@ function DraftOverviewMetric({ label, value, tone = "slate" }: { label: string; 
 function MatchingWeightsPanel({
   matchingWeights,
   effectiveMatchingWeights,
+  textAnchorCount,
   imageAnchorCount,
-  onWeightChange,
+  onLayoutChange,
+  onTextChange,
+  onImageChange,
   onWeightBlur,
   onUseRecommended,
 }: {
   matchingWeights: typeof DEFAULT_MATCHING_WEIGHTS;
   effectiveMatchingWeights: typeof DEFAULT_MATCHING_WEIGHTS;
+  textAnchorCount: number;
   imageAnchorCount: number;
-  onWeightChange: (key: "layoutWeight" | "textAnchorWeight" | "imageAnchorWeight", value: number) => void;
+  onLayoutChange: (value: number) => void;
+  onTextChange: (value: number) => void;
+  onImageChange: (value: number) => void;
   onWeightBlur: () => void;
   onUseRecommended: () => void;
 }) {
-  const weightItems = [
-    { key: "layoutWeight" as const, label: "Layout Signature", value: matchingWeights.layoutWeight, hint: "โครงสร้างหน้าเอกสาร", disabled: false },
-    { key: "textAnchorWeight" as const, label: "Text Anchors", value: matchingWeights.textAnchorWeight, hint: "ข้อความยืนยัน Template", disabled: false },
-    {
-      key: "imageAnchorWeight" as const,
-      label: "Image Anchors",
-      value: imageAnchorCount > 0 ? matchingWeights.imageAnchorWeight : 0,
-      hint: imageAnchorCount > 0 ? "โลโก้ ตรา หรือภาพคงที่" : "ไม่มี Image Anchor จึงไม่ใช้คะแนนส่วนนี้",
-      disabled: imageAnchorCount === 0,
-    },
-  ];
+  const hasText = textAnchorCount > 0;
+  const hasImage = imageAnchorCount > 0;
+  const hasAnyAnchor = hasText || hasImage;
+  const remaining = Math.round((1 - effectiveMatchingWeights.layoutWeight) * 100);
+  const layoutPercent = Math.round(effectiveMatchingWeights.layoutWeight * 100);
+  const textPercent = Math.round(effectiveMatchingWeights.textAnchorWeight * 100);
+  const imagePercent = Math.round(effectiveMatchingWeights.imageAnchorWeight * 100);
+  const textImageLocked = hasText && hasImage;
+  const layoutOptions = [30, 35, 40, 45, 50];
 
   return (
     <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
@@ -235,7 +274,7 @@ function MatchingWeightsPanel({
         <div>
           <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Matching Weights</h4>
           <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-500">
-            กำหนดน้ำหนัก Layout Signature, Text Anchors และ Image Anchors สำหรับการคำนวณ Final Score
+            กำหนดน้ำหนัก Layout แล้วระบบจะคำนวณส่วนที่เหลือให้ Text/Image Anchors อัตโนมัติ
           </p>
         </div>
         <button
@@ -246,30 +285,85 @@ function MatchingWeightsPanel({
           ใช้ค่าแนะนำ
         </button>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
-        {weightItems.map((item) => (
-          <label key={item.key} className="block rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">{item.label}</span>
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.01"
-              value={item.value}
-              disabled={item.disabled}
-              onChange={(event) => {
-                if (!item.disabled) onWeightChange(item.key, Number(event.target.value));
-              }}
+
+      <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <label className="block min-w-36">
+            <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Layout</span>
+            <select
+              value={layoutPercent}
+              disabled={!hasAnyAnchor}
+              onChange={(event) => onLayoutChange(Number(event.target.value) / 100)}
               onBlur={onWeightBlur}
               className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            />
-            <span className="mt-1 block text-[10px] font-semibold text-slate-500">{item.hint}</span>
+            >
+              {hasAnyAnchor ? layoutOptions.map((value) => <option key={value} value={value}>{value}%</option>) : <option value={100}>100%</option>}
+            </select>
           </label>
-        ))}
+          <input
+            type="range"
+            min={hasAnyAnchor ? 30 : 100}
+            max={hasAnyAnchor ? 50 : 100}
+            step={5}
+            value={layoutPercent}
+            disabled={!hasAnyAnchor}
+            onChange={(event) => onLayoutChange(Number(event.target.value) / 100)}
+            onMouseUp={onWeightBlur}
+            onTouchEnd={onWeightBlur}
+            className="w-full accent-indigo-600 disabled:opacity-50"
+          />
+        </div>
+        <p className="mt-2 text-[10px] font-semibold text-slate-500">
+          Layout can be 30-50% in 5% steps. Remaining is {remaining}%.
+        </p>
       </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <label className="block rounded-lg border border-slate-100 bg-slate-50 p-3">
+          <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Text</span>
+          <input
+            type="range"
+            min="0"
+            max={remaining}
+            step="1"
+            value={textPercent}
+            disabled={!hasText || !textImageLocked}
+            onChange={(event) => onTextChange(Number(event.target.value) / 100)}
+            onMouseUp={onWeightBlur}
+            onTouchEnd={onWeightBlur}
+            className="mt-3 w-full accent-emerald-600 disabled:opacity-50"
+          />
+          <span className="mt-1 block text-sm font-black text-slate-800">{textPercent}%</span>
+          <span className="mt-1 block text-[10px] font-semibold text-slate-500">
+            {!hasText ? "No Text Anchor" : textImageLocked ? "Moving Text updates Image automatically" : "Uses all Remaining"}
+          </span>
+        </label>
+
+        <label className="block rounded-lg border border-slate-100 bg-slate-50 p-3">
+          <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Image</span>
+          <input
+            type="range"
+            min="0"
+            max={remaining}
+            step="1"
+            value={imagePercent}
+            disabled={!hasImage || !textImageLocked}
+            onChange={(event) => onImageChange(Number(event.target.value) / 100)}
+            onMouseUp={onWeightBlur}
+            onTouchEnd={onWeightBlur}
+            className="mt-3 w-full accent-sky-600 disabled:opacity-50"
+          />
+          <span className="mt-1 block text-sm font-black text-slate-800">{imagePercent}%</span>
+          <span className="mt-1 block text-[10px] font-semibold text-slate-500">
+            {!hasImage ? "No Image Anchor" : textImageLocked ? "Moving Image updates Text automatically" : "Uses all Remaining"}
+          </span>
+        </label>
+      </div>
+
       <div className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-800">
-        Effective: Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} · Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} · Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
-        {imageAnchorCount === 0 && <span className="block text-[10px] text-indigo-600">Template นี้ยังไม่มี Image Anchor ระบบจึงกระจายน้ำหนักไปที่ Layout/Text อัตโนมัติ</span>}
+        Effective Matching Weights: Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} / Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} / Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
+        {!hasAnyAnchor && <span className="block text-[10px] text-indigo-600">No Text/Image Anchor. Layout is 100%.</span>}
+        {hasText && hasImage && <span className="block text-[10px] text-indigo-600">Text + Image always equals Remaining.</span>}
       </div>
     </div>
   );
@@ -565,22 +659,20 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const finalConfidenceThreshold = typeof template?.finalConfidenceThreshold === "number" && Number.isFinite(template.finalConfidenceThreshold)
     ? template.finalConfidenceThreshold
     : DEFAULT_FINAL_CONFIDENCE_THRESHOLD;
-  const matchingWeights = useMemo(
-    () => readMatchingWeights({
+  const matchingWeights = useMemo(() => {
+    const configured = readMatchingWeights({
       layoutWeight: template?.layoutWeight,
       textAnchorWeight: template?.textAnchorWeight,
       imageAnchorWeight: template?.imageAnchorWeight,
-    }),
-    [template?.layoutWeight, template?.textAnchorWeight, template?.imageAnchorWeight]
-  );
-  const effectiveMatchingWeights = useMemo(() => {
-    const weights = {
-      layoutWeight: matchingWeights.layoutWeight,
-      textAnchorWeight: textAnchors.length > 0 ? matchingWeights.textAnchorWeight : 0,
-      imageAnchorWeight: imageAnchors.length > 0 ? matchingWeights.imageAnchorWeight : 0,
-    };
-    return normalizeMatchingWeights(weights);
-  }, [imageAnchors.length, matchingWeights, textAnchors.length]);
+    });
+    return calculateMatchingWeights({
+      layoutWeight: configured.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+      preferredTextWeight: configured.textAnchorWeight,
+    });
+  }, [imageAnchors.length, template?.imageAnchorWeight, template?.layoutWeight, template?.textAnchorWeight, textAnchors.length]);
+  const effectiveMatchingWeights = matchingWeights;
   const validationSteps = [
     { step: 1, label: "Review ROI & OCR", enabled: true, done: ocrPreviewPassed },
     { step: 2, label: "Layout Simulation", enabled: ocrPreviewPassed, done: simulationPassed },
@@ -773,16 +865,46 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     }
   };
 
-  const updateMatchingWeightDraft = (key: "layoutWeight" | "textAnchorWeight" | "imageAnchorWeight", value: number) => {
-    setTemplate((current) => current ? { ...current, [key]: Number.isFinite(value) ? clampUnit(value) : 0 } : current);
+  const updateMatchingWeightsDraft = (weights: typeof DEFAULT_MATCHING_WEIGHTS) => {
+    setTemplate((current) => current ? { ...current, ...weights } : current);
+  };
+
+  const updateLayoutWeightDraft = (value: number) => {
+    updateMatchingWeightsDraft(calculateMatchingWeights({
+      layoutWeight: Number.isFinite(value) ? value : DEFAULT_MATCHING_WEIGHTS.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+    }));
+  };
+
+  const updateTextWeightDraft = (value: number) => {
+    updateMatchingWeightsDraft(calculateMatchingWeights({
+      layoutWeight: matchingWeights.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+      preferredTextWeight: value,
+    }));
+  };
+
+  const updateImageWeightDraft = (value: number) => {
+    const remaining = 1 - matchingWeights.layoutWeight;
+    updateMatchingWeightsDraft(calculateMatchingWeights({
+      layoutWeight: matchingWeights.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+      preferredTextWeight: Math.max(0, remaining - value),
+    }));
   };
 
   const persistMatchingWeights = async (weights = matchingWeights) => {
     if (!template) return;
-    const configured = readMatchingWeights(weights);
-    const nextWeights = imageAnchors.length > 0
-      ? configured
-      : { ...configured, imageAnchorWeight: 0 };
+    const configured = calculateMatchingWeights({
+      layoutWeight: weights.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+      preferredTextWeight: weights.textAnchorWeight,
+    });
+    const nextWeights = configured;
     setStatusMessage("");
     setSimulationError("");
     try {
@@ -798,10 +920,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   };
 
   const applyRecommendedMatchingWeights = async () => {
-    const recommended = imageAnchors.length > 0
-      ? DEFAULT_MATCHING_WEIGHTS
-      : { layoutWeight: 0.6, textAnchorWeight: textAnchors.length > 0 ? 0.4 : 0, imageAnchorWeight: 0 };
-    setTemplate((current) => current ? { ...current, ...recommended } : current);
+    const recommended = calculateMatchingWeights({
+      layoutWeight: DEFAULT_MATCHING_WEIGHTS.layoutWeight,
+      textAnchorCount: textAnchors.length,
+      imageAnchorCount: imageAnchors.length,
+    });
+    updateMatchingWeightsDraft(recommended);
     await persistMatchingWeights(recommended);
   };
 
@@ -913,8 +1037,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <MatchingWeightsPanel
         matchingWeights={matchingWeights}
         effectiveMatchingWeights={effectiveMatchingWeights}
+        textAnchorCount={textAnchors.length}
         imageAnchorCount={imageAnchors.length}
-        onWeightChange={updateMatchingWeightDraft}
+        onLayoutChange={updateLayoutWeightDraft}
+        onTextChange={updateTextWeightDraft}
+        onImageChange={updateImageWeightDraft}
         onWeightBlur={() => persistMatchingWeights()}
         onUseRecommended={applyRecommendedMatchingWeights}
       />

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
 import { SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +29,7 @@ interface WorkspaceTemplateEditorProps {
   onUpdateField: (fieldId: string, patch: Partial<TemplateField>) => void;
   onReorderFields: (orderedFieldIds: string[]) => void;
   onReplacePageExtractionFields: (pageNumber: number, fields: { roi: RoiRatio; defaults: Partial<TemplateField> }[]) => void;
+  onReplaceExtractionFieldsForPages: (items: { pageNumber: number; fields: { roi: RoiRatio; defaults: Partial<TemplateField> }[] }[]) => void;
   onDeleteField: (fieldId: string) => void;
   onAddIgnoreRegion: (roi?: RoiRatio) => void;
   onUpdateIgnoreRegion: (regionId: string, patch: Partial<IgnoreRegion>) => void;
@@ -78,6 +79,11 @@ interface LayoutAnalysisResponse {
 
 const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
+
+const fieldImageCategories = (value?: string | string[]) =>
+  (Array.isArray(value) ? value : value ? [value] : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
 
 const normalizeTableRows = (rows?: unknown): string[][] | null => {
   if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -254,6 +260,7 @@ export default function WorkspaceTemplateEditorV2({
   onUpdateField,
   onReorderFields,
   onReplacePageExtractionFields,
+  onReplaceExtractionFieldsForPages,
   onDeleteField,
   onAddIgnoreRegion,
   onUpdateIgnoreRegion,
@@ -271,7 +278,7 @@ export default function WorkspaceTemplateEditorV2({
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
   const [autoDetectError, setAutoDetectError] = useState("");
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
-  const [autoRoiMode, setAutoRoiMode] = useState<"text_line" | "paragraph">("text_line");
+  const autoRoiMode: "text_line" = "text_line";
   const [imageCategories, setImageCategories] = useState<ImageVerificationCategory[]>([]);
   const [categoryError, setCategoryError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -480,7 +487,7 @@ export default function WorkspaceTemplateEditorV2({
       await updateImageVerificationCategory(value, draft);
       await reloadImageCategories();
     } catch (error) {
-      setCategoryError(error instanceof Error ? error.message : "บันทึกประเภทภาพไม่สำเร็จ");
+      setCategoryError(error instanceof Error ? error.message : "บันทึประเภทภาพไม่สำเร็จ");
     }
   };
 
@@ -504,7 +511,10 @@ export default function WorkspaceTemplateEditorV2({
   };
 
   const handleAutoDetectExtractionRoi = async () => {
-    if (!selectedPage?.src || isAutoDetecting) return;
+    const pagesToAnalyze = pages
+      .map((page, index) => ({ page, index }))
+      .filter(({ page }) => Boolean(page.src));
+    if (pagesToAnalyze.length === 0 || isAutoDetecting) return;
 
     setStep("extraction_fields");
     setMode("extraction_fields");
@@ -519,12 +529,10 @@ export default function WorkspaceTemplateEditorV2({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           auto_roi_mode: autoRoiMode,
-          images: [
-            {
-              page_index: currentPage,
-              image: selectedPage.src,
-            },
-          ],
+          images: pagesToAnalyze.map(({ page, index }) => ({
+            page_index: index,
+            image: page.src,
+          })),
         }),
       });
       const responseText = await response.text();
@@ -542,16 +550,21 @@ export default function WorkspaceTemplateEditorV2({
         throw new Error(result.detail || result.error || "สร้าง ROI อัตโนมัติไม่สำเร็จ");
       }
 
-      const detectedPage = (result.pages || []).find((page) => Number(page.page_index) === currentPage) || result.pages?.[0];
-      const detectedFields = (detectedPage?.regions || [])
-        .map((region, index) => layoutRegionToDetectedField(region, currentPageNumber, index + 1))
-        .filter((item): item is { roi: RoiRatio; defaults: Partial<TemplateField> } => item !== null);
+      const detectedItems = pagesToAnalyze.map(({ index }) => {
+        const pageNumber = index + 1;
+        const detectedPage = (result.pages || []).find((page) => Number(page.page_index) === index);
+        const detectedFields = (detectedPage?.regions || [])
+          .map((region, regionIndex) => layoutRegionToDetectedField(region, pageNumber, regionIndex + 1))
+          .filter((item): item is { roi: RoiRatio; defaults: Partial<TemplateField> } => item !== null);
+        return { pageNumber, fields: detectedFields };
+      });
+      const totalDetectedFields = detectedItems.reduce((sum, item) => sum + item.fields.length, 0);
 
-      onReplacePageExtractionFields(currentPageNumber, detectedFields);
+      onReplaceExtractionFieldsForPages(detectedItems);
       setAutoDetectStatus(
-        detectedFields.length > 0
-          ? `สร้าง ROI อัตโนมัติ ${detectedFields.length} รายการ และลบ Extraction ROI เดิมของหน้านี้ ${currentPageExtractionFields.length} รายการ`
-          : `ไม่พบ Text, Table หรือ Image Region ในหน้า ${currentPageNumber} ระบบลบ Extraction ROI เดิมของหน้านี้แล้ว`
+        totalDetectedFields > 0
+          ? `สร้าง ROI อัตโนมัติ ${totalDetectedFields} รายการ จาก ${pagesToAnalyze.length} หน้า และลบ Extraction ROI เดิมของทุกหน้าแล้ว`
+          : `ไม่พบ Text, Table หรือ Image Region ใน ${pagesToAnalyze.length} หน้า ระบบลบ Extraction ROI เดิมของทุกหน้าแล้ว`
       );
     } catch (error) {
       console.error("Admin auto ROI detection failed.", error);
@@ -560,7 +573,6 @@ export default function WorkspaceTemplateEditorV2({
       setIsAutoDetecting(false);
     }
   };
-
   const clearStepTest = () => {
     setTestResult(null);
     setTestStatus("");
@@ -726,6 +738,7 @@ export default function WorkspaceTemplateEditorV2({
   );
 
   return (
+    <>
     <div className="mx-auto max-w-7xl space-y-4 pb-20">
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -803,7 +816,7 @@ export default function WorkspaceTemplateEditorV2({
             {step === "extraction_fields" ? (
               <>
                 <section className="space-y-2">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI Mode</h3>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-2">
                     <button type="button" onClick={() => setMode("extraction_fields")} className={`rounded-lg px-3 py-2 text-[10px] font-black ${mode === "extraction_fields" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}>
                       Extraction
@@ -812,44 +825,31 @@ export default function WorkspaceTemplateEditorV2({
                 </section>
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Current Page ROI</h3>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-500">{panelRois.length}</span>
                   </div>
                   {mode === "extraction_fields" && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
-                      <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
+                      <div className="rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
                         <button
                           type="button"
                           disabled={isAutoDetecting}
-                          onClick={() => setAutoRoiMode("text_line")}
-                          className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
-                            autoRoiMode === "text_line" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-white"
-                          }`}
+                          className="w-full rounded-md bg-indigo-600 px-2 py-1.5 text-[10px] font-black text-white shadow-sm"
                         >
                           Text Line
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isAutoDetecting}
-                          onClick={() => setAutoRoiMode("paragraph")}
-                          className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
-                            autoRoiMode === "paragraph" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-white"
-                          }`}
-                        >
-                          Paragraph
                         </button>
                       </div>
                       <button
                         type="button"
                         onClick={handleAutoDetectExtractionRoi}
-                        disabled={isAutoDetecting || !selectedPage?.src}
+                        disabled={isAutoDetecting || !pages.some((page) => page.src)}
                         className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 shadow-sm hover:bg-indigo-100 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                       >
                         {isAutoDetecting ? <Loader2 size={14} className="animate-spin" /> : <ScanSearch size={14} />}
-                        {isAutoDetecting ? "กำลังตีกรอบ ROI..." : "ตีกรอบ ROI อัตโนมัติ"}
+                        {isAutoDetecting ? "กำลังตีกรอบ ROI ทุกหน้า..." : "ตีกรอบ ROI อัตโนมัติทุกหน้า"}
                       </button>
                       <p className="text-[10px] font-semibold leading-relaxed text-slate-500">
-                        วิเคราะห์ Layout ของหน้าปัจจุบันด้วย PP-DocLayoutV3 แล้วสร้าง Extraction ROI ใหม่ โดยลบ ROI เดิมของหน้านี้ก่อนทุกครั้ง
+                        วิเคราะห์ Layout ทุกหน้าด้วย PP-DocLayoutV3 แล้วสร้าง Extraction ROI ใหม่ โดยลบ Extraction ROI เดิมของทุกหน้าก่อนทุกครั้ง
                       </p>
                       {autoDetectStatus && (
                         <p className="rounded-lg bg-emerald-50 px-2.5 py-2 text-[10px] font-bold leading-relaxed text-emerald-700">
@@ -999,91 +999,61 @@ export default function WorkspaceTemplateEditorV2({
                         <option value="image_feature">Image</option>
                       </select>
                     </label>
-                    {anchorMethod(selectedAnchor) === "image_feature" && (
-                      <label className="space-y-1 block">
-                        <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
-                        <select
-                          className={inputClass}
-                          value={selectedAnchor.imageCategory || ""}
-                          onChange={(event) => onUpdateField(selectedAnchor.id, { imageCategory: event.target.value })}
-                        >
-                          <option value="" disabled>เลือกประเภทภาพ</option>
-                          {activeImageCategories.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        {selectedAnchor.imageCategory && !activeImageCategories.some((category) => category.value === selectedAnchor.imageCategory) && (
-                          <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
-                            ประเภทภาพนี้ไม่พบหรือถูกปิดใช้งาน: {selectedAnchor.imageCategory}
-                          </p>
-                        )}
-                        {categoryError && <p className="text-[10px] font-semibold text-red-600">{categoryError}</p>}
-                        <button
-                          type="button"
-                          className="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-amber-800"
-                          onClick={() => setCategoryManagerOpen((value) => !value)}
-                        >
-                          จัดการประเภทภาพ
-                        </button>
-                        <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
-                          ใช้ SigLIP ตรวจว่า Crop นี้เป็นประเภทภาพที่เลือก ไม่ได้เทียบ embedding กับภาพต้นฉบับ
-                        </p>
-                      </label>
-                    )}
-                    {anchorMethod(selectedAnchor) === "image_feature" && categoryManagerOpen && (
-                      <div className="space-y-2 rounded-xl border border-amber-200 bg-white p-2">
-                        <div className="text-[10px] font-black uppercase text-slate-500">Image Category Manager</div>
-                        <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
-                          {imageCategories.map((category) => {
-                            const draft = categoryDrafts[category.value] || category;
-                            return (
-                              <div key={category.value} className="space-y-1 rounded-lg border border-slate-200 p-2">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-[11px] font-black text-slate-800">{category.value}</span>
-                                  <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500">
+                    {anchorMethod(selectedAnchor) === "image_feature" && (() => {
+                      const selectedCategories = fieldImageCategories(selectedAnchor.imageCategory);
+                      const invalidCategories = selectedCategories.filter(
+                        (value) => !activeImageCategories.some((category) => category.value === value)
+                      );
+                      return (
+                        <div className="space-y-2 rounded-xl border border-amber-100 bg-amber-50/40 p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
+                            <button
+                              type="button"
+                              className="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-amber-800"
+                              onClick={() => setCategoryManagerOpen(true)}
+                            >
+                              จัดการประเภทภาพ
+                            </button>
+                          </div>
+                          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-amber-100 bg-white p-2">
+                            {activeImageCategories.length === 0 ? (
+                              <p className="text-[10px] font-semibold text-slate-500">ยังไม่มีประเภทภาพที่เปิดใช้งาน</p>
+                            ) : (
+                              activeImageCategories.map((option) => {
+                                const checked = selectedCategories.includes(option.value);
+                                const nextCategories = checked
+                                  ? selectedCategories.filter((value) => value !== option.value)
+                                  : [...selectedCategories, option.value];
+                                return (
+                                  <label key={option.value} className="flex items-start gap-2 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-amber-50">
                                     <input
                                       type="checkbox"
-                                      checked={draft.enabled}
-                                      onChange={(event) =>
-                                        setCategoryDrafts((current) => ({
-                                          ...current,
-                                          [category.value]: { ...draft, enabled: event.target.checked },
-                                        }))
-                                      }
+                                      checked={checked}
+                                      onChange={() => onUpdateField(selectedAnchor.id, { imageCategory: nextCategories })}
+                                      className="mt-0.5"
                                     />
-                                    Enabled
+                                    <span>
+                                      <span className="block text-slate-800">{option.label}</span>
+                                      <span className="block font-semibold text-slate-400">{option.value}</span>
+                                    </span>
                                   </label>
-                                </div>
-                                <input className={inputClass} value={draft.label} onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, label: event.target.value } }))} />
-                                <input className={inputClass} value={draft.prompt} onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, prompt: event.target.value } }))} />
-                                <button type="button" className="rounded-lg bg-slate-900 px-2 py-1 text-[10px] font-black text-white" onClick={() => saveCategoryDraft(category.value)}>
-                                  Save
-                                </button>
-                              </div>
-                            );
-                          })}
+                                );
+                              })
+                            )}
+                          </div>
+                          <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
+                            เลือกได้มากกว่า 1 ประเภท ถ้าตรวจพบตรงกับประเภทใดประเภทหนึ่ง จะถือว่าผ่าน
+                          </p>
+                          {invalidCategories.length > 0 && (
+                            <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
+                              ประเภทภาพนี้ไม่พบหรือถูกปิดใช้งาน: {invalidCategories.join(", ")}
+                            </p>
+                          )}
+                          {categoryError && <p className="text-[10px] font-semibold text-red-600">{categoryError}</p>}
                         </div>
-                        <div className="space-y-1 rounded-lg border border-dashed border-amber-200 p-2">
-                          <div className="text-[10px] font-black text-amber-800">Add category</div>
-                          <input className={inputClass} placeholder="value เช่น document_logo" value={newCategory.value} onChange={(event) => setNewCategory((current) => ({ ...current, value: event.target.value }))} />
-                          <input className={inputClass} placeholder="label" value={newCategory.label} onChange={(event) => setNewCategory((current) => ({ ...current, label: event.target.value }))} />
-                          <input className={inputClass} placeholder="English prompt" value={newCategory.prompt} onChange={(event) => setNewCategory((current) => ({ ...current, prompt: event.target.value }))} />
-                          <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
-                            <input
-                              type="checkbox"
-                              checked={newCategory.enabled}
-                              onChange={(event) => setNewCategory((current) => ({ ...current, enabled: event.target.checked }))}
-                            />
-                            Enabled
-                          </label>
-                          <button type="button" className="rounded-lg bg-amber-600 px-2 py-1 text-[10px] font-black text-white" onClick={addCategoryDraft}>
-                            Add category
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">ROI Padding</span>
                       <input type="number" min="0" step="1" className={inputClass} value={selectedAnchor.roiPadding ?? 6} onChange={(event) => onUpdateField(selectedAnchor.id, { roiPadding: Number(event.target.value) })} />
@@ -1202,5 +1172,103 @@ export default function WorkspaceTemplateEditorV2({
         )}
       </section>
     </div>
+    {categoryManagerOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+        <section className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+            <div>
+              <h2 className="text-sm font-black text-slate-900">จัดการประเภทภาพ</h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">
+                เพิ่มหรือแก้ไขคำแทนสำหรับ Image Verification
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCategoryManagerOpen(false)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+            >
+              ปิด
+            </button>
+          </div>
+
+          <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="space-y-3">
+              <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">คำแทนที่มีอยู่</div>
+              {imageCategories.length === 0 ? (
+                <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">
+                  ยังไม่มีประเภทภาพ
+                </p>
+              ) : (
+                imageCategories.map((category) => {
+                  const draft = categoryDrafts[category.value] || category;
+                  return (
+                    <div key={category.value} className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-xs font-black text-slate-800">{category.value}</span>
+                        <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                          <input
+                            type="checkbox"
+                            checked={draft.enabled}
+                            onChange={(event) =>
+                              setCategoryDrafts((current) => ({
+                                ...current,
+                                [category.value]: { ...draft, enabled: event.target.checked },
+                              }))
+                            }
+                          />
+                          เปิดใช้
+                        </label>
+                      </div>
+                      <input
+                        className={inputClass}
+                        placeholder="ชื่อที่แสดง"
+                        value={draft.label}
+                        onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, label: event.target.value } }))}
+                      />
+                      <textarea
+                        className={`${inputClass} min-h-20 resize-none`}
+                        placeholder="Prompt ภาษาอังกฤษ"
+                        value={draft.prompt}
+                        onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, prompt: event.target.value } }))}
+                      />
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black text-white hover:bg-slate-800"
+                          onClick={() => saveCategoryDraft(category.value)}
+                        >
+                          บันทึก
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-dashed border-amber-200 bg-amber-50/50 p-3">
+              <div className="text-[10px] font-black uppercase tracking-wider text-amber-800">เพิ่มคำแทนใหม่</div>
+              <input className={inputClass} placeholder="value เช่น document_logo" value={newCategory.value} onChange={(event) => setNewCategory((current) => ({ ...current, value: event.target.value }))} />
+              <input className={inputClass} placeholder="ชื่อที่แสดง" value={newCategory.label} onChange={(event) => setNewCategory((current) => ({ ...current, label: event.target.value }))} />
+              <textarea className={`${inputClass} min-h-24 resize-none`} placeholder="English prompt" value={newCategory.prompt} onChange={(event) => setNewCategory((current) => ({ ...current, prompt: event.target.value }))} />
+              <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={newCategory.enabled}
+                  onChange={(event) => setNewCategory((current) => ({ ...current, enabled: event.target.checked }))}
+                />
+                เปิดใช้
+              </label>
+              <button type="button" className="w-full rounded-lg bg-amber-600 px-3 py-2 text-[10px] font-black text-white hover:bg-amber-700" onClick={addCategoryDraft}>
+                เพิ่มคำแทน
+              </button>
+              {categoryError && <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">{categoryError}</p>}
+            </div>
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   );
 }
+

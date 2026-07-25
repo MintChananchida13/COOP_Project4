@@ -484,6 +484,82 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     })();
   };
 
+  const handleReplaceExtractionFieldsForPages = (
+    items: { pageNumber: number; fields: AutoDetectedTemplateField[] }[]
+  ) => {
+    const pageNumbers = new Set(items.map((item) => item.pageNumber));
+    const templatePageByNumber = new Map(selectedTemplatePages.map((page) => [page.pageNumber, page]));
+    const previousFields = selectedTemplateFields;
+    const fieldsToDelete = previousFields.filter((field) => pageNumbers.has(field.pageNumber) && !field.useForVerification);
+    const remainingFields = previousFields.filter((field) => !(pageNumbers.has(field.pageNumber) && !field.useForVerification));
+    const optimisticFields = items.flatMap(({ pageNumber, fields: detectedFields }) => {
+      const targetPage = templatePageByNumber.get(pageNumber);
+      if (!targetPage) return [];
+
+      return detectedFields.map(({ roi, defaults }, index) => {
+        localFieldSequenceRef.current += 1;
+        const fieldNumber = index + 1;
+        const fieldName = defaults.fieldName || `field_${pageNumber}_${fieldNumber}`;
+        return {
+          id: `local_field_${Date.now()}_${localFieldSequenceRef.current}`,
+          templateId,
+          templatePageId: targetPage.id,
+          pageNumber,
+          fieldName,
+          displayLabel: defaults.displayLabel || fieldName,
+          roi,
+          dataType: defaults.dataType || "text",
+          userSelectable: defaults.userSelectable ?? true,
+          defaultSelected: defaults.defaultSelected ?? true,
+          useForVerification: false,
+          expectedText: "",
+          matchType: "",
+          requiredForVerification: false,
+          extractionMethod:
+            defaults.extractionMethod ||
+            (defaults.dataType === "image" ? "extract_image" : defaults.dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr"),
+          roiPadding: defaults.roiPadding ?? 0,
+          verificationWeight: defaults.verificationWeight ?? 1,
+          sortOrder: fieldNumber,
+        } satisfies TemplateField;
+      });
+    });
+
+    setSelectedTemplateFields([...remainingFields, ...optimisticFields]);
+
+    if (!canPersistToBackend) {
+      setLocalOnly("Auto ROI fields replaced locally for all pages.");
+      return;
+    }
+
+    (async () => {
+      try {
+        for (const field of fieldsToDelete) {
+          if (!field.id.startsWith("local_field_")) {
+            await deleteTemplateFieldApi(templateId, field.id);
+          }
+        }
+
+        let latestBundle: Awaited<ReturnType<typeof createTemplateFieldApi>> | null = null;
+        for (const field of optimisticFields) {
+          latestBundle = await createTemplateFieldApi(templateId, field);
+        }
+
+        if (latestBundle) {
+          applyBundle(latestBundle);
+        } else {
+          const bundle = await fetchTemplateBundle(templateId);
+          applyBundle(bundle);
+        }
+        setSaved(`Auto ROI replaced ${fieldsToDelete.length} old fields with ${optimisticFields.length} fields across ${items.length} pages.`);
+      } catch (error) {
+        console.warn("Auto ROI batch replace failed.", error);
+        setSelectedTemplateFields(previousFields);
+        setLocalOnly("Auto ROI batch replace could not be persisted.");
+      }
+    })();
+  };
+
   const handleAddIgnoreRegion = (roi?: RoiRatio) => {
     if (!currentTemplatePage) return;
     const nextIndex = selectedIgnoreRegions.length + 1;
@@ -692,6 +768,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onUpdateField={handleUpdateField}
               onReorderFields={handleReorderFields}
               onReplacePageExtractionFields={handleReplacePageExtractionFields}
+              onReplaceExtractionFieldsForPages={handleReplaceExtractionFieldsForPages}
               onDeleteField={handleDeleteField}
               onAddIgnoreRegion={handleAddIgnoreRegion}
               onUpdateIgnoreRegion={handleUpdateIgnoreRegion}

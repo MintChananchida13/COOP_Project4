@@ -160,7 +160,7 @@ export interface TemplateField {
   extractionMethod: string;
   roiPadding?: number;
   verificationWeight?: number;
-  imageCategory?: string;
+  imageCategory?: string | string[];
   sortOrder: number;
 }
 

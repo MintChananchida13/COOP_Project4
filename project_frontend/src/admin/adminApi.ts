@@ -202,6 +202,33 @@ export interface DetectionCandidate {
   metadata?: Record<string, unknown>;
 }
 
+const parseImageCategoryValue = (value?: string | null): string | string[] | undefined => {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const values = parsed.map((item) => String(item || "").trim()).filter(Boolean);
+        return values.length > 1 ? values : values[0];
+      }
+    } catch {
+      return raw;
+    }
+  }
+  return raw;
+};
+
+const serializeImageCategoryValue = (value?: string | string[] | null) => {
+  if (Array.isArray(value)) {
+    const values = value.map((item) => String(item || "").trim()).filter(Boolean);
+    if (values.length === 0) return undefined;
+    return values.length === 1 ? values[0] : JSON.stringify(values);
+  }
+  const raw = String(value || "").trim();
+  return raw || undefined;
+};
+
 export interface DetectionTemplateRoi {
   fieldId?: string | null;
   fieldName?: string | null;
@@ -746,7 +773,7 @@ const mapApiTemplateField = (field: ApiTemplateField): TemplateField => ({
   extractionMethod: normalizeExtractionMethod(field.extraction_method),
   roiPadding: field.roi_padding ?? undefined,
   verificationWeight: field.verification_weight ?? undefined,
-  imageCategory: field.image_category || undefined,
+  imageCategory: parseImageCategoryValue(field.image_category),
   sortOrder: field.sort_order,
 });
 
@@ -1474,7 +1501,7 @@ const fieldToApiPayload = (
   extraction_method: normalizeExtractionMethod(field.extractionMethod),
   roi_padding: field.roiPadding ?? 0,
   verification_weight: field.verificationWeight ?? 1,
-  image_category: field.imageCategory,
+  image_category: serializeImageCategoryValue(field.imageCategory),
   sort_order: field.sortOrder ?? 0,
 });
 
@@ -1507,7 +1534,7 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
     extraction_method: patch.extractionMethod ? normalizeExtractionMethod(patch.extractionMethod) : undefined,
     roi_padding: patch.roiPadding,
     verification_weight: patch.verificationWeight,
-    image_category: patch.imageCategory,
+    image_category: serializeImageCategoryValue(patch.imageCategory),
     sort_order: patch.sortOrder,
   };
 

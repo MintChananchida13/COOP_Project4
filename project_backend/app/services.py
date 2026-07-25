@@ -1044,6 +1044,28 @@ def _image_category_api(value: Optional[str]) -> Dict[str, Any]:
     return item
 
 
+def _image_category_values(value: Optional[str]) -> List[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item or "").strip() for item in parsed if str(item or "").strip()]
+        except Exception:
+            return [raw]
+    return [raw]
+
+
+def _image_category_display(values: List[str]) -> str:
+    labels = []
+    for value in values:
+        info = _image_category_api(value)
+        labels.append(str(info.get("label") or value))
+    return ", ".join(labels)
+
+
 class VerificationService:
     FUZZY_THRESHOLD = 0.85
     DEFAULT_VERIFICATION_THRESHOLD = 0.70
@@ -1170,10 +1192,15 @@ class VerificationService:
     def _score_image_anchor(self, field: Dict[str, Any], image_path: str) -> Dict[str, Any]:
         crop_path = _storage_root() / "verification_query_anchor_crops" / field["template_id"] / f"{field['id']}_{uuid4().hex[:8]}.png"
         cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 6)
-        category_value = str(field.get("image_category") or "").strip()
+        category_values = _image_category_values(field.get("image_category"))
+        category_value = category_values[0] if category_values else ""
         active_categories = _active_image_category_payloads()
-        category_info = _image_category_api(category_value)
-        category_error = category_info.get("error")
+        category_infos = [_image_category_api(value) for value in category_values]
+        valid_category_values = [
+            value for value, info in zip(category_values, category_infos) if not info.get("error")
+        ]
+        category_info = category_infos[0] if category_infos else _image_category_api(category_value)
+        category_error = category_info.get("error") if not valid_category_values else None
         if category_error:
             return {
                 "score": 0.0,
@@ -1184,9 +1211,9 @@ class VerificationService:
                 "failure_reason": category_error,
                 "verification_threshold": category_info.get("match_threshold", 0.0),
                 "margin_threshold": category_info.get("margin_threshold", 0.0),
-                "image_category": category_value,
-                "image_category_label": category_info.get("label") or category_value,
-                "image_category_prompt": category_info.get("prompt") or "",
+                "image_category": ", ".join(category_values) or category_value,
+                "image_category_label": _image_category_display(category_values) or category_info.get("label") or category_value,
+                "image_category_prompt": " | ".join(str(info.get("prompt") or "") for info in category_infos if info.get("prompt")),
                 "predicted_image_category": "",
                 "predicted_image_category_label": "",
                 "predicted_image_category_prompt": "",
@@ -1210,14 +1237,15 @@ class VerificationService:
                 "passed": False,
                 "status": "error",
                 "failure_reason": "roi_crop_failed",
-                "image_category": category_value,
-                "image_category_label": category_info.get("label") or category_value,
-                "image_category_prompt": category_info.get("prompt") or "",
+                "image_category": ", ".join(category_values) or category_value,
+                "image_category_label": _image_category_display(category_values) or category_info.get("label") or category_value,
+                "image_category_prompt": " | ".join(str(info.get("prompt") or "") for info in category_infos if info.get("prompt")),
                 "reference_crop_preview_data_url": None,
                 "current_crop_preview_data_url": None,
             }
 
-        result = verify_image_category(cropped, category_value, active_categories)
+        results = [verify_image_category(cropped, value, active_categories) for value in (valid_category_values or category_values)]
+        result = next((item for item in results if item.passed), None) or (max(results, key=lambda item: float(item.evidence_score)) if results else verify_image_category(cropped, category_value, active_categories))
         score = round(float(result.evidence_score), 4)
         threshold = result.verification_threshold
         return {
@@ -2638,10 +2666,15 @@ class AdminTemplateService:
             query_crop_path = crop_root / "query" / f"{field_id}_{uuid4().hex[:8]}.png"
             reference_crop = _crop_anchor_roi(reference_source, field["roi"], reference_crop_path, field.get("roi_padding") or 6) if reference_source else None
             query_crop = _crop_anchor_roi(query_source, field["roi"], query_crop_path, field.get("roi_padding") or 6) if query_source else None
-            category = str(field.get("image_category") or "").strip()
+            categories = _image_category_values(field.get("image_category"))
             active_categories = _active_image_category_payloads()
             if query_crop:
-                siglip_result = verify_image_category(query_crop, category, active_categories)
+                category_infos = [_image_category_api(value) for value in categories]
+                valid_categories = [
+                    value for value, info in zip(categories, category_infos) if not info.get("error")
+                ]
+                siglip_results = [verify_image_category(query_crop, value, active_categories) for value in (valid_categories or categories or [""])]
+                siglip_result = next((item for item in siglip_results if item.passed), None) or max(siglip_results, key=lambda item: float(item.evidence_score))
                 score = round(float(siglip_result.evidence_score), 4)
                 siglip_threshold = siglip_result.verification_threshold
                 checked_fields.append(
