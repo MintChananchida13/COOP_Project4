@@ -3514,6 +3514,16 @@ class AdminTemplateService:
                     status_code=409,
                     detail="Approved document pages must include an image before converting to a template.",
                 )
+            explicit_canonical_pages = [page for page in approved_pages if page["is_canonical"]]
+            main_source_file_ids = {
+                (page["source_file_id"] or page["id"])
+                for page in (explicit_canonical_pages or [approved_pages[0]])
+            }
+            template_pages_source = [
+                page for page in approved_pages if (page["source_file_id"] or page["id"]) in main_source_file_ids
+            ]
+            if not template_pages_source:
+                template_pages_source = [approved_pages[0]]
 
             requested_fields = conn.execute(
                 """
@@ -3537,16 +3547,17 @@ class AdminTemplateService:
                     template_id,
                     request_row["request_title"],
                     request_row["document_type"],
-                    len(approved_pages),
+                    len(template_pages_source),
                 ),
             )
 
             layout_reference_count = 0
             request_page_to_template_page: Dict[str, Dict[str, Any]] = {}
             request_page_number_to_template_page: Dict[int, Dict[str, Any]] = {}
-            has_explicit_canonical = any(page["is_canonical"] for page in approved_pages)
+            template_page_id_by_request_page_id: Dict[str, str] = {}
+            template_page_number_by_request_page_id: Dict[str, int] = {}
 
-            for page_index, page in enumerate(approved_pages, start=1):
+            for page_index, page in enumerate(template_pages_source, start=1):
                 signature = _generate_layout_signature_for_source(page["sample_image_url"])
                 signature_json = signature_to_json(signature) if signature else None
                 if signature_json:
@@ -3561,7 +3572,6 @@ class AdminTemplateService:
 
                 page_id = _stub_id("tpl_page")
                 created_template_page_ids[page_index] = page_id
-                page_is_canonical = bool(page["is_canonical"]) if has_explicit_canonical else page_index == 1
                 conn.execute(
                     """
                     INSERT INTO template_pages (
@@ -3590,6 +3600,25 @@ class AdminTemplateService:
                 }
                 request_page_to_template_page[page["id"]] = page_mapping
                 request_page_number_to_template_page[int(page["page_number"])] = page_mapping
+                template_page_id_by_request_page_id[page["id"]] = page_id
+                template_page_number_by_request_page_id[page["id"]] = page_index
+
+            for page in approved_pages:
+                signature = _generate_layout_signature_for_source(page["sample_image_url"])
+                signature_json = signature_to_json(signature) if signature else None
+                if signature_json:
+                    conn.execute(
+                        """
+                        UPDATE template_request_pages
+                        SET layout_signature_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (signature_json, page["id"]),
+                    )
+
+                page_is_canonical = (page["source_file_id"] or page["id"]) in main_source_file_ids
+                template_page_id = template_page_id_by_request_page_id.get(page["id"])
+                reference_page_number = template_page_number_by_request_page_id.get(page["id"], int(page["page_number"]))
 
                 conn.execute(
                     """
@@ -3603,8 +3632,8 @@ class AdminTemplateService:
                     (
                         _stub_id("tpl_ref"),
                         template_id,
-                        page_id,
-                        page_index,
+                        template_page_id,
+                        reference_page_number,
                         page["sample_image_url"],
                         page["image_source"],
                         1 if page_is_canonical else 0,

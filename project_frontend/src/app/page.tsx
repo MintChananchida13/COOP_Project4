@@ -537,6 +537,8 @@ export default function Home() {
   const [currentStep, setCurrentStep] = useState<"upload" | "adjust" | "studio" | "editor">("upload");
   const [imagesList, setImagesList] = useState<string[]>([]);
   const [originalImagesList, setOriginalImagesList] = useState<string[]>([]);
+  const [uploadedSourceFileId, setUploadedSourceFileId] = useState<string>("");
+  const [uploadedSourceFileName, setUploadedSourceFileName] = useState<string>("");
 
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
@@ -581,7 +583,9 @@ export default function Home() {
     setOcrResults(next);
   };
 
-  const handleUploadSuccess = (urls: string[]) => {
+  const handleUploadSuccess = (urls: string[], sourceFileName?: string) => {
+    setUploadedSourceFileId(`user_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    setUploadedSourceFileName(sourceFileName || "ไฟล์ต้นทาง");
     setImagesList(urls);
     setOriginalImagesList([...urls]);
     setCurrentIndex(0);
@@ -621,6 +625,8 @@ export default function Home() {
   const handleClearAndUploadNew = () => {
     setImagesList([]);
     setOriginalImagesList([]);
+    setUploadedSourceFileId("");
+    setUploadedSourceFileName("");
     setCurrentIndex(0);
     setPagesConfig([]);
     setPreviewUrl("");
@@ -1965,6 +1971,8 @@ export default function Home() {
             </section>
             <TemplateRequestPanel
               imagesList={imagesList}
+              sourceFileId={uploadedSourceFileId}
+              sourceFileName={uploadedSourceFileName}
               rois={rois}
               ocrResults={ocrResults}
               isOpen={isTemplateRequestOpen}

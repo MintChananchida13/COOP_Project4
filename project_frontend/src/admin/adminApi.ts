@@ -811,6 +811,8 @@ export const fetchTemplateRequestPages = async (requestId: string) => {
     templateRequestId: page.template_request_id,
     pageNumber: page.page_number,
     sampleImageUrl: page.sample_image_url || undefined,
+    sourceFileId: page.source_file_id || undefined,
+    sourceFileName: page.source_file_name || undefined,
     imageSource: page.image_source || undefined,
     reviewStatus: page.review_status || undefined,
     isCanonical: Boolean(page.is_canonical),

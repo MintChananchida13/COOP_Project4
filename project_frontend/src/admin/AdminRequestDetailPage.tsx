@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -18,7 +18,6 @@ import {
 } from "../shared/workspace/extractionMethods";
 import { AdminTemplateRequest, TemplateRequestPage } from "../types/ocr";
 import {
-  ADMIN_API_BASE_URL,
   addTemplateRequestImage,
   convertTemplateRequestToTemplate,
   deleteTemplateRequest,
@@ -29,6 +28,27 @@ import {
 } from "./adminApi";
 import { samplePage } from "./adminMockData";
 import { useAdminState } from "./AdminState";
+
+interface PdfJsLib {
+  GlobalWorkerOptions: { workerSrc: string };
+  getDocument: (options: { data: ArrayBuffer }) => {
+    promise: Promise<{
+      numPages: number;
+      getPage: (pageNumber: number) => Promise<{
+        getViewport: (options: { scale: number }) => { width: number; height: number };
+        render: (options: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => {
+          promise: Promise<void>;
+        };
+      }>;
+    }>;
+  };
+}
+
+declare global {
+  interface Window {
+    pdfjsLib?: PdfJsLib;
+  }
+}
 
 const toWorkspaceRoi = (
   field: AdminTemplateRequest["requestedFields"][number],
@@ -60,13 +80,68 @@ const toWorkspaceRoi = (
 const extractionMethodLabel = (value?: string) =>
   extractionMethodOptions.find(
     (option) => option.value === normalizeExtractionMethod(value)
-  )?.label || "OCR Text inside ROI";
+  )?.label || "อ่านข้อความใน ROI";
 
 const getPageSourceFileId = (page: TemplateRequestPage) =>
-  page.sourceFileId || `${page.templateRequestId || "request"}_source_${page.pageNumber}`;
+  page.sourceFileId ||
+  (page.imageSource === "admin_upload"
+    ? `${page.templateRequestId || "request"}_admin_upload_${page.id}`
+    : `${page.templateRequestId || "request"}_source_file`);
 
 const getPageSourceFileName = (page: TemplateRequestPage) =>
-  page.sourceFileName || (page.imageSource === "admin_upload" ? `Admin upload ${page.pageNumber}` : "Source file");
+  page.sourceFileName || (page.imageSource === "admin_upload" ? `รูปที่ผู้ดูแลเพิ่ม ${page.pageNumber}` : "ไฟล์ต้นทางเดียวกัน");
+
+const reviewStatusLabel = (status?: TemplateRequestPage["reviewStatus"]) => {
+  if (status === "approved") return "อนุมัติแล้ว";
+  if (status === "rejected") return "ไม่ใช้";
+  return "รอตรวจ";
+};
+
+const isPdfFile = (file: File) =>
+  file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+const loadPdfEngine = (): Promise<PdfJsLib> =>
+  new Promise((resolve, reject) => {
+    if (window.pdfjsLib) {
+      resolve(window.pdfjsLib);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    script.onload = () => {
+      const pdfjs = window.pdfjsLib;
+      if (!pdfjs) {
+        reject(new Error("ไม่สามารถโหลด PDF.js ได้"));
+        return;
+      }
+      pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      resolve(pdfjs);
+    };
+    script.onerror = () => reject(new Error("โหลด PDF.js ไม่สำเร็จ"));
+    document.head.appendChild(script);
+  });
+
+const convertPdfToImages = async (file: File): Promise<string[]> => {
+  const pdfjsLib = await loadPdfEngine();
+  const loadingTask = pdfjsLib.getDocument({ data: await file.arrayBuffer() });
+  const pdf = await loadingTask.promise;
+  const imageUrls: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    imageUrls.push(canvas.toDataURL("image/jpeg", 0.95));
+  }
+
+  return imageUrls;
+};
 
 export default function AdminRequestDetailPage({
   requestId,
@@ -74,7 +149,7 @@ export default function AdminRequestDetailPage({
   requestId: string;
 }) {
   const router = useRouter();
-  const { requests, rejectRequest } = useAdminState();
+  const { requests } = useAdminState();
 
   const fallbackRequest = requests.find((request) => request.id === requestId);
 
@@ -146,7 +221,7 @@ export default function AdminRequestDetailPage({
     return sourcePages.map((page) => ({
       id: page.id,
       src: page.sampleImageUrl || samplePage,
-      label: `Page ${page.pageNumber}`,
+      label: `หน้า ${page.pageNumber}`,
     }));
   }, [pages, request?.pages]);
 
@@ -208,47 +283,30 @@ export default function AdminRequestDetailPage({
       reader.readAsDataURL(file);
     });
 
-  const handleAddImages = async (files: FileList | null) => {
+  const handleAddFiles = async (files: FileList | null) => {
     if (!request || !files || files.length === 0) return;
     setActionError("");
     setActionStatus("");
     setIsUpdatingImages(true);
     try {
-      const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
-      const dataUrls = await Promise.all(imageFiles.map(fileToDataUrl));
-      for (const [index, src] of dataUrls.filter(Boolean).entries()) {
-        const sourceFileId = `admin_source_${Date.now()}_${index}`;
-        const sourceFileName = imageFiles[index]?.name || `Admin upload ${index + 1}`;
-        await addTemplateRequestImage(request.id, src, "admin_upload", sourceFileId, sourceFileName);
-      }
-      await reloadImages();
-      setActionStatus("Reference image added.");
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Add image failed.");
-    } finally {
-      setIsUpdatingImages(false);
-    }
-  };
+      const acceptedFiles = Array.from(files).filter((file) => file.type.startsWith("image/") || isPdfFile(file));
+      let addedPageCount = 0;
 
-  const handleReplaceImage = async (imageId: string, files: FileList | null) => {
-    if (!request || !files?.[0]) return;
-    setActionError("");
-    setActionStatus("");
-    setIsUpdatingImages(true);
-    try {
-      const src = await fileToDataUrl(files[0]);
-      await updateTemplateRequestImage(request.id, imageId, {
-        sampleImageUrl: src,
-        imageSource: "admin_upload",
-        sourceFileId: `admin_source_${Date.now()}`,
-        sourceFileName: files[0].name || "Replacement image",
-        reviewStatus: "pending",
-        isCanonical: false,
-      });
+      for (const [fileIndex, file] of acceptedFiles.entries()) {
+        const sourceFileId = `admin_file_${Date.now()}_${fileIndex}`;
+        const sourceFileName = file.name || `ไฟล์ที่ผู้ดูแลเพิ่ม ${fileIndex + 1}`;
+        const pageImages = isPdfFile(file) ? await convertPdfToImages(file) : [await fileToDataUrl(file)];
+
+        for (const src of pageImages.filter(Boolean)) {
+          await addTemplateRequestImage(request.id, src, "admin_upload", sourceFileId, sourceFileName);
+          addedPageCount += 1;
+        }
+      }
+
       await reloadImages();
-      setActionStatus("Reference image replaced and marked pending.");
+      setActionStatus(`เพิ่มไฟล์เรียบร้อยแล้ว (${acceptedFiles.length} ไฟล์, ${addedPageCount} หน้า)`);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Replace image failed.");
+      setActionError(error instanceof Error ? error.message : "เพิ่มไฟล์ไม่สำเร็จ");
     } finally {
       setIsUpdatingImages(false);
     }
@@ -268,9 +326,9 @@ export default function AdminRequestDetailPage({
     try {
       await updateTemplateRequestImage(request.id, imageId, patch);
       await reloadImages();
-      setActionStatus("Reference image updated.");
+      setActionStatus("อัปเดตรูปอ้างอิงเรียบร้อยแล้ว");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Update image failed.");
+      setActionError(error instanceof Error ? error.message : "อัปเดตรูปไม่สำเร็จ");
     } finally {
       setIsUpdatingImages(false);
     }
@@ -292,9 +350,9 @@ export default function AdminRequestDetailPage({
         });
       }
       await reloadImages();
-      setActionStatus("Document group updated.");
+      setActionStatus("อัปเดตกลุ่มเอกสารเรียบร้อยแล้ว");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Update document group failed.");
+      setActionError(error instanceof Error ? error.message : "อัปเดตกลุ่มเอกสารไม่สำเร็จ");
     } finally {
       setIsUpdatingImages(false);
     }
@@ -308,48 +366,11 @@ export default function AdminRequestDetailPage({
     try {
       await deleteTemplateRequestImage(request.id, imageId);
       await reloadImages();
-      setActionStatus("Reference image removed.");
+      setActionStatus("ลบรูปอ้างอิงเรียบร้อยแล้ว");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Remove image failed.");
+      setActionError(error instanceof Error ? error.message : "ลบรูปไม่สำเร็จ");
     } finally {
       setIsUpdatingImages(false);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!request) return;
-
-    setActionError("");
-    setActionStatus("");
-
-    try {
-      const response = await fetch(
-        `${ADMIN_API_BASE_URL}/admin/template-requests/${request.id}/reject`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: adminNote || null }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Reject failed with ${response.status}`);
-      }
-
-      rejectRequest(request.id, adminNote);
-      setRequest({ ...request, status: "rejected", adminNote });
-      setActionStatus("Request rejected.");
-    } catch (error) {
-      console.warn(
-        "TODO: backend reject unavailable, using temporary local reject.",
-        error
-      );
-
-      rejectRequest(request.id, adminNote);
-      setRequest({ ...request, status: "rejected", adminNote });
-      setActionStatus(
-        "Request rejected locally. TODO: persist reject when backend is available."
-      );
     }
   };
 
@@ -361,7 +382,7 @@ export default function AdminRequestDetailPage({
 
     if (loadStatus !== "loaded") {
       setActionError(
-        "Cannot convert a demo/fallback request. Reload backend data and try again."
+        "ไม่สามารถสร้าง Template จากข้อมูลตัวอย่างได้ กรุณาโหลดข้อมูลจาก backend อีกครั้ง"
       );
       return;
     }
@@ -369,11 +390,11 @@ export default function AdminRequestDetailPage({
     const pendingPages = pages.filter((page) => (page.reviewStatus || "pending") === "pending");
     const approvedPages = pages.filter((page) => page.reviewStatus === "approved");
     if (pendingPages.length > 0) {
-      setActionError("กรุณาตรวจสอบทุกหน้าก่อนสร้าง Template");
+      setActionError("กรุณาตรวจทุกหน้าให้เรียบร้อยก่อนสร้าง Template");
       return;
     }
     if (approvedPages.length === 0) {
-      setActionError("ต้องอนุมัติอย่างน้อย 1 หน้า ก่อนสร้าง Template");
+      setActionError("ต้องอนุมัติอย่างน้อย 1 ไฟล์ก่อนสร้าง Template");
       return;
     }
 
@@ -389,12 +410,12 @@ export default function AdminRequestDetailPage({
         adminNote,
       });
 
-      setActionStatus("Request converted to a persisted template draft.");
+      setActionStatus("สร้าง Template ฉบับร่างเรียบร้อยแล้ว");
       router.push(`/admin/templates/${result.templateId}/edit`);
     } catch (error) {
       console.warn("Template request conversion failed.", error);
       setActionError(
-        "Convert failed. No local template was created. Please check backend/database and try again."
+        "สร้าง Template ไม่สำเร็จ กรุณาตรวจสอบ backend หรือฐานข้อมูลแล้วลองอีกครั้ง"
       );
     } finally {
       setIsConverting(false);
@@ -409,7 +430,7 @@ export default function AdminRequestDetailPage({
 
     if (loadStatus !== "loaded") {
       setActionError(
-        "Cannot delete a demo/fallback request. Reload backend data and try again."
+        "ไม่สามารถลบข้อมูลตัวอย่างได้ กรุณาโหลดข้อมูลจาก backend อีกครั้ง"
       );
       setIsDeleteConfirmOpen(false);
       return;
@@ -420,13 +441,13 @@ export default function AdminRequestDetailPage({
     try {
       await deleteTemplateRequest(request.id);
 
-      setActionStatus("Template request deleted.");
+      setActionStatus("ลบคำขอเรียบร้อยแล้ว");
       setIsDeleteConfirmOpen(false);
       setTimeout(() => router.push("/admin/requests"), 300);
     } catch (error) {
       console.warn("Template request delete failed.", error);
       setActionError(
-        error instanceof Error ? error.message : "Delete failed. Please try again."
+        error instanceof Error ? error.message : "ลบคำขอไม่สำเร็จ กรุณาลองอีกครั้ง"
       );
     } finally {
       setIsDeleting(false);
@@ -436,7 +457,7 @@ export default function AdminRequestDetailPage({
   if (loadStatus === "loading") {
     return (
       <section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
-        Loading request...
+        กำลังโหลดคำขอ...
       </section>
     );
   }
@@ -445,14 +466,14 @@ export default function AdminRequestDetailPage({
     return (
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-black text-slate-900">
-          Request not found
+          ไม่พบคำขอ
         </h2>
 
         <Link
           href="/admin/requests"
           className="mt-4 inline-flex rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white"
         >
-          Back to Requests
+          กลับไปรายการคำขอ
         </Link>
       </section>
     );
@@ -484,16 +505,16 @@ export default function AdminRequestDetailPage({
                 {request.status}
               </span>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-                {request.documentType || "No type"}
+                {request.documentType || "ไม่ระบุประเภท"}
               </span>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-                {request.pageCount} pages
+                {request.pageCount} หน้า
               </span>
             </div>
 
             {loadStatus === "fallback" && (
               <p className="mt-2 text-xs font-bold text-amber-600">
-                Showing mock fallback because backend detail is unavailable.
+                กำลังแสดงข้อมูลตัวอย่าง เพราะยังเชื่อมต่อ backend ไม่ได้
               </p>
             )}
           </div>
@@ -502,22 +523,22 @@ export default function AdminRequestDetailPage({
             href="/admin/requests"
             className="inline-flex h-10 w-fit items-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 hover:bg-slate-50"
           >
-            Back to Requests
+            กลับไปรายการคำขอ
           </Link>
         </div>
       </div>
 
-      <div className="grid w-full gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid w-full gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="min-w-0">
           <BaseWorkspace
             pages={
               workspacePages.length > 0
                 ? workspacePages
-                : [{ id: "empty", src: samplePage, label: "Page 1" }]
+                : [{ id: "empty", src: samplePage, label: "หน้า 1" }]
             }
             currentPage={safeCurrentPage}
             onPageChange={setCurrentPage}
-            title="Request Preview"
+            title="ตัวอย่างคำขอ"
           >
             <WorkspaceCanvas
               imageSrc={workspacePages[safeCurrentPage]?.src || samplePage}
@@ -541,23 +562,23 @@ export default function AdminRequestDetailPage({
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Document Pages
+                  กลุ่มเอกสาร
                 </h3>
                 <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                  Review each page. Approved pages become one multi-page Template.
+                  หน้าที่มี sourceFileId เดียวกันจะแสดงอยู่ในกล่องเดียวกัน
                 </p>
               </div>
 
               <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black text-indigo-700 hover:bg-indigo-100">
-                Add
+                เพิ่มไฟล์
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,application/pdf"
                   multiple
                   className="hidden"
                   disabled={isUpdatingImages}
                   onChange={(event) => {
-                    void handleAddImages(event.target.files);
+                    void handleAddFiles(event.target.files);
                     event.target.value = "";
                   }}
                 />
@@ -569,39 +590,41 @@ export default function AdminRequestDetailPage({
                 const approvedCount = group.pages.filter((page) => page.reviewStatus === "approved").length;
                 const rejectedCount = group.pages.filter((page) => page.reviewStatus === "rejected").length;
                 const pendingCount = group.pages.filter((page) => (page.reviewStatus || "pending") === "pending").length;
+                const isGroupApproved = approvedCount === group.pages.length && group.pages.length > 0;
+                const mainPage = group.pages.find((page) => page.isCanonical) || group.pages[0];
                 return (
                   <div key={group.sourceFileId} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                     <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <h4 className="truncate text-xs font-black text-slate-900">{group.sourceFileName}</h4>
                         <p className="mt-1 text-[11px] font-bold text-slate-500">
-                          {group.pages.length} pages · {approvedCount} approved · {pendingCount} pending · {rejectedCount} rejected
+                          {group.pages.length} หน้า · {isGroupApproved ? "อนุมัติทั้งไฟล์แล้ว" : `รอตรวจ ${pendingCount} หน้า`} · ไม่ใช้ {rejectedCount}
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-1.5">
                         <button
                           type="button"
-                          disabled={isUpdatingImages}
-                          onClick={() => void handleUpdateGroup(group.pages, { reviewStatus: "approved", isCanonical: true })}
-                          className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300"
+                          disabled={isUpdatingImages || !mainPage || mainPage.isCanonical}
+                          onClick={() => mainPage && void handleUpdateImage(mainPage.id, { isCanonical: true })}
+                          className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300"
                         >
-                          Approve File
+                          {mainPage?.isCanonical ? "เป็นหน้าหลักแล้ว" : "ตั้งเป็นหน้าหลัก"}
                         </button>
                         <button
                           type="button"
-                          disabled={isUpdatingImages}
-                          onClick={() => void handleUpdateGroup(group.pages, { reviewStatus: "rejected" })}
-                          className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300"
+                          disabled={isUpdatingImages || isGroupApproved}
+                          onClick={() => void handleUpdateGroup(group.pages, { reviewStatus: "approved" })}
+                          className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300"
                         >
-                          Reject File
+                          {isGroupApproved ? "อนุมัติแล้ว" : "อนุมัติทั้งไฟล์"}
                         </button>
                       </div>
                     </div>
 
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="mt-3 space-y-2">
                       {group.pages.map((page) => (
                         <div key={page.id} className="rounded-xl border border-slate-200 bg-white p-2">
-                          <div className="flex gap-3">
+                          <div className="flex min-w-0 gap-3">
                             <button
                               type="button"
                               onClick={() => setCurrentPage(Math.max(page.pageNumber - 1, 0))}
@@ -609,7 +632,7 @@ export default function AdminRequestDetailPage({
                             >
                               <img
                                 src={page.sampleImageUrl || samplePage}
-                                alt={`Reference ${page.pageNumber}`}
+                                alt={`หน้าเอกสาร ${page.pageNumber}`}
                                 className="h-full w-full object-contain"
                               />
                             </button>
@@ -617,7 +640,7 @@ export default function AdminRequestDetailPage({
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap gap-1">
                                 <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-black text-slate-600">
-                                  Page {page.pageNumber}
+                                  หน้า {page.pageNumber}
                                 </span>
                                 <span
                                   className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
@@ -628,31 +651,18 @@ export default function AdminRequestDetailPage({
                                         : "bg-amber-50 text-amber-700"
                                   }`}
                                 >
-                                  {page.reviewStatus || "pending"}
+                                  {reviewStatusLabel(page.reviewStatus)}
                                 </span>
                                 {page.isCanonical && (
                                   <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
-                                    primary
+                                    หน้าหลัก
                                   </span>
                                 )}
                               </div>
 
                               <div className="mt-2 flex flex-wrap gap-1.5">
-                                <button type="button" disabled={isUpdatingImages} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved" })} className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300">
-                                  Approve
-                                </button>
-                                <button type="button" disabled={isUpdatingImages || page.reviewStatus === "rejected"} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved", isCanonical: true })} className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300">
-                                  Primary
-                                </button>
-                                <button type="button" disabled={isUpdatingImages} onClick={() => void handleUpdateImage(page.id, { reviewStatus: "rejected", isCanonical: false })} className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300">
-                                  Reject
-                                </button>
-                                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600">
-                                  Replace
-                                  <input type="file" accept="image/*" className="hidden" disabled={isUpdatingImages} onChange={(event) => { void handleReplaceImage(page.id, event.target.files); event.target.value = ""; }} />
-                                </label>
                                 <button type="button" disabled={isUpdatingImages} onClick={() => void handleRemoveImage(page.id)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300">
-                                  Remove
+                                  ลบ
                                 </button>
                               </div>
                             </div>
@@ -665,111 +675,8 @@ export default function AdminRequestDetailPage({
               })}
             </div>
 
-            <div className="hidden">
-              {pages.length === 0 ? (
-                <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                  No reference images were uploaded.
-                </p>
-              ) : (
-                pages.map((page) => (
-                  <div key={page.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <div className="flex gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage(Math.max(page.pageNumber - 1, 0))}
-                        className="h-20 w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white"
-                      >
-                        <img
-                          src={page.sampleImageUrl || samplePage}
-                          alt={`Reference ${page.pageNumber}`}
-                          className="h-full w-full object-contain"
-                        />
-                      </button>
-
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap gap-1">
-                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-600">
-                            Image {page.pageNumber}
-                          </span>
-                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-600">
-                            {page.imageSource || "user_request"}
-                          </span>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
-                              page.reviewStatus === "approved"
-                                ? "bg-emerald-50 text-emerald-700"
-                                : page.reviewStatus === "rejected"
-                                  ? "bg-red-50 text-red-700"
-                                  : "bg-amber-50 text-amber-700"
-                            }`}
-                          >
-                            {page.reviewStatus || "pending"}
-                          </span>
-                          {page.isCanonical && (
-                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
-                              primary
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <button
-                            type="button"
-                            disabled={isUpdatingImages}
-                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved" })}
-                            className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[10px] font-black text-emerald-700 disabled:text-slate-300"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isUpdatingImages || page.reviewStatus === "rejected"}
-                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "approved", isCanonical: true })}
-                            className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-700 disabled:text-slate-300"
-                          >
-                            Primary
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isUpdatingImages}
-                            onClick={() => void handleUpdateImage(page.id, { reviewStatus: "rejected", isCanonical: false })}
-                            className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[10px] font-black text-red-700 disabled:text-slate-300"
-                          >
-                            Reject
-                          </button>
-                          <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600">
-                            Replace
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              disabled={isUpdatingImages}
-                              onChange={(event) => {
-                                void handleReplaceImage(page.id, event.target.files);
-                                event.target.value = "";
-                              }}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            disabled={isUpdatingImages}
-                            onClick={() => void handleRemoveImage(page.id)}
-                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-red-600 disabled:text-slate-300"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
             {!canConvert && (
-              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                ตรวจสอบทุกหน้าให้เรียบร้อยก่อนสร้าง Template หน้าที่อนุมัติจะถูกใช้เป็น Template เดียวหลายหน้า
-              </p>
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">กรุณาอนุมัติเป็นรายไฟล์ก่อนสร้าง Template โดยทุกหน้าภายในไฟล์ที่อนุมัติจะถูกนำไปสร้างเป็น Template เดียวกัน</p>
             )}
           </section>
 
@@ -777,26 +684,26 @@ export default function AdminRequestDetailPage({
             <div className="mb-3 flex h-10 items-center justify-between">
               <div>
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Requested ROI Fields
+                  ฟิลด์ ROI ที่ผู้ใช้ส่งมา
                 </h3>
                 <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                  Page {safeCurrentPage + 1} of {workspacePages.length || 1}
+                  หน้า {safeCurrentPage + 1} จาก {workspacePages.length || 1}
                 </p>
               </div>
 
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black text-slate-500">
-                {currentPageFields.length} fields
+                {currentPageFields.length} ฟิลด์
               </span>
             </div>
 
             <div className="max-h-[430px] space-y-3 overflow-y-auto pr-1">
               {request.requestMode === "image_only" ? (
                 <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                  Image-only request. No requested ROI fields were submitted.
+                  คำขอนี้ส่งเฉพาะรูปภาพ จึงไม่มีฟิลด์ ROI
                 </p>
               ) : currentPageFields.length === 0 ? (
                 <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                  No ROI fields on this page.
+                  หน้านี้ยังไม่มีฟิลด์ ROI
                 </p>
               ) : (
                 currentPageFields.map((field) => (
@@ -839,24 +746,24 @@ export default function AdminRequestDetailPage({
             <div className="mb-3 flex h-10 items-center justify-between">
               <div>
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Review Decision
+                  การดำเนินการ
                 </h3>
                 <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                  Admin action area
+                  ตรวจให้ครบก่อนสร้าง Template
                 </p>
               </div>
             </div>
 
             <label className="block space-y-1">
               <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                Admin note
+                หมายเหตุผู้ดูแล
               </span>
 
               <textarea
                 value={adminNote}
                 onChange={(event) => setAdminNote(event.target.value)}
                 rows={4}
-                placeholder="Reason, review note, or conversion context"
+                placeholder="หมายเหตุหรือข้อมูลเพิ่มเติมสำหรับการสร้าง Template"
                 className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
               />
             </label>
@@ -880,15 +787,7 @@ export default function AdminRequestDetailPage({
                 disabled={isConverting || !canConvert}
                 className="ui-stable-action-lg rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {isConverting ? "Converting..." : "Convert Approved Pages to Template Draft"}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleReject}
-                className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs font-black text-red-700 hover:bg-red-100"
-              >
-                Reject
+                {isConverting ? "กำลังสร้าง Template..." : "สร้าง Template จากไฟล์ที่อนุมัติ"}
               </button>
 
               <button
@@ -897,7 +796,7 @@ export default function AdminRequestDetailPage({
                 disabled={isDeleting || loadStatus !== "loaded"}
                 className="ui-stable-action rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-red-700 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400"
               >
-                {isDeleting ? "Deleting..." : "Delete Request"}
+                {isDeleting ? "กำลังลบ..." : "ลบคำขอ"}
               </button>
             </div>
           </section>
@@ -908,11 +807,11 @@ export default function AdminRequestDetailPage({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
           <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
             <h3 className="text-base font-black text-slate-900">
-              Delete this template request?
+              ลบคำขอนี้หรือไม่?
             </h3>
 
             <p className="mt-2 text-sm font-semibold text-slate-500">
-              This action cannot be undone.
+              เมื่อลบแล้วจะกู้คืนไม่ได้
             </p>
 
             <div className="mt-5 flex justify-end gap-2">
@@ -922,7 +821,7 @@ export default function AdminRequestDetailPage({
                 disabled={isDeleting}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
               >
-                Cancel
+                ยกเลิก
               </button>
 
               <button
@@ -931,7 +830,7 @@ export default function AdminRequestDetailPage({
                 disabled={isDeleting}
                 className="ui-stable-action-sm rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {isDeleting ? "Deleting..." : "Delete"}
+                {isDeleting ? "กำลังลบ..." : "ลบ"}
               </button>
             </div>
           </div>

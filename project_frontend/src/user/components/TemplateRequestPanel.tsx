@@ -9,6 +9,8 @@ type PageAwareRoi = ROI & { pageIndex?: number };
 
 interface TemplateRequestPanelProps {
   imagesList: string[];
+  sourceFileId?: string;
+  sourceFileName?: string;
   rois: PageAwareRoi[];
   ocrResults?: (OCRResult & { pageIndex?: number })[];
   isOpen: boolean;
@@ -20,6 +22,27 @@ type RequestStatus = "idle" | "submitting" | "submitted" | "mock_submitted" | "e
 interface ImageSize {
   width: number;
   height: number;
+}
+
+interface PdfJsLib {
+  GlobalWorkerOptions: { workerSrc: string };
+  getDocument: (options: { data: ArrayBuffer }) => {
+    promise: Promise<{
+      numPages: number;
+      getPage: (pageNumber: number) => Promise<{
+        getViewport: (options: { scale: number }) => { width: number; height: number };
+        render: (options: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => {
+          promise: Promise<void>;
+        };
+      }>;
+    }>;
+  };
+}
+
+declare global {
+  interface Window {
+    pdfjsLib?: PdfJsLib;
+  }
 }
 
 interface TemplateRequestPageResponse {
@@ -43,6 +66,9 @@ interface RequestImageItem {
 
 const createSourceFileId = () => `source_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+const isPdfFile = (file: File) =>
+  file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
 
 const roiTypeToDataType = (roi: PageAwareRoi): RoiDataType => {
@@ -59,6 +85,57 @@ const loadImageSize = (src: string): Promise<ImageSize> =>
     img.onload = () => resolve({ width: img.naturalWidth || WORKSPACE_RENDERED_WIDTH, height: img.naturalHeight || WORKSPACE_RENDERED_WIDTH });
     img.onerror = reject;
     img.src = src;
+  });
+
+const loadPdfEngine = (): Promise<PdfJsLib> =>
+  new Promise((resolve, reject) => {
+    if (window.pdfjsLib) {
+      resolve(window.pdfjsLib);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    script.onload = () => {
+      const pdfjs = window.pdfjsLib;
+      if (!pdfjs) {
+        reject(new Error("ไม่สามารถโหลด PDF.js ได้"));
+        return;
+      }
+      pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      resolve(pdfjs);
+    };
+    script.onerror = () => reject(new Error("โหลด PDF.js ไม่สำเร็จ"));
+    document.head.appendChild(script);
+  });
+
+const convertPdfToImages = async (file: File): Promise<string[]> => {
+  const pdfjsLib = await loadPdfEngine();
+  const loadingTask = pdfjsLib.getDocument({ data: await file.arrayBuffer() });
+  const pdf = await loadingTask.promise;
+  const imageUrls: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    imageUrls.push(canvas.toDataURL("image/jpeg", 0.95));
+  }
+
+  return imageUrls;
+};
+
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
 
 const toRequestedField = (
@@ -87,7 +164,15 @@ const toRequestedField = (
   };
 };
 
-export default function TemplateRequestPanel({ imagesList, rois, ocrResults = [], isOpen, onClose }: TemplateRequestPanelProps) {
+export default function TemplateRequestPanel({
+  imagesList,
+  sourceFileId: initialSourceFileId,
+  sourceFileName: initialSourceFileName,
+  rois,
+  ocrResults = [],
+  isOpen,
+  onClose,
+}: TemplateRequestPanelProps) {
   const [requestImages, setRequestImages] = useState<string[]>([]);
   const [requestImageItems, setRequestImageItems] = useState<RequestImageItem[]>([]);
   const [requestTitle, setRequestTitle] = useState("");
@@ -123,13 +208,13 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
 
   useEffect(() => {
     if (isOpen) {
-      const sourceFileId = createSourceFileId();
+      const sourceFileId = initialSourceFileId || createSourceFileId();
       const sourceFileName = "ไฟล์ต้นทาง";
-      const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName }));
+      const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName: initialSourceFileName || sourceFileName }));
       setRequestImageItems(items);
       setRequestImages(imagesList);
     }
-  }, [imagesList, isOpen]);
+  }, [imagesList, initialSourceFileId, initialSourceFileName, isOpen]);
 
   const canSubmit = requestImageItems.length > 0 && requestTitle.trim().length > 0 && status !== "submitting";
 
@@ -156,8 +241,30 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     setRequestImages((current) => [...current, ...items.map(item => item.src).filter(Boolean)]);
   };
 
+  const handleAddFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setStatusMessage("");
+
+    const nextItems: RequestImageItem[] = [];
+    const acceptedFiles = Array.from(files).filter((file) => file.type.startsWith("image/") || isPdfFile(file));
+
+    for (const [fileIndex, file] of acceptedFiles.entries()) {
+      const sourceFileId = createSourceFileId();
+      const sourceFileName = file.name || `ไฟล์ที่เพิ่ม ${fileIndex + 1}`;
+      const pageImages = isPdfFile(file) ? await convertPdfToImages(file) : [await fileToDataUrl(file)];
+
+      pageImages.filter(Boolean).forEach((src) => {
+        nextItems.push({ src, sourceFileId, sourceFileName });
+      });
+    }
+
+    setRequestImageItems((current) => [...current, ...nextItems]);
+    setRequestImages((current) => [...current, ...nextItems.map((item) => item.src)]);
+  };
+
   const buildRequestedFields = async () => {
-    const imageSizes = await Promise.all(imagesList.map((src) => loadImageSize(src)));
+    const submitImages = requestImageItems.length > 0 ? requestImageItems.map((item) => item.src) : imagesList;
+    const imageSizes = await Promise.all(submitImages.map((src) => loadImageSize(src)));
     return enabledRois.map((roi, index) => {
       const pageIndex = roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0;
       const imageSize = imageSizes[pageIndex] || imageSizes[0] || { width: WORKSPACE_RENDERED_WIDTH, height: WORKSPACE_RENDERED_WIDTH };
@@ -271,9 +378,9 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
     setStatus("idle");
     setStatusMessage("");
     setSubmittedRequestId("");
-    const sourceFileId = createSourceFileId();
+    const sourceFileId = initialSourceFileId || createSourceFileId();
     const sourceFileName = requestTitle.trim() || "ไฟล์ต้นทาง";
-    const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName }));
+    const items = imagesList.map(src => ({ src, sourceFileId, sourceFileName: initialSourceFileName || sourceFileName }));
     setRequestImageItems(items);
     setRequestImages(imagesList);
     onClose();
@@ -326,14 +433,14 @@ export default function TemplateRequestPanel({ imagesList, rois, ocrResults = []
                 </div>
 
                 <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100">
-                  Add Page Image
+                  เพิ่มไฟล์
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,application/pdf"
                     multiple
                     className="hidden"
                     onChange={(event) => {
-                      void handleAddImages(event.target.files);
+                      void handleAddFiles(event.target.files);
                       event.target.value = "";
                     }}
                   />

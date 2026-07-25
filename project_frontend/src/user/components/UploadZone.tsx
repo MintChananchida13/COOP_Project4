@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { FileImage, FileText, Loader2, Upload } from "lucide-react";
 
 interface UploadZoneProps {
-  onUploadSuccess: (urls: string[]) => void;
+  onUploadSuccess: (urls: string[], sourceFileName?: string) => void;
 }
 
 interface PdfJsLib {
@@ -103,7 +103,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
       }
 
       if (preparedImages.length > 0) {
-        onUploadSuccess(preparedImages);
+        onUploadSuccess(preparedImages, file.name);
       }
     } catch (error) {
       alert("เกิดข้อผิดพลาดระหว่างเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");
