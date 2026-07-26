@@ -2772,12 +2772,25 @@ class AdminTemplateService:
         self,
         candidate_template: Dict[str, Any],
         query_page_paths: Dict[int, str],
+        allow_alignment: bool = True,
     ) -> Dict[str, Any]:
         template_page_paths = self._template_page_image_paths(candidate_template["id"], candidate_template.get("pages") or [])
         verification_page_paths = dict(query_page_paths)
         alignments: List[Dict[str, Any]] = []
 
         for page_number, query_path in query_page_paths.items():
+            if not allow_alignment:
+                alignments.append(
+                    {
+                        "page_number": page_number,
+                        "alignment_status": "skipped",
+                        "verification_source_used": "original",
+                        "alignment_reason": "alignment_disabled_for_current_draft_pdf_test",
+                        "alignment": {"orb_executed": False},
+                    }
+                )
+                continue
+
             template_path = template_page_paths.get(page_number)
             if not template_path:
                 alignments.append(
@@ -2852,8 +2865,9 @@ class AdminTemplateService:
         global_score: float,
         query_page_paths: Dict[int, str],
         is_current_draft: bool = False,
+        allow_alignment: bool = True,
     ) -> Dict[str, Any]:
-        alignment_context = self._align_query_pages_for_candidate(candidate_template, query_page_paths)
+        alignment_context = self._align_query_pages_for_candidate(candidate_template, query_page_paths, allow_alignment=allow_alignment)
         verification = VerificationService().verify_template(candidate_template["id"], alignment_context["page_paths"])
         if is_current_draft:
             verification = self._apply_temporary_draft_image_anchor_scores(candidate_template, verification, alignment_context["page_paths"])
@@ -3172,8 +3186,13 @@ class AdminTemplateService:
             raise HTTPException(status_code=409, detail="Unable to prepare draft template images")
 
         test_id = f"prepubdet_{uuid4().hex[:12]}"
+        uploaded_is_pdf = file_bytes.lstrip().startswith(b"%PDF")
         uploaded_page_paths = _prepare_prepublish_test_pages(test_id, file_bytes)
-        query_page_paths = _normalize_prepublish_test_pages(test_id, uploaded_page_paths)
+        query_page_paths = (
+            {index: str(path) for index, path in enumerate(uploaded_page_paths, start=1)}
+            if uploaded_is_pdf
+            else _normalize_prepublish_test_pages(test_id, uploaded_page_paths)
+        )
         query_paths = [query_page_paths[key] for key in sorted(query_page_paths)]
         draft_paths = [draft_page_paths[key] for key in sorted(draft_page_paths)]
 
@@ -3205,7 +3224,13 @@ class AdminTemplateService:
             if len(candidates) >= 4:
                 break
 
-        draft_candidate = self._build_simulation_candidate(draft, draft_global_score, query_page_paths, is_current_draft=True)
+        draft_candidate = self._build_simulation_candidate(
+            draft,
+            draft_global_score,
+            query_page_paths,
+            is_current_draft=True,
+            allow_alignment=not uploaded_is_pdf,
+        )
         draft_candidate["source"] = "draft"
         draft_candidate["source_label"] = "Draft / Layout References"
         draft_candidate["matched_layout_reference"] = draft_reference_match["best_reference"]
@@ -3263,6 +3288,8 @@ class AdminTemplateService:
                 "query_vector_dimension": 0,
                 "retrieval_engine": "layout_signature",
                 "input_page_count": len(uploaded_page_paths),
+                "source_type": "pdf" if uploaded_is_pdf else "image",
+                "normalization_skipped_for_pdf": uploaded_is_pdf,
                 "query_page_paths": [str(path) for path in uploaded_page_paths],
                 "normalized_query_page_paths": query_paths,
                 "query_page_numbers": sorted(query_signatures_by_page.keys()),

@@ -42,6 +42,27 @@ class PrepublishMultiPageMatchingTest(unittest.TestCase):
             [1, 2, 3],
         )
 
+    def test_align_query_pages_can_be_disabled_for_current_draft_pdf_crop_space(self) -> None:
+        service = AdminTemplateService()
+        candidate_template = {
+            "id": "draft_template",
+            "pages": [
+                {"page_number": 1, "sample_image_url": "page_1.png"},
+                {"page_number": 2, "sample_image_url": "page_2.png"},
+            ],
+        }
+
+        with patch.object(service, "_template_page_image_paths", return_value={1: "template_page_1.png", 2: "template_page_2.png"}):
+            result = service._align_query_pages_for_candidate(
+                candidate_template,
+                {1: "query_page_1.png", 2: "query_page_2.png"},
+                allow_alignment=False,
+            )
+
+        self.assertEqual(result["page_paths"], {1: "query_page_1.png", 2: "query_page_2.png"})
+        self.assertEqual([item["alignment_status"] for item in result["alignments"]], ["skipped", "skipped"])
+        self.assertTrue(all(item["verification_source_used"] == "original" for item in result["alignments"]))
+
 
 if __name__ == "__main__":
     unittest.main()
