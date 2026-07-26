@@ -290,8 +290,9 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     const nextIndex = selectedTemplateFields.length + 1;
     const nextRoi = roi || defaultRoi(currentTemplatePage.pageNumber);
     localFieldSequenceRef.current += 1;
+    const optimisticId = defaults?.id || `local_field_${Date.now()}_${localFieldSequenceRef.current}`;
     const optimisticField: TemplateField = {
-      id: `local_field_${Date.now()}_${localFieldSequenceRef.current}`,
+      id: optimisticId,
       templateId,
       templatePageId: currentTemplatePage.id,
       pageNumber: currentTemplatePage.pageNumber,
@@ -321,7 +322,18 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
     createTemplateFieldApi(templateId, optimisticField)
       .then((bundle) => {
-        applyBundle(bundle);
+        const savedField =
+          bundle.fields.find((field) => field.id === optimisticId) ||
+          bundle.fields.find(
+            (field) =>
+              field.templatePageId === optimisticField.templatePageId &&
+              field.pageNumber === optimisticField.pageNumber &&
+              field.fieldName === optimisticField.fieldName
+          );
+        if (savedField) {
+          setSelectedTemplateFields((prev) => prev.map((field) => (field.id === optimisticId ? savedField : field)));
+        }
+        setSelectedTemplate(bundle.template);
         setSaved("Field saved.");
       })
       .catch((error) => {

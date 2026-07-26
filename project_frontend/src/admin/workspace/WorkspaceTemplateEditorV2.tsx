@@ -396,10 +396,12 @@ export default function WorkspaceTemplateEditorV2({
       const previous = previousById.get(roi.id);
       if (!previous) {
         const ratio = roiToRatio(roi, currentPageNumber, imageMetrics);
+        const optimisticFieldId = `local_field_from_roi_${roi.id}`;
         pendingRoiRef.current = { mode, roi: ratio };
         if (mode === "verification_anchors") {
           const index = verificationAnchors.length + 1;
           onAddField(ratio, {
+            id: optimisticFieldId,
             fieldName: `anchor_${index}`,
             displayLabel: `Anchor ${index}`,
             dataType: "text",
@@ -413,10 +415,14 @@ export default function WorkspaceTemplateEditorV2({
             expectedText: "",
             matchType: "contains",
           });
+          setSelectedId(stableNumericId(`anchor:${optimisticFieldId}`));
         } else if (mode === "ignore_regions") {
           onAddIgnoreRegion(ratio);
         } else {
           onAddField(ratio, {
+            id: optimisticFieldId,
+            fieldName: roi.fieldName,
+            displayLabel: roi.fieldName,
             userSelectable: true,
             defaultSelected: true,
             useForVerification: false,
@@ -424,6 +430,7 @@ export default function WorkspaceTemplateEditorV2({
             extractionMethod: "paddle_thai_ocr",
             roiPadding: 0,
           });
+          setSelectedId(stableNumericId(`field:${optimisticFieldId}`));
         }
         return;
       }
