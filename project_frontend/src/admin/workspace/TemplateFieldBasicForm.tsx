@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { FileText, Image as ImageIcon, Table } from "lucide-react";
 import { RoiDataType, TemplateField } from "../../types/ocr";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
@@ -20,8 +21,18 @@ const roiTypes = [
 ];
 
 export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: TemplateFieldBasicFormProps) {
+  const [fieldNameDraft, setFieldNameDraft] = useState(field.fieldName);
   const selectedDataType = field.dataType === "string" || !field.dataType ? "text" : field.dataType;
   const selectedRoiType = selectedDataType === "table" || selectedDataType === "image" ? selectedDataType : "text";
+
+  useEffect(() => {
+    setFieldNameDraft(field.fieldName);
+  }, [field.id, field.fieldName]);
+
+  const commitFieldName = () => {
+    if (fieldNameDraft === field.fieldName) return;
+    onUpdate(field.id, { fieldName: fieldNameDraft, displayLabel: fieldNameDraft });
+  };
 
   const updateDataType = (dataType: RoiDataType) => {
     onUpdate(field.id, {
@@ -44,8 +55,14 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: Te
         <span className="text-[9px] font-black uppercase text-slate-400">Field Name</span>
         <input
           className={inputClass}
-          value={field.fieldName}
-          onChange={(event) => onUpdate(field.id, { fieldName: event.target.value, displayLabel: event.target.value })}
+          value={fieldNameDraft}
+          onChange={(event) => setFieldNameDraft(event.target.value)}
+          onBlur={commitFieldName}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
         />
       </label>
 

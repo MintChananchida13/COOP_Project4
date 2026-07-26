@@ -224,7 +224,7 @@ const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): Admin
     id: stableNumericId(`${anchor ? "anchor" : "field"}:${field.id}`),
     sourceId: field.id,
     workspaceKind: anchor ? "verification_anchors" : "extraction_fields",
-    fieldName: field.displayLabel || field.fieldName,
+    fieldName: field.fieldName,
     x: box.x,
     y: box.y,
     width: box.width,
@@ -349,6 +349,7 @@ export default function WorkspaceTemplateEditorV2({
   const selectedExtractionField = selectedField && !isAnchor(selectedField)
     ? selectedField
     : currentPageExtractionFields[0] || extractionFields[0] || null;
+  const [anchorNameDraft, setAnchorNameDraft] = useState(selectedAnchor?.fieldName || "");
   const textAnchorsMissingExpected = verificationAnchors.filter(
     (anchor) => anchor.dataType !== "image" && !String(anchor.expectedText || "").trim()
   );
@@ -359,6 +360,15 @@ export default function WorkspaceTemplateEditorV2({
       : textAnchorsMissingExpected.length > 0
         ? `กรุณากรอก Expected Text ให้ครบ (${textAnchorsMissingExpected.length} รายการ)`
         : "";
+
+  useEffect(() => {
+    setAnchorNameDraft(selectedAnchor?.fieldName || "");
+  }, [selectedAnchor?.id, selectedAnchor?.fieldName]);
+
+  const commitAnchorName = () => {
+    if (!selectedAnchor || anchorNameDraft === selectedAnchor.fieldName) return;
+    onUpdateField(selectedAnchor.id, { fieldName: anchorNameDraft, displayLabel: anchorNameDraft });
+  };
 
   const selectField = (field: TemplateField) => {
     setSelectedId(stableNumericId(`${isAnchor(field) ? "anchor" : "field"}:${field.id}`));
@@ -991,7 +1001,17 @@ export default function WorkspaceTemplateEditorV2({
                     <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Anchor Settings</h3>
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">Name</span>
-                      <input className={inputClass} value={selectedAnchor.displayLabel || selectedAnchor.fieldName} onChange={(event) => onUpdateField(selectedAnchor.id, { fieldName: event.target.value, displayLabel: event.target.value })} />
+                      <input
+                        className={inputClass}
+                        value={anchorNameDraft}
+                        onChange={(event) => setAnchorNameDraft(event.target.value)}
+                        onBlur={commitAnchorName}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
                     </label>
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">Verification Method</span>
