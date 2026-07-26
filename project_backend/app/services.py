@@ -1381,6 +1381,7 @@ class VerificationService:
             actual_text = ""
             ocr_confidence = 0.0
             field_error = None
+            current_crop_preview_data_url = None
 
             if anchor_type == "image" and not image_path:
                 category_info = _image_category_api(field.get("image_category"))
@@ -1488,6 +1489,9 @@ class VerificationService:
 
             if image_path:
                 try:
+                    crop_path = _storage_root() / "template_verification_test_crops" / template_id / f"{field['id']}.png"
+                    cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 0)
+                    current_crop_preview_data_url = _image_path_to_data_url(cropped)
                     if field["id"] in text_ocr_errors:
                         raise OcrUnavailableError(text_ocr_errors[field["id"]])
                     ocr_result = text_ocr_cache.get(field["id"])
@@ -1550,6 +1554,8 @@ class VerificationService:
                     "roi": field["roi"],
                     "roi_padding": field.get("roi_padding") or 0,
                     "weight": float(field.get("verification_weight") or 1.0),
+                    "reference_crop_preview_data_url": None,
+                    "current_crop_preview_data_url": current_crop_preview_data_url,
                     "error": field_error,
                 }
             )

@@ -674,21 +674,36 @@ export default function WorkspaceTemplateEditorV2({
       item.currentCropPreviewDataUrl ||
       item.cropPreviewUrl ||
       item.currentCropPreviewUrl;
+    const referenceSrc = item.referenceCropPreviewDataUrl || item.referenceCropPreviewUrl;
+    const currentSrc = item.currentCropPreviewDataUrl || item.currentCropPreviewUrl || previewSrc;
+    const previewItems = referenceSrc
+      ? [
+          { label: "Reference ROI", src: referenceSrc },
+          { label: "Current ROI", src: currentSrc },
+        ]
+      : [{ label: "ROI Preview", src: currentSrc }];
     return (
       <div className="rounded-lg border border-slate-100 bg-white p-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[9px] font-black uppercase text-slate-400">ROI Preview</span>
+          <span className="text-[9px] font-black uppercase text-slate-400">{referenceSrc ? "Verification ROI" : "ROI Preview"}</span>
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
             {testItemTypeLabel(item)}
           </span>
         </div>
-        {previewSrc ? (
-          <img src={previewSrc} alt="" className="mt-2 h-28 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
-        ) : (
-          <div className="mt-2 flex h-28 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
-            ไม่มีภาพ ROI
-          </div>
-        )}
+        <div className={`mt-2 grid gap-2 ${referenceSrc ? "sm:grid-cols-2" : ""}`}>
+          {previewItems.map((preview) => (
+            <div key={preview.label}>
+              {referenceSrc && <div className="mb-1 text-[8px] font-black uppercase text-slate-400">{preview.label}</div>}
+              {preview.src ? (
+                <img src={preview.src} alt="" className="h-28 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+              ) : (
+                <div className="flex h-28 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
+                  ไม่มีภาพ ROI
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -710,6 +725,27 @@ export default function WorkspaceTemplateEditorV2({
           Predicted: {item.predictedImageCategoryLabel}
         </div>
       )}
+    </div>
+  );
+
+  const renderTextVerificationPreview = (item: TemplateStepTestItem) => (
+    <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[9px] font-black uppercase text-slate-400">Text Verification</div>
+        <span className={`rounded px-1.5 py-0.5 text-[8px] font-black uppercase ${item.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+          {item.passed ? "Matched" : "Not Matched"}
+        </span>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div>
+          <div className="text-[9px] font-black uppercase text-slate-400">Expected Text</div>
+          <div className="mt-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700">{item.expectedText || "-"}</div>
+        </div>
+        <div>
+          <div className="text-[9px] font-black uppercase text-slate-400">OCR Result</div>
+          <div className="mt-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700">{item.ocrText || item.actualText || "-"}</div>
+        </div>
+      </div>
     </div>
   );
 
@@ -738,7 +774,8 @@ export default function WorkspaceTemplateEditorV2({
                 <div className="min-w-0">
                   {isImageTestItem(item) && renderImageFieldPreview(item)}
                   {isTableTestItem(item) && renderTablePreview(item)}
-                  {!isTableTestItem(item) && !isImageTestItem(item) && (item.ocrText || item.actualText || item.expectedText) && (
+                  {item.anchorType === "text" && renderTextVerificationPreview(item)}
+                  {!isTableTestItem(item) && !isImageTestItem(item) && item.anchorType !== "text" && (item.ocrText || item.actualText || item.expectedText) && (
                     <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
                       <div className="text-[9px] font-black uppercase text-slate-400">Text Result</div>
                       <div className="mt-2 space-y-1">
