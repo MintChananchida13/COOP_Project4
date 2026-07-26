@@ -260,11 +260,28 @@ def _prepare_query_pages(query_id: str, file_bytes: bytes) -> List[Path]:
     return [_save_query_image(query_id, file_bytes, 1)]
 
 
-def _normalize_query_pages(query_id: str, page_paths: List[Path]) -> List[Dict[str, Any]]:
+def _normalize_query_pages(query_id: str, page_paths: List[Path], skip_normalization: bool = False) -> List[Dict[str, Any]]:
     normalized_dir = _storage_path() / query_id / "normalized"
     normalized_dir.mkdir(parents=True, exist_ok=True)
     normalized_pages = []
     for index, page_path in enumerate(page_paths, start=1):
+        if skip_normalization:
+            normalized_pages.append(
+                {
+                    "page_index": index,
+                    "original_path": str(page_path),
+                    "normalized_path": str(page_path),
+                    "normalization": {
+                        "normalization_status": "skipped",
+                        "reason": "pdf_rendered_page_used_without_image_normalization",
+                        "normalized_image_path": str(page_path),
+                        "perspective_applied": False,
+                        "crop_applied": False,
+                        "fallback_used": False,
+                    },
+                }
+            )
+            continue
         normalized_path = normalized_dir / f"page_{index}_normalized.png"
         info = normalization_service.normalize_document(str(page_path), str(normalized_path))
         normalized_pages.append(
@@ -1288,7 +1305,8 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
     source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
     page_paths = _prepare_query_pages(query_id, file_bytes)
-    normalized_pages = _normalize_query_pages(query_id, page_paths)
+    skip_normalization = source_type == "pdf"
+    normalized_pages = _normalize_query_pages(query_id, page_paths, skip_normalization=skip_normalization)
     page_image_paths = {page["page_index"]: page["normalized_path"] for page in normalized_pages}
     pages = [_detect_page(page, page_image_paths) for page in normalized_pages]
     candidates = _aggregate_candidates(pages)
@@ -1315,6 +1333,7 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
             "retrieval_engine": "layout_signature",
             "image_verification_engine": "siglip_image_category",
             "source_type": source_type,
+            "normalization_skipped": skip_normalization,
             "input_page_count": len(page_paths),
             "converted_page_count": len(page_paths) if source_type == "pdf" else 0,
             "query_page_paths": [str(path) for path in page_paths],
