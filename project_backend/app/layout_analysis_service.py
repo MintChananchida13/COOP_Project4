@@ -1,3 +1,4 @@
+import logging
 import tempfile
 from dataclasses import dataclass
 import os
@@ -8,6 +9,8 @@ import cv2
 import numpy as np
 
 from .model_runtime_client import ModelRuntimeUnavailableError, remote_analyze_layout, remote_detect_text_boxes
+
+logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _PADDLEX_CACHE_HOME = _BACKEND_ROOT / "storage" / "paddlex_cache"
@@ -47,6 +50,14 @@ AUTO_ROI_PARAGRAPH_MIN_X_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_PARAGRAPH_MIN
 AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO = float(os.getenv("AUTO_ROI_PARAGRAPH_LEFT_EDGE_TOLERANCE_RATIO", "0.05"))
 
 AutoRoiMode = Literal["text_line", "paragraph"]
+
+
+def _model_service_url() -> str:
+    return os.getenv("MODEL_SERVICE_URL", "").strip()
+
+
+def _use_remote_runtime() -> bool:
+    return bool(_model_service_url())
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -507,14 +518,22 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_m
     if auto_roi_mode not in {"text_line", "paragraph"}:
         auto_roi_mode = "text_line"
 
-    try:
-        remote_result = remote_analyze_layout(image, expand_text_rois=expand_text_rois, auto_roi_mode=auto_roi_mode)
-        if remote_result is not None:
-            return remote_result
-    except ModelRuntimeUnavailableError as error:
-        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if _use_remote_runtime():
+        logger.info("Using remote TextDetection runtime")
+        try:
+            remote_result = remote_analyze_layout(image, expand_text_rois=expand_text_rois, auto_roi_mode=auto_roi_mode)
+        except ModelRuntimeUnavailableError as error:
+            raise LayoutAnalysisUnavailableError(str(error)) from error
+        except Exception as error:
             raise LayoutAnalysisUnavailableError(str(error)) from error
 
+        if remote_result is None:
+            raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned no result.")
+        if not isinstance(remote_result, dict):
+            raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned an invalid response.")
+        return remote_result
+
+    logger.info("Using local TextDetection")
     height, width = image.shape[:2]
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
         temp_path = temp_file.name
@@ -629,14 +648,22 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_m
 
 
 def detect_text_boxes(image_path: str) -> Dict[str, Any]:
-    try:
-        remote_result = remote_detect_text_boxes(image_path)
-        if remote_result is not None:
-            return remote_result
-    except ModelRuntimeUnavailableError as error:
-        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if _use_remote_runtime():
+        logger.info("Using remote TextDetection runtime")
+        try:
+            remote_result = remote_detect_text_boxes(image_path)
+        except ModelRuntimeUnavailableError as error:
+            raise LayoutAnalysisUnavailableError(str(error)) from error
+        except Exception as error:
             raise LayoutAnalysisUnavailableError(str(error)) from error
 
+        if remote_result is None:
+            raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned no result.")
+        if not isinstance(remote_result, dict):
+            raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned an invalid response.")
+        return remote_result
+
+    logger.info("Using local TextDetection")
     image = cv2.imread(image_path)
     if image is None or image.size == 0:
         raise ValueError("Invalid image for text box detection.")
