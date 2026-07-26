@@ -202,39 +202,41 @@ const cropRoiToImage = (
   return polygonPoints ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.95);
 };
 
-const dataUrlToFile = async (dataUrl: string, filename: string) => {
+async function dataUrlToFile(dataUrl: string, filename: string) {
   const response = await fetch(dataUrl);
   const blob = await response.blob();
   return new File([blob], filename, { type: blob.type || "image/jpeg" });
-};
+}
 
-const blobToDataUrl = (blob: Blob) =>
-  new Promise<string>((resolve, reject) => {
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
     reader.onerror = () => reject(reader.error || new Error("Unable to read image blob"));
     reader.readAsDataURL(blob);
   });
+}
 
-const imageUrlToCanvasSafeSrc = async (src: string) => {
+async function imageUrlToCanvasSafeSrc(src: string) {
   if (!src || src.startsWith("data:") || src.startsWith("blob:")) return src;
   const response = await fetch(src, { mode: "cors" });
   if (!response.ok) throw new Error(`Unable to load extraction image: ${response.status}`);
   return blobToDataUrl(await response.blob());
-};
+}
 
-const backendPreviewSrc = (value?: string | null) => {
+function backendPreviewSrc(value?: string | null) {
   if (!value) return "";
   if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("http")) return value;
   if (value.startsWith("/")) return `${ADMIN_API_BASE_URL}${value}`;
   return value;
-};
+}
 
-const stableNumericId = (value: string) =>
-  Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
+function stableNumericId(value: string) {
+  return Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
+}
 
-const loadImageElement = (src: string) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
+function loadImageElement(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
     const imageObj = new Image();
     if (!src.startsWith("data:") && !src.startsWith("blob:")) {
       imageObj.crossOrigin = "anonymous";
@@ -243,27 +245,28 @@ const loadImageElement = (src: string) =>
     imageObj.onerror = reject;
     imageObj.src = src;
   });
+}
 
-const findDetectionPageCandidate = (detection: DetectionDevResult | null | undefined, templateId: string, pageNumber: number) => {
+function findDetectionPageCandidate(detection: DetectionDevResult | null | undefined, templateId: string, pageNumber: number) {
   const page = detection?.pages?.find((item) => item.pageIndex === pageNumber);
   return (
     page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
     (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null) ||
     null
   );
-};
+}
 
-const candidateFieldRoi = (field: TemplateField, pageCandidate: DetectionCandidate | null) => {
+function candidateFieldRoi(field: TemplateField, pageCandidate: DetectionCandidate | null) {
   void pageCandidate;
   return { roi: field.roi, source: "template_roi" };
-};
+}
 
-const templateFieldsToWorkspaceRois = async (
+async function templateFieldsToWorkspaceRois(
   fields: TemplateField[],
   imageList: string[],
   detection?: DetectionDevResult | null,
   templateId?: string
-) => {
+) {
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
 
   return fields
@@ -315,9 +318,9 @@ const templateFieldsToWorkspaceRois = async (
         roiCoordinateSource: source,
       } satisfies ROI & { pageIndex?: number; roiCoordinateSource?: string };
     });
-};
+}
 
-const buildTemplateCanvasImages = async (sourceImages: string[], detection: DetectionDevResult, templateId: string) => {
+async function buildTemplateCanvasImages(sourceImages: string[], detection: DetectionDevResult, templateId: string) {
   const pages = detection.pages || [];
   return Promise.all(sourceImages.map(async (sourceImage, pageIndex) => {
     const page = pages.find((item) => item.pageIndex === pageIndex + 1);
@@ -333,7 +336,18 @@ const buildTemplateCanvasImages = async (sourceImages: string[], detection: Dete
       return sourceImage;
     }
   }));
-};
+}
+
+function devTemplateFlowLog(message: string, details?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== "production") {
+    console.debug(`[Template detection flow] ${message}`, details || {});
+  }
+}
+
+function contextualTemplateError(context: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown error");
+  return new Error(`${context}: ${message}`, { cause: error });
+}
 
 const downloadTextFile = (filename: string, content: string, mimeType = "application/json") => {
   const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
@@ -682,21 +696,35 @@ function HomeWorkspace() {
     setTemplateDecisionStatus("กำลังเตรียมภาพที่ยืนยันขอบเขตแล้ว");
     setClassificationStatus("กำลังแยกประเภทเอกสารจากภาพที่ยืนยันขอบเขตแล้ว...");
 
+    const firstImage = finalProcessedImages[0];
+    if (!firstImage) {
+      setClassificationStatus("ไม่พบภาพสำหรับแยกประเภทเอกสาร ระบบเปิด Custom OCR ให้ใช้งานต่อ");
+      setTemplateDetectionNotice({
+        title: "ไม่พบภาพสำหรับแยกประเภทเอกสาร",
+        message: "ระบบไม่สามารถเริ่มค้นหา Template ได้ เพราะไม่มีภาพที่ยืนยันขอบเขตแล้ว",
+        detail: "โปรดกลับไปตรวจสอบภาพ หรือใช้งาน Custom OCR ต่อ",
+      });
+      setIsTemplateDecisionOpen(false);
+      setTemplateDecisionStatus("");
+      return;
+    }
+
     try {
-      const firstImage = finalProcessedImages[0];
-      if (!firstImage) {
-        setClassificationStatus("ไม่พบภาพสำหรับแยกประเภทเอกสาร ระบบเปิด Custom OCR ให้ใช้งานต่อ");
-        setTemplateDetectionNotice({
-          title: "ไม่พบภาพสำหรับแยกประเภทเอกสาร",
-          message: "ระบบไม่สามารถเริ่มค้นหา Template ได้ เพราะไม่มีภาพที่ยืนยันขอบเขตแล้ว",
-          detail: "โปรดกลับไปตรวจสอบภาพ หรือใช้งาน Custom OCR ต่อ",
+      setTemplateDecisionStatus("กำลังค้นหา Template ที่ใกล้เคียงที่สุด");
+      let detection: DetectionDevResult;
+      try {
+        const file = await dataUrlToFile(firstImage, "confirmed-document.jpg");
+        detection = await detectTemplateDev(file);
+        devTemplateFlowLog("detection completed", {
+          matched: detection.matched,
+          candidateCount: detection.candidates.length,
+          pageCount: detection.pages.length,
+          bestTemplateId: detection.bestCandidate?.templateId ?? null,
         });
-        return;
+      } catch (error) {
+        throw contextualTemplateError("Template detection mapping failed", error);
       }
 
-      setTemplateDecisionStatus("กำลังค้นหา Template ที่ใกล้เคียงที่สุด");
-      const file = await dataUrlToFile(firstImage, "confirmed-document.jpg");
-      const detection = await detectTemplateDev(file);
       const templateId = detection.bestCandidate?.templateId;
 
       if (!detection.matched || !templateId) {
@@ -711,32 +739,55 @@ function HomeWorkspace() {
 
       setTemplateDecisionStatus("พบ Template แล้ว กำลังโหลดโครงสร้าง ROI");
       setTemplateDetectionNotice(null);
-      const bundle = await fetchTemplateBundle(templateId);
+      let bundle: Awaited<ReturnType<typeof fetchTemplateBundle>>;
+      try {
+        bundle = await fetchTemplateBundle(templateId);
+        devTemplateFlowLog("bundle loaded", {
+          templateId: bundle.template.id,
+          fieldCount: bundle.fields.length,
+          pageCount: bundle.pages.length,
+        });
+      } catch (error) {
+        throw contextualTemplateError("Template bundle loading failed", error);
+      }
+
       setTemplateDecisionStatus("กำลังจัดภาพให้ตรงกับ Template และเตรียมกรอบ OCR");
-      const templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
+      let templateCanvasImages: string[];
+      try {
+        templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
+        devTemplateFlowLog("canvas images prepared", {
+          pageCount: templateCanvasImages.length,
+          replacedCount: templateCanvasImages.filter((src, index) => src !== finalProcessedImages[index]).length,
+        });
+      } catch (error) {
+        throw contextualTemplateError("Template canvas preparation failed", error);
+      }
+
       setImagesList(templateCanvasImages);
       setPreviewUrl(templateCanvasImages[currentIndex] || templateCanvasImages[0] || "");
       setImage(templateCanvasImages[currentIndex] || templateCanvasImages[0] || null);
 
-      const detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId);
-      console.debug("[User OCR Workspace] ROI coordinate check", {
-        templateId,
-        candidate: detection.bestCandidate?.templateName,
-        candidateCoordinateSpace: detection.bestCandidate?.roiCoordinateSpace,
-        extractionImagePreviewUrl: detection.bestCandidate?.extractionImagePreviewUrl,
-        alignedImagePreviewUrl: detection.bestCandidate?.alignedImagePreviewUrl,
-        pageCount: templateCanvasImages.length,
-        firstRoi: detectedRois[0]
-          ? {
-              fieldName: detectedRois[0].fieldName,
-              pageIndex: detectedRois[0].pageIndex,
-              x: detectedRois[0].x,
-              y: detectedRois[0].y,
-              width: detectedRois[0].width,
-              height: detectedRois[0].height,
-            }
-          : null,
-      });
+      let detectedRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[];
+      try {
+        detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId);
+        devTemplateFlowLog("ROIs mapped", {
+          templateId,
+          roiCount: detectedRois.length,
+          firstRoi: detectedRois[0]
+            ? {
+                fieldName: detectedRois[0].fieldName,
+                pageIndex: detectedRois[0].pageIndex,
+                x: detectedRois[0].x,
+                y: detectedRois[0].y,
+                width: detectedRois[0].width,
+                height: detectedRois[0].height,
+              }
+            : null,
+        });
+      } catch (error) {
+        throw contextualTemplateError("Template ROI mapping failed", error);
+      }
+
       setMatchedTemplate({
         id: bundle.template.id,
         name: bundle.template.name,
