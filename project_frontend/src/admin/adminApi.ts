@@ -8,7 +8,8 @@ import {
   TemplateStatus,
 } from "../types/ocr";
 
-export const ADMIN_API_BASE_URL = "http://localhost:8000";
+export const ADMIN_API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "${ADMIN_API_BASE_URL}";
 
 interface ApiTemplateRequestPage {
   id: string;

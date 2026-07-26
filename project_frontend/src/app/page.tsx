@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
@@ -812,7 +812,7 @@ function HomeWorkspace() {
           if (!croppedBase64) return null;
 
           try {
-            const response = await fetch("http://localhost:8000/api/ai/process", {
+            const response = await fetch("${ADMIN_API_BASE_URL}/api/ai/process", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -924,7 +924,7 @@ function HomeWorkspace() {
         const scaleX = img.naturalWidth / renderedWidth;
         const scaleY = img.naturalHeight / renderedHeight;
 
-        const response = await fetch("http://localhost:8000/api/ai/process", {
+        const response = await fetch("${ADMIN_API_BASE_URL}/api/ai/process", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

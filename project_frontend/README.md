@@ -69,3 +69,5 @@ uvicorn main:app
 .\venv\Scripts\activate
 uvicorn model_server:app --host 127.0.0.1 --port 8010  
 
+postgresql://neondb_owner:npg_9KTud6sbUNHQ@ep-damp-credit-az927w30-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+

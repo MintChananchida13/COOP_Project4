@@ -524,7 +524,7 @@ export default function WorkspaceTemplateEditorV2({
     setIsAutoDetecting(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/layout/analyze", {
+      const response = await fetch("${ADMIN_API_BASE_URL}/api/layout/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
