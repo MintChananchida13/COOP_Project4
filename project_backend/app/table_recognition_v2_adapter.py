@@ -22,6 +22,7 @@ _TABLE_MODEL: Any = None
 _TABLE_MODEL_KIND = ""
 _TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
 _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MODEL_NAME", "th_PP-OCRv5_mobile_rec")
+_TABLE_DEVICE = os.getenv("PADDLE_TABLE_DEVICE", "cpu").strip() or "cpu"
 
 
 def _model_service_url() -> str:
@@ -34,7 +35,7 @@ def _use_remote_runtime() -> bool:
 
 def _common_model_kwargs() -> Dict[str, Any]:
     return {
-        "device": "cpu",
+        "device": _TABLE_DEVICE,
         "enable_mkldnn": False,
         "enable_cinn": False,
         "use_tensorrt": False,
@@ -44,6 +45,7 @@ def _common_model_kwargs() -> Dict[str, Any]:
 def _load_table_model() -> Any:
     global _TABLE_MODEL, _TABLE_MODEL_KIND
     if _TABLE_MODEL is not None:
+        logger.info("Reusing cached TableRecognitionPipelineV2 (device=%s)", _TABLE_DEVICE)
         return _TABLE_MODEL
 
     try:
@@ -54,6 +56,7 @@ def _load_table_model() -> Any:
         ) from import_error
 
     try:
+        logger.info("Loading TableRecognitionPipelineV2 (device=%s)", _TABLE_DEVICE)
         _TABLE_MODEL = TableRecognitionPipelineV2(
             wired_table_structure_recognition_model_name=_TABLE_MODEL_NAME,
             wireless_table_structure_recognition_model_name=_TABLE_MODEL_NAME,
@@ -78,7 +81,7 @@ def table_recognition_runtime_summary() -> Dict[str, Any]:
         "enabled": True,
         "structure_model": _TABLE_MODEL_NAME,
         "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
-        "device": str(_common_model_kwargs().get("device") or "cpu"),
+        "device": _TABLE_DEVICE,
     }
 
 
