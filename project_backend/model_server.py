@@ -19,7 +19,11 @@ from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_
 from app.image_verification_category_service import DEFAULT_IMAGE_VERIFICATION_CATEGORIES
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.siglip_image_verification_adapter import verify_image_category
-from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
+from app.table_recognition_v2_adapter import (
+    TableRecognitionV2UnavailableError,
+    recognize_table_v2_local,
+    table_recognition_runtime_summary,
+)
 
 
 class ImagePayload(BaseModel):
@@ -107,6 +111,7 @@ def _warmup() -> Dict[str, Any]:
     finally:
         Path(temp_path).unlink(missing_ok=True)
     recognition = run_paddle_thai_ocr(sample[45:170, 30:500])
+    table_recognition = table_recognition_runtime_summary()
     siglip_summary: Dict[str, Any] = {"enabled": False}
     if os.getenv("SIGLIP_IMAGE_VERIFICATION_WARMUP", "true").strip().lower() not in {"0", "false", "no", "off"}:
         temp_path = _data_url_to_temp_image("data:image/png;base64," + base64.b64encode(cv2.imencode(".png", sample)[1].tobytes()).decode("ascii"))
@@ -127,6 +132,7 @@ def _warmup() -> Dict[str, Any]:
         "layout_regions": len(layout.get("regions") or []),
         "text_boxes": len(text_boxes.get("regions") or []),
         "ocr_model": recognition.get("model"),
+        "table_recognition": table_recognition,
         "image_verification": siglip_summary,
         "elapsed_seconds": round(time.perf_counter() - started, 2),
     }
@@ -158,7 +164,7 @@ def health() -> Dict[str, Any]:
         "layout_model": "PP-DocLayoutV3",
         "text_detection_model": "PP-OCRv5_server_det",
         "ocr_model": os.getenv("PADDLE_THAI_OCR_MODEL_NAME", "th_PP-OCRv5_mobile_rec"),
-        "table_model": os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus"),
+        "table_model": os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus"),
         "image_verification_model": "google/siglip-so400m-patch14-384",
     }
 
@@ -232,7 +238,7 @@ def runtime_recognize_batch(payload: ImagesPayload) -> Dict[str, Any]:
 def runtime_recognize_table_v2(payload: ImagePayload) -> Dict[str, Any]:
     try:
         _, opencv_img = _decode_image(payload.image)
-        return {"success": True, "data": _json_safe(recognize_table_v2(opencv_img))}
+        return {"success": True, "data": _json_safe(recognize_table_v2_local(opencv_img))}
     except TableRecognitionV2UnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error))
     except Exception as error:

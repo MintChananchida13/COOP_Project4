@@ -1,5 +1,6 @@
 import os
 import tempfile
+import logging
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,10 +15,20 @@ class TableRecognitionV2UnavailableError(RuntimeError):
     pass
 
 
+logger = logging.getLogger(__name__)
+
 _TABLE_MODEL: Any = None
 _TABLE_MODEL_KIND = ""
-_TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
+_TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
 _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MODEL_NAME", "th_PP-OCRv5_mobile_rec")
+
+
+def _model_service_url() -> str:
+    return os.getenv("MODEL_SERVICE_URL", "").strip()
+
+
+def _use_remote_runtime() -> bool:
+    return bool(_model_service_url())
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -35,7 +46,7 @@ def _load_table_model() -> Any:
         return _TABLE_MODEL
 
     try:
-        from paddleocr import TableRecognitionPipelineV2, TableStructureRecognition  # type: ignore
+        from paddleocr import TableRecognitionPipelineV2  # type: ignore
     except ImportError as import_error:
         raise TableRecognitionV2UnavailableError(
             "table_recognition_v2 requires paddleocr 3.x with TableRecognitionPipelineV2 installed."
@@ -54,20 +65,20 @@ def _load_table_model() -> Any:
         )
         _TABLE_MODEL_KIND = "pipeline_v2"
         return _TABLE_MODEL
-    except Exception:
-        _TABLE_MODEL = None
-
-    try:
-        _TABLE_MODEL = TableStructureRecognition(
-            model_name=_TABLE_MODEL_NAME,
-            **_common_model_kwargs(),
-        )
-        _TABLE_MODEL_KIND = "structure_recognition"
-        return _TABLE_MODEL
     except Exception as init_error:
         raise TableRecognitionV2UnavailableError(
             f"Failed to initialize PaddleOCR table_recognition_v2 model {_TABLE_MODEL_NAME}: {init_error}"
         ) from init_error
+
+
+def table_recognition_runtime_summary() -> Dict[str, Any]:
+    _load_table_model()
+    return {
+        "enabled": True,
+        "structure_model": _TABLE_MODEL_NAME,
+        "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
+        "device": str(_common_model_kwargs().get("device") or "cpu"),
+    }
 
 
 def _as_dict(value: Any) -> Optional[Dict[str, Any]]:
@@ -230,15 +241,7 @@ def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
     return []
 
 
-def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
-    remote_result = None
-    try:
-        remote_result = remote_recognize_table(image)
-    except ModelRuntimeUnavailableError:
-        remote_result = None
-    if remote_result:
-        return remote_result
-
+def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     if image is None or image.size == 0:
         return {
             "text": "",
@@ -251,6 +254,7 @@ def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
             "table_debug": {"status": "empty_image"},
         }
 
+    logger.info("Using local Table Recognition runtime")
     model = _load_table_model()
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
@@ -301,3 +305,22 @@ def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
             "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
         },
     }
+
+
+def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
+    if _use_remote_runtime():
+        logger.info("Using remote Table Recognition runtime")
+        try:
+            remote_result = remote_recognize_table(image)
+        except ModelRuntimeUnavailableError as error:
+            raise TableRecognitionV2UnavailableError(str(error)) from error
+        except Exception as error:
+            raise TableRecognitionV2UnavailableError(str(error)) from error
+
+        if remote_result is None:
+            raise TableRecognitionV2UnavailableError("Remote Table Recognition runtime returned no result.")
+        if not isinstance(remote_result, dict):
+            raise TableRecognitionV2UnavailableError("Remote Table Recognition runtime returned an invalid response.")
+        return remote_result
+
+    return recognize_table_v2_local(image)
