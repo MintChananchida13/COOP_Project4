@@ -1401,7 +1401,7 @@ class VerificationService:
                         "text_similarity_score": None,
                         "ocr_confidence": None,
                         "field_score": 0.0,
-                        "verification_threshold": _siglip_image_threshold(field.get("image_category")),
+                        "verification_threshold": category_info.get("match_threshold", 0.0),
                         "margin_threshold": category_info.get("margin_threshold", 0.0),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
@@ -1432,7 +1432,53 @@ class VerificationService:
                 continue
 
             if anchor_type == "image" and image_path:
-                image_match = self._score_image_anchor(field, image_path)
+                try:
+                    image_match = self._score_image_anchor(field, image_path)
+                except Exception as error:
+                    category_values = _image_category_values(field.get("image_category"))
+                    category_value = category_values[0] if category_values else ""
+                    try:
+                        category_info = _image_category_api(category_value)
+                        category_label = _image_category_display(category_values)
+                    except Exception:
+                        category_info = {"label": category_value, "prompt": "", "match_threshold": 0.0, "margin_threshold": 0.0}
+                        category_label = ", ".join(category_values)
+                    fallback_crop_path = _storage_root() / "verification_query_anchor_crops" / field["template_id"] / f"{field['id']}_failed_{uuid4().hex[:8]}.png"
+                    fallback_crop = _crop_anchor_roi(image_path, field["roi"], fallback_crop_path, field.get("roi_padding") or 6)
+                    image_match = {
+                        "score": 0.0,
+                        "field_score": 0.0,
+                        "evidence_score": 0.0,
+                        "passed": False,
+                        "status": "error",
+                        "failure_reason": f"image_verification_error: {error}",
+                        "verification_threshold": category_info.get("match_threshold", 0.0),
+                        "margin_threshold": category_info.get("margin_threshold", 0.0),
+                        "reference_crop_preview_data_url": None,
+                        "current_crop_preview_data_url": _image_path_to_data_url(fallback_crop),
+                        "siglip_similarity_score": 0.0,
+                        "image_category_score": 0.0,
+                        "raw_logit": 0.0,
+                        "raw_pair_score": 0.0,
+                        "relative_percentage": 0.0,
+                        "image_category": ", ".join(category_values) or field.get("image_category"),
+                        "image_category_label": category_label or category_info.get("label") or field.get("image_category"),
+                        "image_category_prompt": category_info.get("prompt") or "",
+                        "predicted_image_category": "",
+                        "predicted_image_category_label": "",
+                        "predicted_image_category_prompt": "",
+                        "siglip_target_rank": 0,
+                        "siglip_score_margin": 0.0,
+                        "siglip_labels": [],
+                        "siglip_ui_percentages": [],
+                        "error": str(error),
+                    }
+                image_verification_threshold = image_match.get("verification_threshold")
+                if image_verification_threshold is None:
+                    try:
+                        image_verification_threshold = _siglip_image_threshold(image_match.get("image_category"))
+                    except Exception:
+                        image_verification_threshold = 0.0
                 checked_fields.append(
                     {
                         "field_id": field["id"],
@@ -1449,7 +1495,7 @@ class VerificationService:
                         "text_similarity_score": None,
                         "ocr_confidence": None,
                         "field_score": image_match["score"],
-                        "verification_threshold": image_match.get("verification_threshold", _siglip_image_threshold(image_match.get("image_category"))),
+                        "verification_threshold": image_verification_threshold,
                         "margin_threshold": image_match.get("margin_threshold"),
                         "match_type": "image_feature",
                         "required": bool(field["required_for_verification"]),
@@ -1482,7 +1528,7 @@ class VerificationService:
                         "device": image_match.get("device"),
                         "model_version": image_match.get("model_version"),
                         "scoring_version": image_match.get("scoring_version"),
-                        "error": None,
+                        "error": image_match.get("error"),
                     }
                 )
                 continue
@@ -2836,6 +2882,7 @@ class AdminTemplateService:
                     }
                 )
             else:
+                category_value = categories[0] if categories else ""
                 checked_fields.append(
                     {
                         **checked,
@@ -2848,9 +2895,9 @@ class AdminTemplateService:
                         "current_crop_preview_data_url": _image_path_to_data_url(query_crop),
                         "siglip_similarity_score": 0.0,
                         "image_category_score": 0.0,
-                        "image_category": category,
-                        "image_category_label": _image_category_api(category).get("label") or category,
-                        "image_category_prompt": _image_category_api(category).get("prompt") or "",
+                        "image_category": category_value,
+                        "image_category_label": _image_category_api(category_value).get("label") or category_value,
+                        "image_category_prompt": _image_category_api(category_value).get("prompt") or "",
                     }
                 )
 
