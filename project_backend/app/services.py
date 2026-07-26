@@ -3174,16 +3174,22 @@ class AdminTemplateService:
                 results.append(result)
                 continue
             try:
+                crop_path = _storage_root() / "template_extraction_test_crops" / template_id / f"{field['id']}.png"
+                cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 0)
+                result.update(
+                    {
+                        "crop_path": cropped,
+                        "current_crop_preview_data_url": _image_path_to_data_url(cropped),
+                        "current_crop_preview_url": None,
+                    }
+                )
                 if extraction_method == "extract_image" or data_type == "image":
-                    crop_path = _storage_root() / "template_extraction_test_crops" / template_id / f"{field['id']}.png"
-                    cropped = _crop_anchor_roi(image_path, field["roi"], crop_path, field.get("roi_padding") or 0)
                     result.update(
                         {
                             "passed": bool(cropped),
                             "status": "passed" if cropped else "failed",
                             "ocr_text": "(image crop)",
                             "confidence": 1.0 if cropped else 0.0,
-                            "crop_path": cropped,
                             "failure_reason": None if cropped else "roi_crop_failed",
                         }
                     )

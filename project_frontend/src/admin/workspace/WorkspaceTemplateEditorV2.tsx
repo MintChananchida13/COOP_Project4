@@ -130,6 +130,18 @@ const isTableTestItem = (item: TemplateStepTestItem) =>
   item.extractionMethod === "ocr_table" ||
   Boolean(item.tableRows?.length || item.tableHtml || getTableRowsFromTestItem(item));
 
+const isImageTestItem = (item: TemplateStepTestItem) =>
+  item.dataType === "image" ||
+  item.extractionMethod === "extract_image" ||
+  item.anchorType === "image" ||
+  Boolean(item.imageCategory || item.imageCategoryLabel || item.predictedImageCategoryLabel);
+
+const testItemTypeLabel = (item: TemplateStepTestItem) => {
+  if (isTableTestItem(item)) return "Table";
+  if (isImageTestItem(item)) return "Image";
+  return "Text";
+};
+
 const getVerificationItemScore = (item: TemplateStepTestItem) =>
   item.anchorType === "image"
     ? item.evidenceScore ?? item.fieldScore ?? item.score ?? 0
@@ -656,6 +668,51 @@ export default function WorkspaceTemplateEditorV2({
     );
   };
 
+  const renderRoiCropPreview = (item: TemplateStepTestItem) => {
+    const previewSrc =
+      item.cropPreviewDataUrl ||
+      item.currentCropPreviewDataUrl ||
+      item.cropPreviewUrl ||
+      item.currentCropPreviewUrl;
+    return (
+      <div className="rounded-lg border border-slate-100 bg-white p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[9px] font-black uppercase text-slate-400">ROI Preview</span>
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+            {testItemTypeLabel(item)}
+          </span>
+        </div>
+        {previewSrc ? (
+          <img src={previewSrc} alt="" className="mt-2 h-28 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+        ) : (
+          <div className="mt-2 flex h-28 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
+            ไม่มีภาพ ROI
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderImageFieldPreview = (item: TemplateStepTestItem) => (
+    <div className="rounded-lg border border-slate-100 bg-white p-2">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <div className="text-[9px] font-black uppercase text-slate-400">Image Type</div>
+          <div className="mt-1 text-sm font-black text-slate-800">{item.imageCategoryLabel || item.imageCategory || "Image ROI"}</div>
+        </div>
+        <div>
+          <div className="text-[9px] font-black uppercase text-slate-400">Preview Status</div>
+          <div className="mt-1 text-sm font-black text-slate-800">{item.passed ? "Crop พร้อมใช้งาน" : item.failureReason || "ยังไม่พร้อม"}</div>
+        </div>
+      </div>
+      {item.predictedImageCategoryLabel && (
+        <div className="mt-2 rounded-lg bg-sky-50 px-2 py-1.5 text-[10px] font-bold text-sky-700">
+          Predicted: {item.predictedImageCategoryLabel}
+        </div>
+      )}
+    </div>
+  );
+
   const renderTestResults = (items: TemplateStepTestResult["fields"] | TemplateStepTestResult["anchors"]) => (
     <div className="mt-4 space-y-3">
       {items && items.length > 0 && (
@@ -669,44 +726,29 @@ export default function WorkspaceTemplateEditorV2({
                 <div className="min-w-0">
                   <div className="truncate font-black text-slate-800">{item.displayLabel || item.fieldName || "Field"}</div>
                   <div className="mt-0.5 text-[9px] font-bold uppercase text-slate-400">
-                    Page {item.pageNumber ?? "N/A"} {item.anchorType === "image" ? "Image Feature" : item.anchorType === "text" ? "OCR Text" : ""}
+                    Page {item.pageNumber ?? "N/A"} · {testItemTypeLabel(item)} {item.anchorType === "image" ? "Feature" : item.anchorType === "text" ? "OCR" : ""}
                   </div>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${item.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
                   {item.passed ? "PASS" : "FAIL"}
                 </span>
               </div>
-              {item.anchorType === "image" && (
-                <div className="mt-3 grid gap-3 sm:grid-cols-[160px_1fr]">
-                  <div className="rounded-lg border border-slate-100 bg-white p-2">
-                    <div className="text-[9px] font-black uppercase text-slate-400">Current Crop</div>
-                    {item.currentCropPreviewDataUrl || item.currentCropPreviewUrl ? (
-                      <img src={item.currentCropPreviewDataUrl || item.currentCropPreviewUrl || ""} alt="" className="mt-2 h-24 w-full rounded-md object-contain" />
-                    ) : (
-                      <p className="mt-2 text-[10px] font-semibold text-slate-400">No preview</p>
-                    )}
-                  </div>
-                  <div className="rounded-lg border border-slate-100 bg-white p-2">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <div className="text-[9px] font-black uppercase text-slate-400">Expected</div>
-                        <div className="mt-1 text-sm font-black text-slate-800">{item.imageCategoryLabel || item.expectedText || "N/A"}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] font-black uppercase text-slate-400">SigLIP Prediction</div>
-                        <div className="mt-1 text-sm font-black text-slate-800">{item.predictedImageCategoryLabel || item.actualText || "N/A"}</div>
+              <div className={`mt-3 grid gap-3 ${isTableTestItem(item) ? "lg:grid-cols-[220px_1fr]" : "sm:grid-cols-[180px_1fr]"}`}>
+                {renderRoiCropPreview(item)}
+                <div className="min-w-0">
+                  {isImageTestItem(item) && renderImageFieldPreview(item)}
+                  {isTableTestItem(item) && renderTablePreview(item)}
+                  {!isTableTestItem(item) && !isImageTestItem(item) && (item.ocrText || item.actualText || item.expectedText) && (
+                    <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
+                      <div className="text-[9px] font-black uppercase text-slate-400">Text Result</div>
+                      <div className="mt-2 space-y-1">
+                        {item.expectedText && <p>Expected: {item.expectedText}</p>}
+                        {(item.ocrText || item.actualText) && <p>Result: {item.ocrText || item.actualText}</p>}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
-              )}
-              {isTableTestItem(item) && renderTablePreview(item)}
-              {!isTableTestItem(item) && item.anchorType !== "image" && (item.ocrText || item.actualText || item.expectedText) && (
-                <div className="mt-2 space-y-1 font-semibold text-slate-600">
-                  {item.expectedText && <p>Expected: {item.expectedText}</p>}
-                  {(item.ocrText || item.actualText) && <p>Result: {item.ocrText || item.actualText}</p>}
-                </div>
-              )}
+              </div>
               <div className="mt-2 flex flex-wrap gap-1 text-[9px] font-black uppercase">
                 {item.anchorType !== "image" && item.confidence !== null && item.confidence !== undefined && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">Conf {item.confidence.toFixed(2)}</span>

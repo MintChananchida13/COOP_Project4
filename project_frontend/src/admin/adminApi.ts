@@ -460,6 +460,8 @@ export interface TemplateStepTestItem {
   currentCropPreviewDataUrl?: string | null;
   referenceCropPreviewUrl?: string | null;
   currentCropPreviewUrl?: string | null;
+  cropPreviewDataUrl?: string | null;
+  cropPreviewUrl?: string | null;
 }
 
 export interface ImageVerificationCategory {
@@ -1453,6 +1455,14 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
     currentCropPreviewDataUrl: (item.current_crop_preview_data_url as string | null | undefined) ?? null,
     referenceCropPreviewUrl: (item.reference_crop_preview_url as string | null | undefined) ?? null,
     currentCropPreviewUrl: (item.current_crop_preview_url as string | null | undefined) ?? null,
+    cropPreviewDataUrl:
+      (item.crop_preview_data_url as string | null | undefined) ??
+      (item.current_crop_preview_data_url as string | null | undefined) ??
+      null,
+    cropPreviewUrl:
+      (item.crop_preview_url as string | null | undefined) ??
+      (item.current_crop_preview_url as string | null | undefined) ??
+      null,
   };
 }
 
