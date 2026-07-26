@@ -54,6 +54,8 @@ interface AutoDetectedTemplateField {
   defaults: Partial<TemplateField>;
 }
 
+type TemplateBundle = { template: Template; pages: TemplatePage[]; fields: TemplateField[]; ignoreRegions: IgnoreRegion[] };
+
 const defaultRoi = (pageNumber: number): RoiRatio => ({
   pageNumber,
   xRatio: 0.1,
@@ -90,8 +92,9 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [editorStage, setEditorStage] = useState<AdminEditorStage>("adjust");
   const [adjustPageConfigs, setAdjustPageConfigs] = useState<AdminAdjustPageConfig[]>([]);
   const localFieldSequenceRef = useRef(0);
+  const fieldUpdateSequenceRef = useRef(new Map<string, number>());
 
-  const applyBundle = (bundle: { template: Template; pages: TemplatePage[]; fields: TemplateField[]; ignoreRegions: IgnoreRegion[] }) => {
+  const applyBundle = (bundle: TemplateBundle) => {
     setSelectedTemplate(bundle.template);
     setSelectedTemplatePages(bundle.pages);
     setSelectedTemplateFields(bundle.fields);
@@ -328,6 +331,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   };
 
   const handleUpdateField = (fieldId: string, patch: Partial<TemplateField>) => {
+    const requestSequence = (fieldUpdateSequenceRef.current.get(fieldId) || 0) + 1;
+    fieldUpdateSequenceRef.current.set(fieldId, requestSequence);
     setSelectedTemplateFields((prev) => prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)));
     if (!canPersistToBackend || fieldId.startsWith("local_field_")) {
       setLocalOnly("Field saved locally.");
@@ -336,7 +341,14 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
     updateTemplateFieldApi(templateId, fieldId, patch)
       .then((bundle) => {
-        applyBundle(bundle);
+        if (fieldUpdateSequenceRef.current.get(fieldId) !== requestSequence) return;
+        const savedField = bundle.fields.find((field) => field.id === fieldId);
+        if (savedField) {
+          setSelectedTemplateFields((prev) =>
+            prev.map((field) => (field.id === fieldId ? { ...field, ...savedField, ...patch } : field))
+          );
+        }
+        setSelectedTemplate(bundle.template);
         setSaved("Field saved.");
       })
       .catch((error) => {
