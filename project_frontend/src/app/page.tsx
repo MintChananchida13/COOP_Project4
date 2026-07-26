@@ -9,7 +9,7 @@ import WorkspaceZone from "../user/components/WorkspaceZone";
 import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWorkspaceZone";
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
-import { ROI, OCRResult, TemplateField } from "../types/ocr";
+import { ROI, OCRResult, StructuredTableResult, TemplateField } from "../types/ocr";
 import {
   ADMIN_API_BASE_URL,
   detectTemplateDev,
@@ -522,22 +522,71 @@ const tableRowsToMarkdown = (rows: string[][]) => {
   return [formatRow(safeHeader), formatRow(Array(columnCount).fill("---")), ...bodyRows.map(formatRow)].join("\n");
 };
 
-const parseHtmlTableRows = (value?: string): string[][] | null => {
+const parseHtmlTableRows = (value?: string): string[][] | null => parseHtmlTableStructured(value)?.rows || null;
+
+const parseHtmlTableStructured = (value?: string): StructuredTableResult | null => {
   if (!value || !value.toLowerCase().includes("<table")) return null;
   try {
     const doc = new DOMParser().parseFromString(value, "text/html");
-    const rows = Array.from(doc.querySelectorAll("tr")).map((row) => {
-      const cells: string[] = [];
+    const rows: string[][] = [];
+    const cells: NonNullable<StructuredTableResult["cells"]> = [];
+    const occupied = new Set<string>();
+    const rowElements = Array.from(doc.querySelectorAll("tr"));
+
+    rowElements.forEach((row, rowIndex) => {
+      rows[rowIndex] = rows[rowIndex] || [];
+      let colIndex = 0;
       Array.from(row.querySelectorAll("th,td")).forEach((cell) => {
+        while (occupied.has(`${rowIndex}:${colIndex}`)) colIndex += 1;
         const text = (cell.textContent || "").replace(/\s+/g, " ").trim();
-        const span = Math.max(1, Number(cell.getAttribute("colspan") || 1));
-        cells.push(text);
-        for (let index = 1; index < span; index += 1) cells.push("");
+        const colSpan = Math.max(1, Number(cell.getAttribute("colspan") || 1));
+        const rowSpan = Math.max(1, Number(cell.getAttribute("rowspan") || 1));
+        rows[rowIndex][colIndex] = text;
+        cells.push({
+          row: rowIndex,
+          col: colIndex,
+          text,
+          rowSpan,
+          colSpan,
+          ocrText: text,
+          groundTruth: text,
+          hidden: false,
+        });
+
+        for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+          const targetRow = rowIndex + rowOffset;
+          rows[targetRow] = rows[targetRow] || [];
+          for (let colOffset = 0; colOffset < colSpan; colOffset += 1) {
+            const targetCol = colIndex + colOffset;
+            rows[targetRow][targetCol] = rows[targetRow][targetCol] ?? "";
+            occupied.add(`${targetRow}:${targetCol}`);
+            if (rowOffset !== 0 || colOffset !== 0) {
+              cells.push({
+                row: targetRow,
+                col: targetCol,
+                text: "",
+                rowSpan: 1,
+                colSpan: 1,
+                ocrText: "",
+                groundTruth: "",
+                hidden: true,
+              });
+            }
+          }
+        }
+        colIndex += colSpan;
       });
-      return cells;
     });
-    const usefulRows = rows.filter((row) => row.some((cell) => cell.trim()));
-    return usefulRows.length > 0 ? usefulRows : rows.filter((row) => row.length > 0);
+
+    const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell || "").trim()));
+    const usefulRows = nonEmptyRows.length > 0 ? nonEmptyRows : rows.filter((row) => row.length > 0);
+    if (usefulRows.length === 0) return null;
+    const columnCount = Math.max(...usefulRows.map((row) => row.length), 1);
+    return {
+      rows: usefulRows.map((row) => [...row.map((cell) => String(cell ?? "")), ...Array(columnCount - row.length).fill("")]),
+      cells,
+      headerRowCount: Math.max(1, doc.querySelectorAll("thead tr").length || 1),
+    };
   } catch {
     return null;
   }
@@ -886,9 +935,16 @@ function HomeWorkspace() {
             const aiData = await response.json();
             if (aiData.success && aiData.extracted_data.length > 0) {
               const resItem = aiData.extracted_data[0];
+              const parsedHtmlStructured = parseHtmlTableStructured(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+              const responseStructured =
+                resItem.table_structured && typeof resItem.table_structured === "object"
+                  ? (resItem.table_structured as StructuredTableResult)
+                  : resItem.tableStructured && typeof resItem.tableStructured === "object"
+                    ? (resItem.tableStructured as StructuredTableResult)
+                    : parsedHtmlStructured || undefined;
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
-                : parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+                : responseStructured?.rows || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
               return {
@@ -907,12 +963,7 @@ function HomeWorkspace() {
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
                 points: roi.points,
                 tableRows: rawTableRows || undefined,
-                tableStructured:
-                  resItem.table_structured && typeof resItem.table_structured === "object"
-                    ? resItem.table_structured
-                    : resItem.tableStructured && typeof resItem.tableStructured === "object"
-                      ? resItem.tableStructured
-                      : undefined,
+                tableStructured: responseStructured,
                 tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
                 tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
               };

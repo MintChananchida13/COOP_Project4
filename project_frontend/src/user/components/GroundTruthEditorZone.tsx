@@ -114,26 +114,57 @@ const parseTableText = (value: string): string[][] | null => {
   return parseJsonTable(trimmed) || parseMarkdownTable(trimmed) || parsePlainTextTable(trimmed);
 };
 
-const parseHtmlTable = (value?: string): string[][] | null => {
+const parseHtmlTableStructured = (value?: string): StructuredTableResult | null => {
   if (!value || !value.toLowerCase().includes("<table")) return null;
   try {
     const doc = new DOMParser().parseFromString(value, "text/html");
-    const rows = Array.from(doc.querySelectorAll("tr")).map((row) => {
-      const cells: string[] = [];
+    const rows: string[][] = [];
+    const cells: NonNullable<StructuredTableResult["cells"]> = [];
+    const occupied = new Set<string>();
+    const rowElements = Array.from(doc.querySelectorAll("tr"));
+
+    rowElements.forEach((row, rowIndex) => {
+      rows[rowIndex] = rows[rowIndex] || [];
+      let colIndex = 0;
       Array.from(row.querySelectorAll("th,td")).forEach((cell) => {
+        while (occupied.has(`${rowIndex}:${colIndex}`)) colIndex += 1;
         const text = (cell.textContent || "").replace(/\s+/g, " ").trim();
-        const span = Math.max(1, Number(cell.getAttribute("colspan") || 1));
-        cells.push(text);
-        for (let index = 1; index < span; index += 1) cells.push("");
+        const colSpan = Math.max(1, Number(cell.getAttribute("colspan") || 1));
+        const rowSpan = Math.max(1, Number(cell.getAttribute("rowspan") || 1));
+        rows[rowIndex][colIndex] = text;
+        cells.push({ row: rowIndex, col: colIndex, text, rowSpan, colSpan, ocrText: text, groundTruth: text, hidden: false });
+
+        for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+          const targetRow = rowIndex + rowOffset;
+          rows[targetRow] = rows[targetRow] || [];
+          for (let colOffset = 0; colOffset < colSpan; colOffset += 1) {
+            const targetCol = colIndex + colOffset;
+            rows[targetRow][targetCol] = rows[targetRow][targetCol] ?? "";
+            occupied.add(`${targetRow}:${targetCol}`);
+            if (rowOffset !== 0 || colOffset !== 0) {
+              cells.push({ row: targetRow, col: targetCol, text: "", rowSpan: 1, colSpan: 1, ocrText: "", groundTruth: "", hidden: true });
+            }
+          }
+        }
+        colIndex += colSpan;
       });
-      return cells;
     });
-    const usefulRows = rows.filter((row) => row.some((cell) => cell.trim()));
-    return usefulRows.length > 0 ? usefulRows : rows.filter((row) => row.length > 0);
+
+    const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell || "").trim()));
+    const usefulRows = nonEmptyRows.length > 0 ? nonEmptyRows : rows.filter((row) => row.length > 0);
+    if (usefulRows.length === 0) return null;
+    const columnCount = Math.max(...usefulRows.map((row) => row.length), 1);
+    return {
+      rows: usefulRows.map((row) => [...row.map((cell) => String(cell ?? "")), ...Array(columnCount - row.length).fill("")]),
+      cells,
+      headerRowCount: Math.max(1, doc.querySelectorAll("thead tr").length || 1),
+    };
   } catch {
     return null;
   }
 };
+
+const parseHtmlTable = (value?: string): string[][] | null => parseHtmlTableStructured(value)?.rows || null;
 
 const normalizeTableRows = (rows?: unknown): string[][] | null => {
   if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -158,7 +189,10 @@ const tableRowsToMarkdown = (rows: string[][]): string => {
 };
 
 const tableRowsFromResult = (result: OCRResult & { pageIndex?: number }, value?: string): string[][] | null =>
-  normalizeTableRows(result.tableRows) || parseHtmlTable(result.tableHtml) || parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
+  normalizeTableRows(result.tableStructured?.rows) ||
+  normalizeTableRows(result.tableRows) ||
+  parseHtmlTable(result.tableHtml) ||
+  parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
 
 type TableSelection = {
   startRow: number;
@@ -1659,7 +1693,7 @@ export default function GroundTruthEditorZone({
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         const rawTableRows = tableRowsFromResult(res, getRawOcrText(res));
-                        const editedTableRows = normalizeTableRows(res.tableRows) || normalizeTableRows(res.tableStructured?.rows) || parseTableText(res.extractedText) || rawTableRows;
+                        const editedTableRows = normalizeTableRows(res.tableStructured?.rows) || normalizeTableRows(res.tableRows) || parseTableText(res.extractedText) || rawTableRows;
                         const fallbackStructured = editedTableRows
                           ? structuredTableFromSnapshot({ rows: editedTableRows, mergedCells: cloneMergedCells(res.tableMergedCells), columnWidths: res.tableStructured?.colWidths || [], headerRowCount: res.tableStructured?.headerRowCount ?? 1 }, res.tableStructured)
                           : null;

@@ -21,6 +21,7 @@ module.exports.__flowTest = {
   dataUrlToFile,
   buildTemplateCanvasImages,
   templateFieldsToWorkspaceRois,
+  parseHtmlTableStructured,
 };
 `;
 
@@ -152,6 +153,33 @@ class TestImage {
 }
 
 global.Image = TestImage;
+global.DOMParser = class DOMParser {
+  parseFromString(html) {
+    const rowMatches = [...String(html).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
+    const rows = rowMatches.map((rowMatch) => {
+      const cellMatches = [...rowMatch[1].matchAll(/<(td|th)([^>]*)>([\s\S]*?)<\/\1>/gi)];
+      return {
+        querySelectorAll(selector) {
+          if (selector !== "th,td") return [];
+          return cellMatches.map((cellMatch) => ({
+            textContent: cellMatch[3].replace(/<[^>]+>/g, ""),
+            getAttribute(name) {
+              const attrMatch = cellMatch[2].match(new RegExp(`${name}=['"]?([^'">\\s]+)`, "i"));
+              return attrMatch ? attrMatch[1] : null;
+            },
+          }));
+        },
+      };
+    });
+    return {
+      querySelectorAll(selector) {
+        if (selector === "tr") return rows;
+        if (selector === "thead tr") return [];
+        return [];
+      },
+    };
+  }
+};
 global.fetch = async (url) => {
   if (String(url).startsWith("data:")) {
     return {
@@ -187,7 +215,7 @@ testModule.require = (request) => {
 testModule._compile(compiled, sourcePath);
 
 (async () => {
-  const { dataUrlToFile, buildTemplateCanvasImages, templateFieldsToWorkspaceRois } = testModule.exports.__flowTest;
+  const { dataUrlToFile, buildTemplateCanvasImages, templateFieldsToWorkspaceRois, parseHtmlTableStructured } = testModule.exports.__flowTest;
   const sourceImages = ["data:image/jpeg;base64,c291cmNl"];
 
   const file = await dataUrlToFile(sourceImages[0], "confirmed-document.jpg");
@@ -215,6 +243,17 @@ testModule._compile(compiled, sourcePath);
     decisionReason: null,
     alignmentStatus: null,
   });
+
+  const structuredTable = parseHtmlTableStructured(
+    "<table><tr><th rowspan='2'>A</th><th colspan='2'>B</th></tr><tr><td>C</td><td>D</td></tr></table>"
+  );
+  assert.equal(structuredTable.cells.find((cell) => cell.row === 0 && cell.col === 0).rowSpan, 2);
+  assert.equal(structuredTable.cells.find((cell) => cell.row === 0 && cell.col === 1).colSpan, 2);
+  assert.equal(structuredTable.cells.find((cell) => cell.row === 1 && cell.col === 0).hidden, true);
+  assert.deepEqual(structuredTable.rows, [
+    ["A", "B", ""],
+    ["", "C", "D"],
+  ]);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
