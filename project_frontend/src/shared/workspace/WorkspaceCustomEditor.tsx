@@ -758,7 +758,7 @@ export default function WorkspaceCustomEditor({
 
     try {
       const pagesToAnalyze = imagesList.length > 0 ? imagesList : [previewUrl];
-      const response = await fetch("${ADMIN_API_BASE_URL}/api/layout/analyze", {
+      const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

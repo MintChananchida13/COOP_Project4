@@ -15,6 +15,7 @@ import {
   testTemplateExtractionFields,
   testTemplateVerificationAnchors,
   updateImageVerificationCategory,
+  ADMIN_API_BASE_URL,
 } from "../adminApi";
 import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
 
@@ -524,7 +525,7 @@ export default function WorkspaceTemplateEditorV2({
     setIsAutoDetecting(true);
 
     try {
-      const response = await fetch("${ADMIN_API_BASE_URL}/api/layout/analyze", {
+      const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
