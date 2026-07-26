@@ -293,7 +293,6 @@ export default function WorkspaceTemplateEditorV2({
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
   const [autoDetectError, setAutoDetectError] = useState("");
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
-  const autoRoiMode: "text_line" = "text_line";
   const [imageCategories, setImageCategories] = useState<ImageVerificationCategory[]>([]);
   const [categoryError, setCategoryError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -560,7 +559,7 @@ export default function WorkspaceTemplateEditorV2({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          auto_roi_mode: autoRoiMode,
+          auto_roi_mode: "text_line",
           images: pagesToAnalyze.map(({ page, index }) => ({
             page_index: index,
             image: page.src,

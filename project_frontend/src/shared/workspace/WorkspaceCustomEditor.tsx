@@ -26,7 +26,7 @@ interface LayoutDetectedRegion {
   extraction_method?: "paddle_thai_ocr" | "table_recognition_v2" | "extract_image" | "ocr_text" | "ocr_table";
   confidence?: number;
   auto_roi_group?: {
-    mode?: "paragraph";
+    mode?: "text_line";
     line_count?: number;
   } | null;
   roi?: {
@@ -192,7 +192,6 @@ export default function WorkspaceCustomEditor({
   const currentZoom = fitZoom ?? WORKSPACE_ZOOM_STEPS[zoomIndex];
   const [isAutoDetectingRoi, setIsAutoDetectingRoi] = useState(false);
   const [autoDetectMessage, setAutoDetectMessage] = useState("");
-  const [autoRoiMode, setAutoRoiMode] = useState<"text_line" | "paragraph">("text_line");
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ scrollLeft: 0, scrollTop: 0, clientX: 0, clientY: 0 });
@@ -762,7 +761,7 @@ export default function WorkspaceCustomEditor({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          auto_roi_mode: autoRoiMode,
+          auto_roi_mode: "text_line",
           images: pagesToAnalyze.map((imageSrc, pageIndex) => ({
             page_index: pageIndex,
             image: imageSrc,
@@ -1233,28 +1232,7 @@ export default function WorkspaceCustomEditor({
               {!hideOcrActions && (
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ตีกรอบ ROI อัตโนมัติ</h3>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200">
-                    <button
-                      type="button"
-                      disabled={isAutoDetectingRoi}
-                      onClick={() => setAutoRoiMode("text_line")}
-                      className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
-                        autoRoiMode === "text_line" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      Text Line
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isAutoDetectingRoi}
-                      onClick={() => setAutoRoiMode("paragraph")}
-                      className={`rounded-md px-2 py-1.5 text-[10px] font-black transition ${
-                        autoRoiMode === "paragraph" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      Paragraph
-                    </button>
-                  </div>                  <button
+                  <button
                     type="button"
                     disabled={isLoading || isAutoDetectingRoi || !previewUrl}
                     onClick={handleAutoDetectRoi}

@@ -187,7 +187,7 @@ def runtime_analyze_layout(payload: ImagePayload) -> Dict[str, Any]:
                 analyze_layout(
                     opencv_img,
                     expand_text_rois=payload.expand_text_rois,
-                    auto_roi_mode="paragraph" if payload.auto_roi_mode == "paragraph" else "text_line",
+                    auto_roi_mode="text_line",
                 )
             ),
         }

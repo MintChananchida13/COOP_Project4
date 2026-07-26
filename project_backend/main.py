@@ -530,8 +530,7 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
     try:
         for page in payload.images:
             _, opencv_img = decode_base64_image(page.image)
-            auto_roi_mode = "paragraph" if payload.auto_roi_mode == "paragraph" else "text_line"
-            analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode=auto_roi_mode)
+            analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode="text_line")
             regions = []
             for index, region in enumerate(analysis["regions"], start=1):
                 region_type = region["type"]
@@ -575,7 +574,7 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
             "success": True,
             "engine": "paddleocr",
             "model": "PP-DocLayoutV3+PP-OCRv5",
-            "auto_roi_mode": "paragraph" if payload.auto_roi_mode == "paragraph" else "text_line",
+            "auto_roi_mode": "text_line",
             "pages": pages,
         }
     except LayoutAnalysisUnavailableError as err:
