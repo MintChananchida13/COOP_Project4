@@ -93,6 +93,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [adjustPageConfigs, setAdjustPageConfigs] = useState<AdminAdjustPageConfig[]>([]);
   const localFieldSequenceRef = useRef(0);
   const fieldUpdateSequenceRef = useRef(new Map<string, number>());
+  const pendingLocalFieldPatchesRef = useRef(new Map<string, Partial<TemplateField>>());
+  const selectedTemplateFieldsRef = useRef<TemplateField[]>([]);
 
   const applyBundle = (bundle: TemplateBundle) => {
     setSelectedTemplate(bundle.template);
@@ -100,6 +102,10 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     setSelectedTemplateFields(bundle.fields);
     setSelectedIgnoreRegions(bundle.ignoreRegions);
   };
+
+  useEffect(() => {
+    selectedTemplateFieldsRef.current = selectedTemplateFields;
+  }, [selectedTemplateFields]);
 
   useEffect(() => {
     let cancelled = false;
@@ -331,7 +337,33 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               field.fieldName === optimisticField.fieldName
           );
         if (savedField) {
-          setSelectedTemplateFields((prev) => prev.map((field) => (field.id === optimisticId ? savedField : field)));
+          const latestLocalField = selectedTemplateFieldsRef.current.find((field) => field.id === optimisticId) || optimisticField;
+          const pendingPatch = pendingLocalFieldPatchesRef.current.get(optimisticId);
+          const preservedField = {
+            ...savedField,
+            ...latestLocalField,
+            ...(pendingPatch || {}),
+            id: savedField.id,
+            templateId: savedField.templateId,
+            templatePageId: savedField.templatePageId,
+          };
+          setSelectedTemplateFields((prev) => prev.map((field) => (field.id === optimisticId ? preservedField : field)));
+          pendingLocalFieldPatchesRef.current.delete(optimisticId);
+          if (pendingPatch && Object.keys(pendingPatch).length > 0) {
+            updateTemplateFieldApi(templateId, savedField.id, pendingPatch)
+              .then((latestBundle) => {
+                const latestSavedField = latestBundle.fields.find((field) => field.id === savedField.id);
+                if (latestSavedField) {
+                  setSelectedTemplateFields((prev) =>
+                    prev.map((field) => (field.id === savedField.id ? { ...field, ...latestSavedField, ...pendingPatch } : field))
+                  );
+                }
+              })
+              .catch((error) => {
+                console.warn("Pending field update after create failed.", error);
+                setLocalOnly("Field saved locally; latest ROI/type changes could not be persisted yet.");
+              });
+          }
         }
         setSelectedTemplate(bundle.template);
         setSaved("Field saved.");
@@ -347,6 +379,12 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     fieldUpdateSequenceRef.current.set(fieldId, requestSequence);
     setSelectedTemplateFields((prev) => prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)));
     if (!canPersistToBackend || fieldId.startsWith("local_field_")) {
+      if (fieldId.startsWith("local_field_")) {
+        pendingLocalFieldPatchesRef.current.set(fieldId, {
+          ...(pendingLocalFieldPatchesRef.current.get(fieldId) || {}),
+          ...patch,
+        });
+      }
       setLocalOnly("Field saved locally.");
       return;
     }

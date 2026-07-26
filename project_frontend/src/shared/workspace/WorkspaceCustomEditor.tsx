@@ -304,8 +304,8 @@ export default function WorkspaceCustomEditor({
       extractionMethod: 'paddle_thai_ocr' as const,
       points,
     };
-    setRois(prev => [...prev, newBox]);
     setSelectedId(newBox.id);
+    setRois(prev => [...prev, newBox]);
     setActiveDrawPoints([]);
   };
 
@@ -584,8 +584,8 @@ export default function WorkspaceCustomEditor({
         pageIndex: currentIndex,
         ...roiTypePatch('text'),
       };
-      setRois([...rois, newBox]);
       setSelectedId(newBox.id);
+      setRois(prev => [...prev, newBox]);
     } else {
       setSelectedId(null);
     }
@@ -1437,4 +1437,3 @@ export default function WorkspaceCustomEditor({
     </div>
   );
 }
-
