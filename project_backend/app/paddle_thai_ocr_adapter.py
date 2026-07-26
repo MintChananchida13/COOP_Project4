@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -12,6 +13,8 @@ from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize
 class PaddleThaiOcrUnavailableError(RuntimeError):
     pass
 
+
+logger = logging.getLogger(__name__)
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PADDLE_CACHE_DIR = BACKEND_ROOT / "storage" / "paddlex_cache"
@@ -31,6 +34,14 @@ os.environ.setdefault("TEMP", str(PADDLE_TEMP_DIR))
 
 
 _TEXT_RECOGNIZER: Any = None
+
+
+def _model_service_url() -> str:
+    return os.getenv("MODEL_SERVICE_URL", "").strip()
+
+
+def _use_remote_runtime() -> bool:
+    return bool(_model_service_url())
 
 
 def _env_flag(name: str, default: str = "false") -> bool:
@@ -175,14 +186,22 @@ def run_paddle_thai_ocr(opencv_img: np.ndarray) -> Dict[str, Any]:
             "error": "empty_image",
         }
 
-    try:
-        remote_result = remote_recognize_image(opencv_img)
-        if remote_result is not None:
-            return remote_result
-    except ModelRuntimeUnavailableError as error:
-        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if _use_remote_runtime():
+        logger.info("Using remote OCR runtime")
+        try:
+            remote_result = remote_recognize_image(opencv_img)
+        except ModelRuntimeUnavailableError as error:
+            raise PaddleThaiOcrUnavailableError(str(error)) from error
+        except Exception as error:
             raise PaddleThaiOcrUnavailableError(str(error)) from error
 
+        if remote_result is None:
+            raise PaddleThaiOcrUnavailableError("Remote OCR runtime returned no result.")
+        if not isinstance(remote_result, dict):
+            raise PaddleThaiOcrUnavailableError("Remote OCR runtime returned an invalid response.")
+        return remote_result
+
+    logger.info("Using local PaddleOCR")
     image_path = _opencv_to_temp_png(opencv_img)
     try:
         model = _load_text_recognizer()
@@ -204,16 +223,25 @@ def run_paddle_thai_ocr_batch(opencv_images: List[np.ndarray]) -> List[Dict[str,
     if not opencv_images:
         return []
 
-    try:
-        remote_result = remote_recognize_images(opencv_images)
-        if remote_result is not None:
-            results = remote_result.get("results")
-            if isinstance(results, list):
-                return [item if isinstance(item, dict) else {"text": "", "confidence": 0.0, "error": "invalid_batch_item"} for item in results]
-    except ModelRuntimeUnavailableError as error:
-        if os.getenv("MODEL_SERVICE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if _use_remote_runtime():
+        logger.info("Using remote OCR runtime")
+        try:
+            remote_result = remote_recognize_images(opencv_images)
+        except ModelRuntimeUnavailableError as error:
+            raise PaddleThaiOcrUnavailableError(str(error)) from error
+        except Exception as error:
             raise PaddleThaiOcrUnavailableError(str(error)) from error
 
+        if remote_result is None:
+            raise PaddleThaiOcrUnavailableError("Remote OCR runtime returned no result.")
+        if not isinstance(remote_result, dict):
+            raise PaddleThaiOcrUnavailableError("Remote OCR runtime returned an invalid response.")
+        results = remote_result.get("results")
+        if not isinstance(results, list):
+            raise PaddleThaiOcrUnavailableError("Remote OCR runtime returned an invalid batch response.")
+        return [item if isinstance(item, dict) else {"text": "", "confidence": 0.0, "error": "invalid_batch_item"} for item in results]
+
+    logger.info("Using local PaddleOCR")
     temp_paths: List[str] = []
     try:
         for image in opencv_images:
