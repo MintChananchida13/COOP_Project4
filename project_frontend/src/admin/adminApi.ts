@@ -617,132 +617,140 @@ const mapApiEmbeddingJob = (job?: ApiEmbeddingJob | null): EmbeddingJob | null =
   };
 };
 
-const mapProjectedField = (field: Record<string, unknown>): DetectionProjectedField => ({
-  fieldId: (field.field_id as string | null | undefined) ?? null,
-  fieldName: (field.field_name as string | null | undefined) ?? null,
-  displayLabel: (field.display_label as string | null | undefined) ?? null,
-  pageNumber: typeof field.page_number === "number" ? field.page_number : null,
-  templateRoi: (field.template_roi as Record<string, unknown> | undefined) || undefined,
-  projectedRoiBeforeClip: (field.projected_roi_before_clip as DetectionProjectedField["projectedRoiBeforeClip"]) || null,
-  projectedRoi: (field.projected_roi as DetectionProjectedField["projectedRoi"]) || null,
-  adaptiveRoi: (field.adaptive_roi as DetectionProjectedField["adaptiveRoi"]) || null,
-  adaptiveStatus: (field.adaptive_status as string | null | undefined) ?? null,
-  adaptiveSearchRegion: (field.adaptive_search_region as DetectionProjectedField["adaptiveSearchRegion"]) || null,
-  adaptiveWordBoxes: Array.isArray(field.adaptive_word_boxes) ? (field.adaptive_word_boxes as Record<string, unknown>[]) : [],
-  adaptiveWordGroups: Array.isArray(field.adaptive_word_groups) ? (field.adaptive_word_groups as Record<string, unknown>[]) : [],
-  adaptiveRankedWordGroups: Array.isArray(field.adaptive_ranked_word_groups) ? (field.adaptive_ranked_word_groups as Record<string, unknown>[]) : [],
-  adaptiveConfidence: typeof field.adaptive_confidence === "number" ? field.adaptive_confidence : null,
-  adaptiveWordCount: typeof field.adaptive_word_count === "number" ? field.adaptive_word_count : null,
-  adaptiveCoverage: typeof field.adaptive_coverage === "number" ? field.adaptive_coverage : null,
-  adaptiveOcrConfidence: typeof field.adaptive_ocr_confidence === "number" ? field.adaptive_ocr_confidence : null,
-  adaptiveValidationResult: (field.adaptive_validation_result as Record<string, unknown> | undefined) || undefined,
-  adaptiveFallbackReason: (field.adaptive_fallback_reason as string | null | undefined) ?? null,
-  projectedPolygon: Array.isArray(field.projected_polygon) ? (field.projected_polygon as number[][]) : undefined,
-  projectedPolygonBeforeClip: Array.isArray(field.projected_polygon_before_clip) ? (field.projected_polygon_before_clip as number[][]) : undefined,
-  projectionMethod: (field.projection_method as string | null | undefined) ?? null,
-  projectionValid: typeof field.projection_valid === "boolean" ? field.projection_valid : null,
-  projectionValidationResult: (field.projection_validation_result as Record<string, unknown> | undefined) || undefined,
-  fallbackUsed: typeof field.fallback_used === "boolean" ? field.fallback_used : null,
-});
+function mapProjectedField(field: Record<string, unknown>): DetectionProjectedField {
+  return {
+    fieldId: (field.field_id as string | null | undefined) ?? null,
+    fieldName: (field.field_name as string | null | undefined) ?? null,
+    displayLabel: (field.display_label as string | null | undefined) ?? null,
+    pageNumber: typeof field.page_number === "number" ? field.page_number : null,
+    templateRoi: (field.template_roi as Record<string, unknown> | undefined) || undefined,
+    projectedRoiBeforeClip: (field.projected_roi_before_clip as DetectionProjectedField["projectedRoiBeforeClip"]) || null,
+    projectedRoi: (field.projected_roi as DetectionProjectedField["projectedRoi"]) || null,
+    adaptiveRoi: (field.adaptive_roi as DetectionProjectedField["adaptiveRoi"]) || null,
+    adaptiveStatus: (field.adaptive_status as string | null | undefined) ?? null,
+    adaptiveSearchRegion: (field.adaptive_search_region as DetectionProjectedField["adaptiveSearchRegion"]) || null,
+    adaptiveWordBoxes: Array.isArray(field.adaptive_word_boxes) ? (field.adaptive_word_boxes as Record<string, unknown>[]) : [],
+    adaptiveWordGroups: Array.isArray(field.adaptive_word_groups) ? (field.adaptive_word_groups as Record<string, unknown>[]) : [],
+    adaptiveRankedWordGroups: Array.isArray(field.adaptive_ranked_word_groups) ? (field.adaptive_ranked_word_groups as Record<string, unknown>[]) : [],
+    adaptiveConfidence: typeof field.adaptive_confidence === "number" ? field.adaptive_confidence : null,
+    adaptiveWordCount: typeof field.adaptive_word_count === "number" ? field.adaptive_word_count : null,
+    adaptiveCoverage: typeof field.adaptive_coverage === "number" ? field.adaptive_coverage : null,
+    adaptiveOcrConfidence: typeof field.adaptive_ocr_confidence === "number" ? field.adaptive_ocr_confidence : null,
+    adaptiveValidationResult: (field.adaptive_validation_result as Record<string, unknown> | undefined) || undefined,
+    adaptiveFallbackReason: (field.adaptive_fallback_reason as string | null | undefined) ?? null,
+    projectedPolygon: Array.isArray(field.projected_polygon) ? (field.projected_polygon as number[][]) : undefined,
+    projectedPolygonBeforeClip: Array.isArray(field.projected_polygon_before_clip) ? (field.projected_polygon_before_clip as number[][]) : undefined,
+    projectionMethod: (field.projection_method as string | null | undefined) ?? null,
+    projectionValid: typeof field.projection_valid === "boolean" ? field.projection_valid : null,
+    projectionValidationResult: (field.projection_validation_result as Record<string, unknown> | undefined) || undefined,
+    fallbackUsed: typeof field.fallback_used === "boolean" ? field.fallback_used : null,
+  };
+}
 
-const mapDetectionTemplateRoi = (field: Record<string, unknown>): DetectionTemplateRoi => ({
-  fieldId: (field.field_id as string | null | undefined) ?? null,
-  fieldName: (field.field_name as string | null | undefined) ?? null,
-  displayLabel: (field.display_label as string | null | undefined) ?? null,
-  pageNumber: typeof field.page_number === "number" ? field.page_number : null,
-  dataType: (field.data_type as string | null | undefined) ?? null,
-  extractionMethod: (field.extraction_method as string | null | undefined) ?? null,
-  source: (field.source as string | null | undefined) ?? null,
-  roi: (field.roi as Record<string, unknown> | undefined) || undefined,
-});
+function mapDetectionTemplateRoi(field: Record<string, unknown>): DetectionTemplateRoi {
+  return {
+    fieldId: (field.field_id as string | null | undefined) ?? null,
+    fieldName: (field.field_name as string | null | undefined) ?? null,
+    displayLabel: (field.display_label as string | null | undefined) ?? null,
+    pageNumber: typeof field.page_number === "number" ? field.page_number : null,
+    dataType: (field.data_type as string | null | undefined) ?? null,
+    extractionMethod: (field.extraction_method as string | null | undefined) ?? null,
+    source: (field.source as string | null | undefined) ?? null,
+    roi: (field.roi as Record<string, unknown> | undefined) || undefined,
+  };
+}
 
-const mapDetectionCandidate = (candidate: Record<string, unknown>): DetectionCandidate => ({
-  templateId: (candidate.template_id as string | null | undefined) ?? null,
-  vectorId: (candidate.vector_id as string | null | undefined) ?? null,
-  score: typeof candidate.score === "number" ? candidate.score : 0,
-  retrievalScore: typeof candidate.retrieval_score === "number" ? candidate.retrieval_score : null,
-  layoutScore: typeof candidate.layout_score === "number" ? candidate.layout_score : null,
-  layoutDebug: (candidate.layout_debug as Record<string, unknown> | undefined) || undefined,
-  verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
-  textAnchorScore: typeof candidate.text_anchor_score === "number" ? candidate.text_anchor_score : null,
-  imageAnchorScore: typeof candidate.image_anchor_score === "number" ? candidate.image_anchor_score : null,
-  matchingWeights: (candidate.matching_weights as Record<string, number> | undefined) || undefined,
-  effectiveMatchingWeights: (candidate.effective_matching_weights as Record<string, number> | undefined) || undefined,
-  verificationPassed: typeof candidate.verification_passed === "boolean" ? candidate.verification_passed : null,
-  finalScore: typeof candidate.final_score === "number" ? candidate.final_score : null,
-  finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
-  decisionReason: (candidate.decision_reason as string | null | undefined) ?? null,
-  decisionPath: (candidate.decision_path as string | null | undefined) ?? null,
-  requiredPassed: typeof candidate.required_passed === "boolean" ? candidate.required_passed : null,
-  requiredFailedFields: Array.isArray(candidate.required_failed_fields)
-    ? (candidate.required_failed_fields as Record<string, unknown>[])
-    : [],
-  finalConfidenceThreshold: typeof candidate.final_confidence_threshold === "number" ? candidate.final_confidence_threshold : null,
-  verification: (candidate.verification as Record<string, unknown> | undefined) || undefined,
-  averageScore: typeof candidate.average_score === "number" ? candidate.average_score : null,
-  matchedPages: typeof candidate.matched_pages === "number" ? candidate.matched_pages : null,
-  templateName: (candidate.template_name as string | null | undefined) ?? null,
-  templateStatus: (candidate.template_status as string | null | undefined) ?? null,
-  pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
-  fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
-  modelName: (candidate.model_name as string | null | undefined) ?? null,
-  vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
-  retrievalEngine: (candidate.retrieval_engine as string | null | undefined) ?? null,
-  pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
-  queryPageIndex: typeof candidate.query_page_index === "number" ? candidate.query_page_index : null,
-  templatePageNumber: typeof candidate.template_page_number === "number" ? candidate.template_page_number : null,
-  alignmentStatus:
-    candidate.alignment_status === "skipped" ||
-    candidate.alignment_status === "fallback" ||
-    candidate.alignment_status === "failed" ||
-    candidate.alignment_status === "aligned"
-      ? candidate.alignment_status
-      : null,
-  alignment: (candidate.alignment as Record<string, unknown> | undefined) || undefined,
-  alignmentDebug: (candidate.alignment_debug as Record<string, unknown> | undefined) || undefined,
-  alignmentScore: typeof candidate.alignment_score === "number" ? candidate.alignment_score : null,
-  alignmentPassed: typeof candidate.alignment_passed === "boolean" ? candidate.alignment_passed : null,
-  alignmentFallbackUsed: typeof candidate.alignment_fallback_used === "boolean" ? candidate.alignment_fallback_used : null,
-  alignmentReason: (candidate.alignment_reason as string | null | undefined) ?? null,
-  normalizedVerificationScore: typeof candidate.normalized_verification_score === "number" ? candidate.normalized_verification_score : null,
-  alignedVerificationScore: typeof candidate.aligned_verification_score === "number" ? candidate.aligned_verification_score : null,
-  verificationSourceUsed:
-    candidate.verification_source_used === "normalized" || candidate.verification_source_used === "aligned"
-      ? candidate.verification_source_used
-      : null,
-  beforeAlignmentVerification: typeof candidate.before_alignment_verification === "number" ? candidate.before_alignment_verification : null,
-  afterAlignmentVerification: typeof candidate.after_alignment_verification === "number" ? candidate.after_alignment_verification : null,
-  verificationImprovement: typeof candidate.verification_improvement === "number" ? candidate.verification_improvement : null,
-  alignmentMatchImagePreviewUrl: (candidate.alignment_match_image_preview_url as string | null | undefined) ?? null,
-  alignedImagePreviewUrl: (candidate.aligned_image_preview_url as string | null | undefined) ?? null,
-  normalizedImagePreviewUrl: (candidate.normalized_image_preview_url as string | null | undefined) ?? null,
-  extractionImagePreviewUrl: (candidate.extraction_image_preview_url as string | null | undefined) ?? null,
-  roiCoordinateSpace: (candidate.roi_coordinate_space as string | null | undefined) ?? null,
-  templateRois: Array.isArray(candidate.template_rois)
-    ? (candidate.template_rois as Record<string, unknown>[]).map(mapDetectionTemplateRoi)
-    : [],
-  projection: (candidate.projection as Record<string, unknown> | undefined) || undefined,
-  projectedFields: Array.isArray(candidate.projected_fields)
-    ? (candidate.projected_fields as Record<string, unknown>[]).map(mapProjectedField)
-    : [],
-  extractionTest: candidate.extraction_test ? mapTemplateStepTestResult(candidate.extraction_test as Record<string, unknown>) : null,
-  coordinateDebug: (candidate.coordinate_debug as Record<string, unknown> | undefined) || undefined,
-  metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
-});
+function mapDetectionCandidate(candidate: Record<string, unknown>): DetectionCandidate {
+  return {
+    templateId: (candidate.template_id as string | null | undefined) ?? null,
+    vectorId: (candidate.vector_id as string | null | undefined) ?? null,
+    score: typeof candidate.score === "number" ? candidate.score : 0,
+    retrievalScore: typeof candidate.retrieval_score === "number" ? candidate.retrieval_score : null,
+    layoutScore: typeof candidate.layout_score === "number" ? candidate.layout_score : null,
+    layoutDebug: (candidate.layout_debug as Record<string, unknown> | undefined) || undefined,
+    verificationScore: typeof candidate.verification_score === "number" ? candidate.verification_score : null,
+    textAnchorScore: typeof candidate.text_anchor_score === "number" ? candidate.text_anchor_score : null,
+    imageAnchorScore: typeof candidate.image_anchor_score === "number" ? candidate.image_anchor_score : null,
+    matchingWeights: (candidate.matching_weights as Record<string, number> | undefined) || undefined,
+    effectiveMatchingWeights: (candidate.effective_matching_weights as Record<string, number> | undefined) || undefined,
+    verificationPassed: typeof candidate.verification_passed === "boolean" ? candidate.verification_passed : null,
+    finalScore: typeof candidate.final_score === "number" ? candidate.final_score : null,
+    finalPassed: typeof candidate.final_passed === "boolean" ? candidate.final_passed : null,
+    decisionReason: (candidate.decision_reason as string | null | undefined) ?? null,
+    decisionPath: (candidate.decision_path as string | null | undefined) ?? null,
+    requiredPassed: typeof candidate.required_passed === "boolean" ? candidate.required_passed : null,
+    requiredFailedFields: Array.isArray(candidate.required_failed_fields)
+      ? (candidate.required_failed_fields as Record<string, unknown>[])
+      : [],
+    finalConfidenceThreshold: typeof candidate.final_confidence_threshold === "number" ? candidate.final_confidence_threshold : null,
+    verification: (candidate.verification as Record<string, unknown> | undefined) || undefined,
+    averageScore: typeof candidate.average_score === "number" ? candidate.average_score : null,
+    matchedPages: typeof candidate.matched_pages === "number" ? candidate.matched_pages : null,
+    templateName: (candidate.template_name as string | null | undefined) ?? null,
+    templateStatus: (candidate.template_status as string | null | undefined) ?? null,
+    pageCount: typeof candidate.page_count === "number" ? candidate.page_count : null,
+    fieldCount: typeof candidate.field_count === "number" ? candidate.field_count : null,
+    modelName: (candidate.model_name as string | null | undefined) ?? null,
+    vectorStoreEngine: (candidate.vector_store_engine as string | null | undefined) ?? null,
+    retrievalEngine: (candidate.retrieval_engine as string | null | undefined) ?? null,
+    pageIndex: typeof candidate.page_index === "number" ? candidate.page_index : null,
+    queryPageIndex: typeof candidate.query_page_index === "number" ? candidate.query_page_index : null,
+    templatePageNumber: typeof candidate.template_page_number === "number" ? candidate.template_page_number : null,
+    alignmentStatus:
+      candidate.alignment_status === "skipped" ||
+      candidate.alignment_status === "fallback" ||
+      candidate.alignment_status === "failed" ||
+      candidate.alignment_status === "aligned"
+        ? candidate.alignment_status
+        : null,
+    alignment: (candidate.alignment as Record<string, unknown> | undefined) || undefined,
+    alignmentDebug: (candidate.alignment_debug as Record<string, unknown> | undefined) || undefined,
+    alignmentScore: typeof candidate.alignment_score === "number" ? candidate.alignment_score : null,
+    alignmentPassed: typeof candidate.alignment_passed === "boolean" ? candidate.alignment_passed : null,
+    alignmentFallbackUsed: typeof candidate.alignment_fallback_used === "boolean" ? candidate.alignment_fallback_used : null,
+    alignmentReason: (candidate.alignment_reason as string | null | undefined) ?? null,
+    normalizedVerificationScore: typeof candidate.normalized_verification_score === "number" ? candidate.normalized_verification_score : null,
+    alignedVerificationScore: typeof candidate.aligned_verification_score === "number" ? candidate.aligned_verification_score : null,
+    verificationSourceUsed:
+      candidate.verification_source_used === "normalized" || candidate.verification_source_used === "aligned"
+        ? candidate.verification_source_used
+        : null,
+    beforeAlignmentVerification: typeof candidate.before_alignment_verification === "number" ? candidate.before_alignment_verification : null,
+    afterAlignmentVerification: typeof candidate.after_alignment_verification === "number" ? candidate.after_alignment_verification : null,
+    verificationImprovement: typeof candidate.verification_improvement === "number" ? candidate.verification_improvement : null,
+    alignmentMatchImagePreviewUrl: (candidate.alignment_match_image_preview_url as string | null | undefined) ?? null,
+    alignedImagePreviewUrl: (candidate.aligned_image_preview_url as string | null | undefined) ?? null,
+    normalizedImagePreviewUrl: (candidate.normalized_image_preview_url as string | null | undefined) ?? null,
+    extractionImagePreviewUrl: (candidate.extraction_image_preview_url as string | null | undefined) ?? null,
+    roiCoordinateSpace: (candidate.roi_coordinate_space as string | null | undefined) ?? null,
+    templateRois: Array.isArray(candidate.template_rois)
+      ? (candidate.template_rois as Record<string, unknown>[]).map(mapDetectionTemplateRoi)
+      : [],
+    projection: (candidate.projection as Record<string, unknown> | undefined) || undefined,
+    projectedFields: Array.isArray(candidate.projected_fields)
+      ? (candidate.projected_fields as Record<string, unknown>[]).map(mapProjectedField)
+      : [],
+    extractionTest: candidate.extraction_test ? mapTemplateStepTestResult(candidate.extraction_test as Record<string, unknown>) : null,
+    coordinateDebug: (candidate.coordinate_debug as Record<string, unknown> | undefined) || undefined,
+    metadata: (candidate.metadata as Record<string, unknown> | undefined) || {},
+  };
+}
 
-const mapDetectionPage = (page: Record<string, unknown>): DetectionPageResult => ({
-  pageIndex: typeof page.page_index === "number" ? page.page_index : 1,
-  matched: Boolean(page.matched),
-  bestCandidate: page.best_candidate ? mapDetectionCandidate(page.best_candidate as Record<string, unknown>) : null,
-  candidates: Array.isArray(page.candidates) ? (page.candidates as Record<string, unknown>[]).map(mapDetectionCandidate) : [],
-  imagePreviewDataUrl: (page.image_preview_data_url as string | null | undefined) ?? null,
-  originalImagePreviewUrl: (page.original_image_preview_url as string | null | undefined) ?? null,
-  normalizedImagePreviewUrl: (page.normalized_image_preview_url as string | null | undefined) ?? null,
-  originalImagePath: (page.original_image_path as string | null | undefined) ?? null,
-  normalizedImagePath: (page.normalized_image_path as string | null | undefined) ?? null,
-  normalization: (page.normalization as Record<string, unknown> | undefined) || {},
-  debug: (page.debug as Record<string, unknown> | undefined) || {},
-});
+function mapDetectionPage(page: Record<string, unknown>): DetectionPageResult {
+  return {
+    pageIndex: typeof page.page_index === "number" ? page.page_index : 1,
+    matched: Boolean(page.matched),
+    bestCandidate: page.best_candidate ? mapDetectionCandidate(page.best_candidate as Record<string, unknown>) : null,
+    candidates: Array.isArray(page.candidates) ? (page.candidates as Record<string, unknown>[]).map(mapDetectionCandidate) : [],
+    imagePreviewDataUrl: (page.image_preview_data_url as string | null | undefined) ?? null,
+    originalImagePreviewUrl: (page.original_image_preview_url as string | null | undefined) ?? null,
+    normalizedImagePreviewUrl: (page.normalized_image_preview_url as string | null | undefined) ?? null,
+    originalImagePath: (page.original_image_path as string | null | undefined) ?? null,
+    normalizedImagePath: (page.normalized_image_path as string | null | undefined) ?? null,
+    normalization: (page.normalization as Record<string, unknown> | undefined) || {},
+    debug: (page.debug as Record<string, unknown> | undefined) || {},
+  };
+}
 
 const mapApiTemplatePage = (page: ApiTemplatePage): TemplatePage => ({
   id: page.id,
@@ -1392,73 +1400,77 @@ export const confirmTemplatePublish = async (templateId: string) => {
   return mapEmbeddingJobMutationResponse(response);
 };
 
-const mapTemplateStepTestItem = (item: Record<string, unknown>): TemplateStepTestItem => ({
-  fieldId: (item.field_id as string | undefined) || undefined,
-  anchorId: (item.anchor_id as string | undefined) || undefined,
-  fieldName: (item.field_name as string | null | undefined) ?? null,
-  displayLabel: (item.display_label as string | null | undefined) ?? null,
-  pageNumber: typeof item.page_number === "number" ? item.page_number : null,
-  dataType: (item.data_type as string | null | undefined) ?? null,
-  extractionMethod: (item.extraction_method as string | null | undefined) ?? null,
-  roiSource: (item.roi_source as string | null | undefined) ?? null,
-  roi: (item.roi as Record<string, unknown> | undefined) || null,
-  ocrText: (item.ocr_text as string | null | undefined) ?? null,
-  actualText: (item.actual_text as string | null | undefined) ?? null,
-  expectedText: (item.expected_text as string | null | undefined) ?? null,
-  confidence: typeof item.confidence === "number" ? item.confidence : typeof item.ocr_confidence === "number" ? item.ocr_confidence : null,
-  score: typeof item.score === "number" ? item.score : null,
-  fieldScore: typeof item.field_score === "number" ? item.field_score : null,
-  textMatchScore: typeof item.text_match_score === "number" ? item.text_match_score : null,
-  tableRows: Array.isArray(item.table_rows)
-    ? (item.table_rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
-    : Array.isArray(item.tableRows)
-      ? (item.tableRows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
-      : null,
-  tableHtml: (item.table_html as string | null | undefined) ?? (item.tableHtml as string | null | undefined) ?? null,
-  tableDebug:
-    (item.table_debug as Record<string, unknown> | null | undefined) ??
-    (item.tableDebug as Record<string, unknown> | null | undefined) ??
-    null,
-  passed: Boolean(item.passed),
-  status: (item.status as string | null | undefined) ?? null,
-  failureReason: (item.failure_reason as string | null | undefined) ?? null,
-  anchorType: (item.anchor_type as string | null | undefined) ?? null,
-  verificationMethod: (item.verification_method as string | null | undefined) ?? null,
-  siglipSimilarityScore: typeof item.siglip_similarity_score === "number" ? item.siglip_similarity_score : null,
-  evidenceScore: typeof item.evidence_score === "number" ? item.evidence_score : null,
-  rawLogit: typeof item.raw_logit === "number" ? item.raw_logit : null,
-  rawPairScore: typeof item.raw_pair_score === "number" ? item.raw_pair_score : null,
-  relativePercentage: typeof item.relative_percentage === "number" ? item.relative_percentage : null,
-  marginThreshold: typeof item.margin_threshold === "number" ? item.margin_threshold : null,
-  scoringVersion: (item.scoring_version as string | null | undefined) ?? null,
-  siglipUiPercentages: Array.isArray(item.siglip_ui_percentages) ? (item.siglip_ui_percentages as Record<string, unknown>[]) : [],
-  imageCategory: (item.image_category as string | null | undefined) ?? null,
-  imageCategoryLabel: (item.image_category_label as string | null | undefined) ?? null,
-  imageCategoryPrompt: (item.image_category_prompt as string | null | undefined) ?? null,
-  predictedImageCategory: (item.predicted_image_category as string | null | undefined) ?? null,
-  predictedImageCategoryLabel: (item.predicted_image_category_label as string | null | undefined) ?? null,
-  predictedImageCategoryPrompt: (item.predicted_image_category_prompt as string | null | undefined) ?? null,
-  siglipTargetRank: typeof item.siglip_target_rank === "number" ? item.siglip_target_rank : null,
-  siglipScoreMargin: typeof item.siglip_score_margin === "number" ? item.siglip_score_margin : null,
-  referenceCropPreviewDataUrl: (item.reference_crop_preview_data_url as string | null | undefined) ?? null,
-  currentCropPreviewDataUrl: (item.current_crop_preview_data_url as string | null | undefined) ?? null,
-  referenceCropPreviewUrl: (item.reference_crop_preview_url as string | null | undefined) ?? null,
-  currentCropPreviewUrl: (item.current_crop_preview_url as string | null | undefined) ?? null,
-});
+function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTestItem {
+  return {
+    fieldId: (item.field_id as string | undefined) || undefined,
+    anchorId: (item.anchor_id as string | undefined) || undefined,
+    fieldName: (item.field_name as string | null | undefined) ?? null,
+    displayLabel: (item.display_label as string | null | undefined) ?? null,
+    pageNumber: typeof item.page_number === "number" ? item.page_number : null,
+    dataType: (item.data_type as string | null | undefined) ?? null,
+    extractionMethod: (item.extraction_method as string | null | undefined) ?? null,
+    roiSource: (item.roi_source as string | null | undefined) ?? null,
+    roi: (item.roi as Record<string, unknown> | undefined) || null,
+    ocrText: (item.ocr_text as string | null | undefined) ?? null,
+    actualText: (item.actual_text as string | null | undefined) ?? null,
+    expectedText: (item.expected_text as string | null | undefined) ?? null,
+    confidence: typeof item.confidence === "number" ? item.confidence : typeof item.ocr_confidence === "number" ? item.ocr_confidence : null,
+    score: typeof item.score === "number" ? item.score : null,
+    fieldScore: typeof item.field_score === "number" ? item.field_score : null,
+    textMatchScore: typeof item.text_match_score === "number" ? item.text_match_score : null,
+    tableRows: Array.isArray(item.table_rows)
+      ? (item.table_rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+      : Array.isArray(item.tableRows)
+        ? (item.tableRows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+        : null,
+    tableHtml: (item.table_html as string | null | undefined) ?? (item.tableHtml as string | null | undefined) ?? null,
+    tableDebug:
+      (item.table_debug as Record<string, unknown> | null | undefined) ??
+      (item.tableDebug as Record<string, unknown> | null | undefined) ??
+      null,
+    passed: Boolean(item.passed),
+    status: (item.status as string | null | undefined) ?? null,
+    failureReason: (item.failure_reason as string | null | undefined) ?? null,
+    anchorType: (item.anchor_type as string | null | undefined) ?? null,
+    verificationMethod: (item.verification_method as string | null | undefined) ?? null,
+    siglipSimilarityScore: typeof item.siglip_similarity_score === "number" ? item.siglip_similarity_score : null,
+    evidenceScore: typeof item.evidence_score === "number" ? item.evidence_score : null,
+    rawLogit: typeof item.raw_logit === "number" ? item.raw_logit : null,
+    rawPairScore: typeof item.raw_pair_score === "number" ? item.raw_pair_score : null,
+    relativePercentage: typeof item.relative_percentage === "number" ? item.relative_percentage : null,
+    marginThreshold: typeof item.margin_threshold === "number" ? item.margin_threshold : null,
+    scoringVersion: (item.scoring_version as string | null | undefined) ?? null,
+    siglipUiPercentages: Array.isArray(item.siglip_ui_percentages) ? (item.siglip_ui_percentages as Record<string, unknown>[]) : [],
+    imageCategory: (item.image_category as string | null | undefined) ?? null,
+    imageCategoryLabel: (item.image_category_label as string | null | undefined) ?? null,
+    imageCategoryPrompt: (item.image_category_prompt as string | null | undefined) ?? null,
+    predictedImageCategory: (item.predicted_image_category as string | null | undefined) ?? null,
+    predictedImageCategoryLabel: (item.predicted_image_category_label as string | null | undefined) ?? null,
+    predictedImageCategoryPrompt: (item.predicted_image_category_prompt as string | null | undefined) ?? null,
+    siglipTargetRank: typeof item.siglip_target_rank === "number" ? item.siglip_target_rank : null,
+    siglipScoreMargin: typeof item.siglip_score_margin === "number" ? item.siglip_score_margin : null,
+    referenceCropPreviewDataUrl: (item.reference_crop_preview_data_url as string | null | undefined) ?? null,
+    currentCropPreviewDataUrl: (item.current_crop_preview_data_url as string | null | undefined) ?? null,
+    referenceCropPreviewUrl: (item.reference_crop_preview_url as string | null | undefined) ?? null,
+    currentCropPreviewUrl: (item.current_crop_preview_url as string | null | undefined) ?? null,
+  };
+}
 
-const mapTemplateStepTestResult = (data: Record<string, unknown>): TemplateStepTestResult => ({
-  templateId: String(data.template_id || ""),
-  status: String(data.status || ""),
-  passed: typeof data.passed === "boolean" ? data.passed : undefined,
-  score: typeof data.score === "number" ? data.score : null,
-  testedCount: Number(data.tested_count || 0),
-  passedCount: Number(data.passed_count || 0),
-  failedCount: Number(data.failed_count || 0),
-  imagePreviewUrl: (data.image_preview_url as string | null | undefined) ?? null,
-  roiCoordinateSpace: (data.roi_coordinate_space as string | null | undefined) ?? null,
-  fields: Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
-  anchors: Array.isArray(data.anchors) ? (data.anchors as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
-});
+function mapTemplateStepTestResult(data: Record<string, unknown>): TemplateStepTestResult {
+  return {
+    templateId: String(data.template_id || ""),
+    status: String(data.status || ""),
+    passed: typeof data.passed === "boolean" ? data.passed : undefined,
+    score: typeof data.score === "number" ? data.score : null,
+    testedCount: Number(data.tested_count || 0),
+    passedCount: Number(data.passed_count || 0),
+    failedCount: Number(data.failed_count || 0),
+    imagePreviewUrl: (data.image_preview_url as string | null | undefined) ?? null,
+    roiCoordinateSpace: (data.roi_coordinate_space as string | null | undefined) ?? null,
+    fields: Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
+    anchors: Array.isArray(data.anchors) ? (data.anchors as Record<string, unknown>[]).map(mapTemplateStepTestItem) : undefined,
+  };
+}
 
 const runTemplateStepTest = async (templateId: string, path: "test-extraction" | "test-verification") => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/${path}`, {
