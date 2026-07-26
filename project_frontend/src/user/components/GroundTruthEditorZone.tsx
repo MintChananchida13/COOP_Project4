@@ -18,6 +18,16 @@ const getFieldTypeLabel = (type: DisplayFieldType) => {
   return "ข้อความ";
 };
 
+const resolveResultFieldType = (
+  result: OCRResult & { pageIndex?: number },
+  matchedRoi?: ROI | null
+): DisplayFieldType => {
+  const rawType = matchedRoi?.type || result.type || matchedRoi?.dataType || result.dataType;
+  if (rawType === "table") return "table";
+  if (rawType === "image") return "image";
+  return "text";
+};
+
 const blobToDataUrl = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1175,7 +1185,7 @@ export default function GroundTruthEditorZone({
   const currentPageResultGroups = useMemo(() => {
     const typedResults = currentPageOcrResults.map((res) => {
       const matchedRoi = currentPageRois.find(roi => roi.id === res.roiId) || currentPageRois.find(roi => roi.fieldName === res.fieldName);
-      const fieldType = (matchedRoi?.type || res.type || "text") as DisplayFieldType;
+      const fieldType = resolveResultFieldType(res, matchedRoi);
       return { res, matchedRoi, fieldType };
     });
 
@@ -1189,7 +1199,7 @@ export default function GroundTruthEditorZone({
   const allPageResultGroups = useMemo(() => {
     const typedResults = ocrResults.map((res) => {
       const matchedRoi = getAnyPageRoiForResult(res);
-      const fieldType = (matchedRoi?.type || res.type || "text") as DisplayFieldType;
+      const fieldType = resolveResultFieldType(res, matchedRoi);
       const pageIndex = res.pageIndex !== undefined ? Number(res.pageIndex) : matchedRoi?.pageIndex !== undefined ? Number(matchedRoi.pageIndex) : 0;
       return { res, matchedRoi, fieldType, pageIndex };
     });
