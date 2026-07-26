@@ -234,21 +234,6 @@ function stableNumericId(value: string) {
   return Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
 }
 
-function readRatioNumber(value: unknown) {
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : null;
-}
-
-function roiFromRecord(record?: Record<string, unknown> | null) {
-  if (!record) return null;
-  const xRatio = readRatioNumber(record.x_ratio ?? record.xRatio);
-  const yRatio = readRatioNumber(record.y_ratio ?? record.yRatio);
-  const widthRatio = readRatioNumber(record.width_ratio ?? record.widthRatio);
-  const heightRatio = readRatioNumber(record.height_ratio ?? record.heightRatio);
-  if (xRatio === null || yRatio === null || widthRatio === null || heightRatio === null) return null;
-  return { xRatio, yRatio, widthRatio, heightRatio };
-}
-
 function loadImageElement(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const imageObj = new Image();
@@ -274,29 +259,8 @@ async function templateFieldsToWorkspaceRois(
   const workspaceRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[] = [];
 
   for (const field of extractionFields) {
-    const detectionPage = detection?.pages.find((page) => {
-      const bestCandidate = page.bestCandidate;
-      return (
-        page.candidates.some((candidate) => candidate.templateId === templateId && candidate.templatePageNumber === field.pageNumber) ||
-        Boolean(bestCandidate && bestCandidate.templateId === templateId && bestCandidate.templatePageNumber === field.pageNumber)
-      );
-    });
-    const bestPageCandidate = detectionPage?.bestCandidate;
-    const detectionCandidate =
-      detectionPage?.candidates.find((candidate) => candidate.templateId === templateId && candidate.templatePageNumber === field.pageNumber) ||
-      (bestPageCandidate && bestPageCandidate.templateId === templateId && bestPageCandidate.templatePageNumber === field.pageNumber ? bestPageCandidate : null);
-    const projectedField = detectionCandidate?.projectedFields?.find((item) => item.fieldId === field.id || item.fieldName === field.fieldName);
-    const projectedRoi = roiFromRecord((projectedField?.adaptiveRoi || projectedField?.projectedRoi) as Record<string, unknown> | null | undefined);
-    const templateRoi = field.roi;
-    const roi = projectedRoi || {
-      xRatio: templateRoi.xRatio,
-      yRatio: templateRoi.yRatio,
-      widthRatio: templateRoi.widthRatio,
-      heightRatio: templateRoi.heightRatio,
-    };
-    const pageIndex = detectionPage
-      ? Math.max(0, detectionPage.pageIndex - 1)
-      : Math.max(0, field.pageNumber - 1);
+    const roi = field.roi;
+    const pageIndex = Math.max(0, roi.pageNumber - 1);
     const pageImage = pageImages[pageIndex];
     const displayWidth = 750;
     const displayHeight = pageImage?.naturalWidth
@@ -317,7 +281,7 @@ async function templateFieldsToWorkspaceRois(
       extractionMethod: getWorkspaceExtractionMethod(field),
       role: "data_extraction",
       enabled: field.defaultSelected !== false,
-      roiCoordinateSource: projectedRoi ? String(detectionCandidate?.roiCoordinateSpace || "projected_roi") : "template_roi",
+      roiCoordinateSource: "template_roi",
     });
   }
 
