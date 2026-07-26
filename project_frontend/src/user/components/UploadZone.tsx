@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { FileImage, FileText, Loader2, Upload } from "lucide-react";
 
 interface UploadZoneProps {
-  onUploadSuccess: (urls: string[], sourceFileName?: string) => void;
+  onUploadSuccess: (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image") => void;
 }
 
 interface PdfJsLib {
@@ -91,7 +91,8 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
     let preparedImages: string[] = [];
 
     try {
-      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+      const sourceFileType = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf") ? "pdf" : "image";
+      if (sourceFileType === "pdf") {
         preparedImages = await convertPdfToImages(file);
       } else {
         const base64 = await new Promise<string>((resolve) => {
@@ -103,7 +104,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
       }
 
       if (preparedImages.length > 0) {
-        onUploadSuccess(preparedImages, file.name);
+        onUploadSuccess(preparedImages, file.name, sourceFileType);
       }
     } catch (error) {
       alert("เกิดข้อผิดพลาดระหว่างเตรียมไฟล์เอกสาร กรุณาลองใหม่อีกครั้ง");

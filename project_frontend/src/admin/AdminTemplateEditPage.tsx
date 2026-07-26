@@ -95,6 +95,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const fieldUpdateSequenceRef = useRef(new Map<string, number>());
   const pendingLocalFieldPatchesRef = useRef(new Map<string, Partial<TemplateField>>());
   const selectedTemplateFieldsRef = useRef<TemplateField[]>([]);
+  const pendingFieldSavePromisesRef = useRef(new Set<Promise<unknown>>());
 
   const applyBundle = (bundle: TemplateBundle) => {
     setSelectedTemplate(bundle.template);
@@ -106,6 +107,20 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   useEffect(() => {
     selectedTemplateFieldsRef.current = selectedTemplateFields;
   }, [selectedTemplateFields]);
+
+  const trackFieldSave = <T,>(promise: Promise<T>) => {
+    const tracked = promise.finally(() => {
+      pendingFieldSavePromisesRef.current.delete(tracked);
+    });
+    pendingFieldSavePromisesRef.current.add(tracked);
+    return tracked;
+  };
+
+  const waitForPendingFieldSaves = async () => {
+    while (pendingFieldSavePromisesRef.current.size > 0) {
+      await Promise.allSettled(Array.from(pendingFieldSavePromisesRef.current));
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -326,7 +341,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       return;
     }
 
-    createTemplateFieldApi(templateId, optimisticField)
+    const createPromise = trackFieldSave(createTemplateFieldApi(templateId, optimisticField));
+    createPromise
       .then((bundle) => {
         const savedField =
           bundle.fields.find((field) => field.id === optimisticId) ||
@@ -350,7 +366,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
           setSelectedTemplateFields((prev) => prev.map((field) => (field.id === optimisticId ? preservedField : field)));
           pendingLocalFieldPatchesRef.current.delete(optimisticId);
           if (pendingPatch && Object.keys(pendingPatch).length > 0) {
-            updateTemplateFieldApi(templateId, savedField.id, pendingPatch)
+            trackFieldSave(updateTemplateFieldApi(templateId, savedField.id, pendingPatch))
               .then((latestBundle) => {
                 const latestSavedField = latestBundle.fields.find((field) => field.id === savedField.id);
                 if (latestSavedField) {
@@ -389,7 +405,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       return;
     }
 
-    updateTemplateFieldApi(templateId, fieldId, patch)
+    trackFieldSave(updateTemplateFieldApi(templateId, fieldId, patch))
       .then((bundle) => {
         if (fieldUpdateSequenceRef.current.get(fieldId) !== requestSequence) return;
         const savedField = bundle.fields.find((field) => field.id === fieldId);
@@ -819,6 +835,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
               onGenerateEmbedding={() => router.push(`/admin/templates/${templateId}/test`)}
               onRunTestMode={() => router.push(`/admin/templates/${templateId}/test`)}
+              onBeforeRunTest={waitForPendingFieldSaves}
             />
           )}
         </div>

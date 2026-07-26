@@ -320,7 +320,13 @@ function getWorkspaceExtractionMethod(field: TemplateField) {
   return field.dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr";
 }
 
-async function buildTemplateCanvasImages(sourceImages: string[], detection: DetectionDevResult, templateId: string) {
+async function buildTemplateCanvasImages(
+  sourceImages: string[],
+  detection: DetectionDevResult,
+  templateId: string,
+  options?: { keepOriginalImages?: boolean }
+) {
+  if (options?.keepOriginalImages) return [...sourceImages];
   const pages = detection.pages || [];
   return Promise.all(sourceImages.map(async (sourceImage, pageIndex) => {
     const page = pages.find((item) => item.pageIndex === pageIndex + 1);
@@ -608,6 +614,7 @@ function HomeWorkspace() {
   const [originalImagesList, setOriginalImagesList] = useState<string[]>([]);
   const [uploadedSourceFileId, setUploadedSourceFileId] = useState<string>("");
   const [uploadedSourceFileName, setUploadedSourceFileName] = useState<string>("");
+  const [uploadedSourceFileType, setUploadedSourceFileType] = useState<"pdf" | "image" | "">("");
 
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
@@ -666,9 +673,10 @@ function HomeWorkspace() {
     setOcrResults(next);
   };
 
-  const handleUploadSuccess = (urls: string[], sourceFileName?: string) => {
+  const handleUploadSuccess = (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image") => {
     setUploadedSourceFileId(`user_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     setUploadedSourceFileName(sourceFileName || "ไฟล์ต้นทาง");
+    setUploadedSourceFileType(sourceFileType || (sourceFileName?.toLowerCase().endsWith(".pdf") ? "pdf" : "image"));
     setImagesList(urls);
     setOriginalImagesList([...urls]);
     setCurrentIndex(0);
@@ -710,6 +718,7 @@ function HomeWorkspace() {
     setOriginalImagesList([]);
     setUploadedSourceFileId("");
     setUploadedSourceFileName("");
+    setUploadedSourceFileType("");
     setCurrentIndex(0);
     setPagesConfig([]);
     setPreviewUrl("");
@@ -800,13 +809,22 @@ function HomeWorkspace() {
         throw contextualTemplateError("Template bundle loading failed", error);
       }
 
-      setTemplateDecisionStatus("กำลังจัดภาพให้ตรงกับ Template และเตรียมกรอบ OCR");
+      const keepOriginalPdfPages =
+        uploadedSourceFileType === "pdf" || uploadedSourceFileName.toLowerCase().endsWith(".pdf");
+      setTemplateDecisionStatus(
+        keepOriginalPdfPages
+          ? "พบ Template แล้ว กำลังเตรียมกรอบ OCR บนหน้า PDF เดิม"
+          : "กำลังจัดภาพให้ตรงกับ Template และเตรียมกรอบ OCR"
+      );
       let templateCanvasImages: string[];
       try {
-        templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId);
+        templateCanvasImages = await buildTemplateCanvasImages(finalProcessedImages, detection, templateId, {
+          keepOriginalImages: keepOriginalPdfPages,
+        });
         devTemplateFlowLog("canvas images prepared", {
           pageCount: templateCanvasImages.length,
           replacedCount: templateCanvasImages.filter((src, index) => src !== finalProcessedImages[index]).length,
+          keptOriginalPdfPages: keepOriginalPdfPages,
         });
       } catch (error) {
         throw contextualTemplateError("Template canvas preparation failed", error);

@@ -37,6 +37,7 @@ interface WorkspaceTemplateEditorProps {
   onDeleteIgnoreRegion: (regionId: string) => void;
   onGenerateEmbedding: () => void;
   onRunTestMode: () => void;
+  onBeforeRunTest?: () => Promise<void>;
 }
 
 type EditorStep = "extraction_fields" | "verification_anchors";
@@ -278,6 +279,7 @@ export default function WorkspaceTemplateEditorV2({
   onAddIgnoreRegion,
   onUpdateIgnoreRegion,
   onDeleteIgnoreRegion,
+  onBeforeRunTest,
   onRunTestMode,
 }: WorkspaceTemplateEditorProps) {
   const [step, setStep] = useState<EditorStep>("extraction_fields");
@@ -619,6 +621,11 @@ export default function WorkspaceTemplateEditorV2({
     setTestStatus(kind === "extraction" ? "Testing extraction fields..." : "Testing verification anchors...");
     setTestResult(null);
     try {
+      if (onBeforeRunTest) {
+        setTestStatus("Saving latest ROI and field settings...");
+        await onBeforeRunTest();
+        setTestStatus(kind === "extraction" ? "Testing extraction fields..." : "Testing verification anchors...");
+      }
       const result =
         kind === "extraction"
           ? await testTemplateExtractionFields(templateId)
