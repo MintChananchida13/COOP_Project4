@@ -169,6 +169,37 @@ def _markdown_table(rows: List[List[str]]) -> str:
     return "\n".join([fmt(header), fmt(separator), *[fmt(row) for row in body]])
 
 
+def _structured_table_from_rows(rows: List[List[str]], regions: List[Dict[str, Any]] | None = None) -> Dict[str, Any] | None:
+    if not rows:
+        return None
+    max_columns = max((len(row) for row in rows), default=0)
+    normalized_rows = [row + [""] * (max_columns - len(row)) for row in rows]
+    source_regions = regions or []
+    cells: List[Dict[str, Any]] = []
+    for row_index, row in enumerate(normalized_rows):
+        for col_index, text in enumerate(row):
+            flat_index = row_index * max_columns + col_index
+            source_region = source_regions[flat_index] if flat_index < len(source_regions) else {}
+            cell: Dict[str, Any] = {
+                "row": row_index,
+                "col": col_index,
+                "text": str(text or ""),
+                "rowSpan": 1,
+                "colSpan": 1,
+                "ocrText": str(text or ""),
+                "groundTruth": str(text or ""),
+            }
+            bbox = source_region.get("bbox") if isinstance(source_region, dict) else None
+            if bbox is not None:
+                cell["bbox"] = bbox
+            cells.append(cell)
+    return {
+        "rows": normalized_rows,
+        "cells": cells,
+        "headerRowCount": 1,
+    }
+
+
 def _group_table_cells(regions: List[Dict[str, Any]], recognitions: List[Dict[str, Any]]) -> List[List[str]]:
     cells: List[Dict[str, Any]] = []
     for region, recognized in zip(regions, recognitions):
@@ -290,6 +321,7 @@ def process_table_roi_with_engine(crop_img: np.ndarray) -> Dict[str, Any]:
     recognitions = run_paddle_thai_ocr_batch(crops)
     table_rows = _group_table_cells(valid_regions, recognitions)
     text = _markdown_table(table_rows)
+    table_structured = _structured_table_from_rows(table_rows, valid_regions)
     confidence_values = [
         float(item.get("confidence") or 0.0)
         for item in recognitions
@@ -316,6 +348,8 @@ def process_table_roi_with_engine(crop_img: np.ndarray) -> Dict[str, Any]:
         "preprocessing": "table_text_detection_then_paddle_recognition",
         "engine": "paddle_table_roi",
         "model": "PP-OCRv5_server_det+th_PP-OCRv5_mobile_rec",
+        "table_rows": table_rows,
+        "table_structured": table_structured,
         "table_debug": {
             "detected_boxes": len(regions),
             "recognized_cells": len(confidence_values),
@@ -329,38 +363,11 @@ def process_table_roi_with_engine(crop_img: np.ndarray) -> Dict[str, Any]:
 
 def process_table_roi_v2_with_fallback(crop_img: np.ndarray) -> Dict[str, Any]:
     try:
-        result = recognize_table_v2(crop_img)
-        if str(result.get("text") or "").strip() or result.get("table_html"):
-            return result
-        fallback = process_table_roi_with_engine(crop_img)
-        fallback["engine"] = "table_recognition_v2_fallback"
-        fallback["preprocessing"] = f"table_recognition_v2_empty_then_{fallback.get('preprocessing', 'fallback')}"
-        fallback["table_debug"] = {
-            **(fallback.get("table_debug") or {}),
-            "table_recognition_v2_status": (result.get("table_debug") or {}).get("status", "empty"),
-            "fallback_engine": "paddle_table_roi",
-        }
-        return fallback
+        return recognize_table_v2(crop_img)
     except TableRecognitionV2UnavailableError as error:
-        fallback = process_table_roi_with_engine(crop_img)
-        fallback["engine"] = "table_recognition_v2_fallback"
-        fallback["preprocessing"] = f"table_recognition_v2_unavailable_then_{fallback.get('preprocessing', 'fallback')}"
-        fallback["table_debug"] = {
-            **(fallback.get("table_debug") or {}),
-            "table_recognition_v2_error": str(error),
-            "fallback_engine": "paddle_table_roi",
-        }
-        return fallback
+        raise error
     except Exception as error:
-        fallback = process_table_roi_with_engine(crop_img)
-        fallback["engine"] = "table_recognition_v2_fallback"
-        fallback["preprocessing"] = f"table_recognition_v2_error_then_{fallback.get('preprocessing', 'fallback')}"
-        fallback["table_debug"] = {
-            **(fallback.get("table_debug") or {}),
-            "table_recognition_v2_error": str(error),
-            "fallback_engine": "paddle_table_roi",
-        }
-        return fallback
+        raise TableRecognitionV2UnavailableError(str(error)) from error
 
 
 def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, Any]:
@@ -492,6 +499,7 @@ async def process_document(payload: DocumentPayload):
                         "ocr_engine": ocr_result.get("engine", "unknown"),
                         "ocr_model": ocr_result.get("model"),
                         "table_rows": ocr_result.get("table_rows"),
+                        "table_structured": ocr_result.get("table_structured"),
                         "table_html": ocr_result.get("table_html"),
                         "table_debug": ocr_result.get("table_debug"),
                     }

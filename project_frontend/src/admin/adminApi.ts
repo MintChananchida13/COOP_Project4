@@ -433,6 +433,13 @@ export interface TemplateStepTestItem {
   fieldScore?: number | null;
   textMatchScore?: number | null;
   tableRows?: string[][] | null;
+  tableStructured?: {
+    rows?: string[][];
+    cells?: Record<string, unknown>[];
+    headerRowCount?: number;
+    colWidths?: number[];
+    [key: string]: unknown;
+  } | null;
   tableHtml?: string | null;
   tableDebug?: Record<string, unknown> | null;
   passed: boolean;
@@ -1428,6 +1435,12 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
       : Array.isArray(item.tableRows)
         ? (item.tableRows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
         : null,
+    tableStructured:
+      item.table_structured && typeof item.table_structured === "object"
+        ? (item.table_structured as TemplateStepTestItem["tableStructured"])
+        : item.tableStructured && typeof item.tableStructured === "object"
+          ? (item.tableStructured as TemplateStepTestItem["tableStructured"])
+          : null,
     tableHtml: (item.table_html as string | null | undefined) ?? (item.tableHtml as string | null | undefined) ?? null,
     tableDebug:
       (item.table_debug as Record<string, unknown> | null | undefined) ??

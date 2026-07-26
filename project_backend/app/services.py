@@ -3392,6 +3392,7 @@ class AdminTemplateService:
                             "ocr_text": text,
                             "confidence": round(confidence, 4),
                             "table_rows": ocr_result.get("table_rows"),
+                            "table_structured": ocr_result.get("table_structured"),
                             "table_html": ocr_result.get("table_html"),
                             "table_debug": ocr_result.get("table_debug"),
                             "failure_reason": None if text.strip() else str(ocr_result.get("error") or "table_empty"),

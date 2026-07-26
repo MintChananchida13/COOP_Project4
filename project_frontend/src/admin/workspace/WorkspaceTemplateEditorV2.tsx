@@ -120,6 +120,7 @@ const parseHtmlTable = (value?: string | null): string[][] | null => {
 };
 
 const getTableRowsFromTestItem = (item: TemplateStepTestItem): string[][] | null =>
+  normalizeTableRows(item.tableStructured?.rows) ||
   normalizeTableRows(item.tableRows) ||
   parseHtmlTable(item.tableHtml) ||
   parseMarkdownTable(item.ocrText) ||
@@ -129,7 +130,7 @@ const isTableTestItem = (item: TemplateStepTestItem) =>
   item.dataType === "table" ||
   item.extractionMethod === "table_recognition_v2" ||
   item.extractionMethod === "ocr_table" ||
-  Boolean(item.tableRows?.length || item.tableHtml || getTableRowsFromTestItem(item));
+  Boolean(item.tableStructured?.rows?.length || item.tableRows?.length || item.tableHtml || getTableRowsFromTestItem(item));
 
 const isImageTestItem = (item: TemplateStepTestItem) =>
   item.dataType === "image" ||
