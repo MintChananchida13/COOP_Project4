@@ -526,6 +526,15 @@ const tableRowsToMarkdown = (rows: string[][]) => {
   return [formatRow(safeHeader), formatRow(Array(columnCount).fill("---")), ...bodyRows.map(formatRow)].join("\n");
 };
 
+const createEmptyStructuredTable = (): StructuredTableResult => ({
+  rows: [["Column 1"], [""]],
+  cells: [
+    { row: 0, col: 0, text: "Column 1", rowSpan: 1, colSpan: 1, ocrText: "Column 1", groundTruth: "Column 1" },
+    { row: 1, col: 0, text: "", rowSpan: 1, colSpan: 1, ocrText: "", groundTruth: "" },
+  ],
+  headerRowCount: 1,
+});
+
 const parseHtmlTableRows = (value?: string): string[][] | null => parseHtmlTableStructured(value)?.rows || null;
 
 const parseHtmlTableStructured = (value?: string): StructuredTableResult | null => {
@@ -936,6 +945,29 @@ function HomeWorkspace() {
         const roiPromises = pageRois.map(async (roi, rIdx) => {
           const croppedBase64 = cropRoiToImage(img, roi, scaleX, scaleY);
           if (!croppedBase64) return null;
+          const isTableRoi = roi.type === "table" || roi.dataType === "table" || roi.extractionMethod === "table_recognition_v2" || roi.extractionMethod === "ocr_table";
+          const createTablePlaceholderResult = (message: string): OCRResult & { pageIndex?: number } => {
+            const emptyStructured = createEmptyStructuredTable();
+            return {
+              id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
+              roiId: roi.id,
+              fieldName: roi.fieldName,
+              bbox: [],
+              extractedText: JSON.stringify(emptyStructured, null, 2),
+              originalText: message,
+              confidence: 0,
+              saved_path: "",
+              pageIndex: pageIdx,
+              type: "table",
+              dataType: "table",
+              role: roi.role || "data_extraction",
+              weight: roi.weight !== undefined ? roi.weight : 1.0,
+              points: roi.points,
+              tableRows: emptyStructured.rows,
+              tableStructured: emptyStructured,
+              tableDebug: { status: "table_placeholder", message },
+            };
+          };
 
           try {
             const response = await fetch(`${ADMIN_API_BASE_URL}/api/ai/process`, {
@@ -971,6 +1003,8 @@ function HomeWorkspace() {
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
                 : responseStructured?.rows || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+              const finalTableStructured = isTableRoi ? responseStructured || createEmptyStructuredTable() : responseStructured;
+              const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
               return {
@@ -984,18 +1018,24 @@ function HomeWorkspace() {
                 saved_path: resItem.saved_path || "",
                 pageIndex: pageIdx,
                 type: (resItem.type as "text" | "table" | "image" | undefined) || roi.type || "text",
-                dataType: roi.dataType || "string",
+                dataType: isTableRoi ? "table" : roi.dataType || "string",
                 role: roi.role || "data_extraction",
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
                 points: roi.points,
-                tableRows: rawTableRows || undefined,
-                tableStructured: responseStructured,
+                tableRows: finalTableRows || undefined,
+                tableStructured: finalTableStructured,
                 tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
                 tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
               };
             }
+            if (isTableRoi) {
+              return createTablePlaceholderResult(aiData?.detail || aiData?.error || "Table Recognition did not return table data.");
+            }
           } catch (innerErr) {
             console.error(`Error processing ROI ${roi.fieldName}:`, innerErr);
+            if (isTableRoi) {
+              return createTablePlaceholderResult(innerErr instanceof Error ? innerErr.message : "Table Recognition failed.");
+            }
           }
           return null;
         });
