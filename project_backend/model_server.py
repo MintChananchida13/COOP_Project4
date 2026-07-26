@@ -138,23 +138,19 @@ def _warmup() -> Dict[str, Any]:
     }
 
 
-# @app.on_event("startup")
-# async def startup_warmup() -> None:
-#     if os.getenv("MODEL_SERVICE_WARMUP", "true").strip().lower() in {"0", "false", "no", "off"}:
-#         print("Model runtime warm-up skipped (MODEL_SERVICE_WARMUP=false).")
-#         return
-#     print("Warming up model runtime service...")
-#     try:
-#         summary = _warmup()
-#         print(f"Model runtime warm-up complete in {summary['elapsed_seconds']}s: {summary}")
-#     except Exception as error:
-#         print(f"Model runtime warm-up failed: {error}")
-#         if os.getenv("MODEL_SERVICE_WARMUP_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
-#             raise
-
 @app.on_event("startup")
 async def startup_warmup() -> None:
-    print("Model runtime started without automatic warmup.")
+    if os.getenv("MODEL_SERVICE_WARMUP", "true").strip().lower() in {"0", "false", "no", "off"}:
+        print("Model runtime warm-up skipped (MODEL_SERVICE_WARMUP=false).")
+        return
+    print("Warming up model runtime service...")
+    try:
+        summary = _warmup()
+        print(f"Model runtime warm-up complete in {summary['elapsed_seconds']}s: {summary}")
+    except Exception as error:
+        print(f"Model runtime warm-up failed: {error}")
+        if os.getenv("MODEL_SERVICE_WARMUP_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            raise
 
 @app.get("/health")
 def health() -> Dict[str, Any]:

@@ -1,6 +1,7 @@
 import os
 import tempfile
 import logging
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -363,6 +364,7 @@ def _extract_structured_table(result: Dict[str, Any], rows: List[List[str]], htm
 
 
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
+    started = time.perf_counter()
     if image is None or image.size == 0:
         return {
             "text": "",
@@ -372,11 +374,12 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             "preprocessing": "table_v2_empty_image",
             "engine": "table_recognition_v2",
             "model": _TABLE_MODEL_NAME,
-            "table_debug": {"status": "empty_image"},
+            "table_debug": {"status": "empty_image", "runtime_called": True},
         }
 
     logger.info("Using local Table Recognition runtime")
     model = _load_table_model()
+    input_height, input_width = image.shape[:2]
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
     try:
@@ -429,6 +432,9 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             "raw_result_count": len(dicts),
             "model_kind": _TABLE_MODEL_KIND,
             "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
+            "runtime_called": True,
+            "input_size": [int(input_width), int(input_height)],
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
         },
     }
 
@@ -447,6 +453,11 @@ def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
             raise TableRecognitionV2UnavailableError("Remote Table Recognition runtime returned no result.")
         if not isinstance(remote_result, dict):
             raise TableRecognitionV2UnavailableError("Remote Table Recognition runtime returned an invalid response.")
+        remote_debug = remote_result.get("table_debug")
+        if isinstance(remote_debug, dict):
+            remote_debug.setdefault("remote_runtime_called", True)
+        else:
+            remote_result["table_debug"] = {"remote_runtime_called": True}
         return remote_result
 
     return recognize_table_v2_local(image)
