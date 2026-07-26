@@ -162,7 +162,13 @@ class ImageNormalizationService:
             dtype="float32",
         )
         matrix = cv2.getPerspectiveTransform(ordered, destination)
-        warped = cv2.warpPerspective(image, matrix, (max_width, max_height))
+        warped = cv2.warpPerspective(
+            image,
+            matrix,
+            (max_width, max_height),
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
         validation = self._validate_transformed_image(warped, image)
         if not validation["passed"]:
             debug.update(

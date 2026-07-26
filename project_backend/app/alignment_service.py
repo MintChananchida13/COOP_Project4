@@ -205,7 +205,13 @@ class AlignmentService:
                 alignment_score=alignment_score,
             )
         template_height, template_width = template.shape[:2]
-        aligned = cv2.warpPerspective(query, homography, (template_width, template_height))
+        aligned = cv2.warpPerspective(
+            query,
+            homography,
+            (template_width, template_height),
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
 
         target_path = Path(output_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)

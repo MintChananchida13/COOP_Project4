@@ -103,10 +103,22 @@ class LayoutAlignmentService:
         template_height, template_width = template.shape[:2]
         try:
             if transform_type == "homography":
-                warped = cv2.warpPerspective(query, matrix, (template_width, template_height))
+                warped = cv2.warpPerspective(
+                    query,
+                    matrix,
+                    (template_width, template_height),
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255),
+                )
                 homography = matrix.tolist()
             else:
-                warped = cv2.warpAffine(query, matrix, (template_width, template_height))
+                warped = cv2.warpAffine(
+                    query,
+                    matrix,
+                    (template_width, template_height),
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255),
+                )
                 homography = None
         except cv2.error as error:
             return self._result(
