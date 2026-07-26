@@ -2616,6 +2616,14 @@ class AdminTemplateService:
         page_paths = self._template_page_image_paths(template["id"], template.get("pages") or [])
         return self._layout_signature_for_page_paths(page_paths, page_number)
 
+    def _layout_signatures_for_page_paths(self, page_paths: Dict[int, str]) -> Dict[int, Dict[str, Any]]:
+        signatures: Dict[int, Dict[str, Any]] = {}
+        for page_number in sorted(page_paths):
+            signatures[int(page_number)] = self._layout_signature_for_page_paths(page_paths, int(page_number))
+        if not signatures:
+            raise HTTPException(status_code=409, detail="Unable to generate layout signatures for template matching")
+        return signatures
+
     def _draft_layout_reference_match(
         self,
         template_id: str,
@@ -2675,6 +2683,90 @@ class AdminTemplateService:
             "reference_count": len(compared_references),
             "references": compared_references,
         }
+
+    def _draft_layout_reference_matches_for_pages(
+        self,
+        template_id: str,
+        query_signatures_by_page: Dict[int, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        page_matches = []
+        for page_number, query_signature in sorted(query_signatures_by_page.items()):
+            match = self._draft_layout_reference_match(template_id, query_signature)
+            same_page_refs = [
+                reference
+                for reference in match.get("references", [])
+                if int(reference.get("page_number") or 0) == int(page_number)
+            ]
+            best_same_page = max(same_page_refs, key=lambda item: float(item.get("score") or 0.0), default=None)
+            best_reference = best_same_page or match["best_reference"]
+            score = float(best_reference.get("score") or 0.0)
+            page_matches.append(
+                {
+                    "query_page_number": page_number,
+                    "template_page_number": best_reference.get("page_number"),
+                    "score": round(score, 4),
+                    "best_reference": best_reference,
+                    "reference_count": match.get("reference_count", 0),
+                    "same_page_reference_count": len(same_page_refs),
+                    "fallback_cross_page": best_same_page is None,
+                }
+            )
+        scores = [float(item.get("score") or 0.0) for item in page_matches]
+        best_page_match = max(page_matches, key=lambda item: float(item.get("score") or 0.0)) if page_matches else None
+        return {
+            "score": sum(scores) / len(scores) if scores else 0.0,
+            "best_reference": best_page_match.get("best_reference") if best_page_match else None,
+            "reference_count": sum(int(item.get("reference_count") or 0) for item in page_matches),
+            "page_matches": page_matches,
+        }
+
+    def _search_layout_candidates_for_pages(
+        self,
+        query_signatures_by_page: Dict[int, Dict[str, Any]],
+        template_id: str,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        by_template: Dict[str, Dict[str, Any]] = {}
+        for page_number, query_signature in sorted(query_signatures_by_page.items()):
+            for result in search_layout_candidates(query_signature, page_number=page_number, limit=limit, include_template_id=template_id):
+                candidate_template_id = self._template_id_from_vector_candidate(result)
+                if not candidate_template_id:
+                    continue
+                score = float(result.get("score") or result.get("layout_score") or 0.0)
+                entry = by_template.setdefault(
+                    candidate_template_id,
+                    {
+                        "template_id": candidate_template_id,
+                        "scores": [],
+                        "best_result": result,
+                        "best_score": score,
+                        "page_matches": [],
+                    },
+                )
+                entry["scores"].append(score)
+                entry["page_matches"].append(
+                    {
+                        "query_page_number": page_number,
+                        "template_page_number": (result.get("metadata") or {}).get("matched_layout_reference_page_number") or page_number,
+                        "score": round(score, 4),
+                        "vector_id": result.get("vector_id"),
+                    }
+                )
+                if score > float(entry["best_score"]):
+                    entry["best_score"] = score
+                    entry["best_result"] = result
+
+        candidates = []
+        for entry in by_template.values():
+            scores = [float(score) for score in entry["scores"]]
+            average_score = sum(scores) / len(scores) if scores else 0.0
+            best_result = dict(entry["best_result"])
+            best_result["score"] = average_score
+            best_result["layout_score"] = average_score
+            best_result["page_match_details"] = entry["page_matches"]
+            best_result["matched_pages"] = len(scores)
+            candidates.append(best_result)
+        return sorted(candidates, key=lambda item: float(item.get("score") or 0.0), reverse=True)
 
     def _align_query_pages_for_candidate(
         self,
@@ -2947,12 +3039,13 @@ class AdminTemplateService:
         query_page_paths = self._template_page_image_paths(template_id, pages)
         if not query_page_paths:
             raise HTTPException(status_code=409, detail="Unable to prepare template page images for verification simulation")
-        query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
+        query_signatures_by_page = self._layout_signatures_for_page_paths(query_page_paths)
+        query_signature = query_signatures_by_page[min(query_signatures_by_page.keys())]
         page_layout_signature_pages: List[Dict[str, Any]] = []
         pages_by_number = {int(page.get("page_number") or index + 1): page for index, page in enumerate(pages)}
         for page_number in sorted(query_page_paths):
             page = pages_by_number.get(int(page_number), {})
-            signature = query_signature if int(page_number) == 1 else self._layout_signature_for_page_paths(query_page_paths, int(page_number))
+            signature = query_signatures_by_page.get(int(page_number))
             page_status = "generated" if signature else "failed"
             page_layout_signature_pages.append(
                 {
@@ -2976,7 +3069,7 @@ class AdminTemplateService:
 
         active_candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
-        for result in search_layout_candidates(query_signature, page_number=1, limit=10, include_template_id=template_id):
+        for result in self._search_layout_candidates_for_pages(query_signatures_by_page, template_id, limit=10):
             candidate_template_id = self._template_id_from_vector_candidate(result)
             if not candidate_template_id or candidate_template_id in seen_template_ids:
                 continue
@@ -2992,6 +3085,7 @@ class AdminTemplateService:
                     is_current_draft=False,
                 )
             )
+            active_candidates[-1]["page_match_details"] = result.get("page_match_details", [])
             if len(active_candidates) >= 4:
                 break
 
@@ -3083,13 +3177,14 @@ class AdminTemplateService:
         query_paths = [query_page_paths[key] for key in sorted(query_page_paths)]
         draft_paths = [draft_page_paths[key] for key in sorted(draft_page_paths)]
 
-        query_signature = self._layout_signature_for_page_paths(query_page_paths, 1)
-        draft_reference_match = self._draft_layout_reference_match(template_id, query_signature)
+        query_signatures_by_page = self._layout_signatures_for_page_paths(query_page_paths)
+        query_signature = query_signatures_by_page[min(query_signatures_by_page.keys())]
+        draft_reference_match = self._draft_layout_reference_matches_for_pages(template_id, query_signatures_by_page)
         draft_global_score = float(draft_reference_match["score"])
 
         candidates: List[Dict[str, Any]] = []
         seen_template_ids = {template_id}
-        for result in search_layout_candidates(query_signature, page_number=1, limit=10, include_template_id=template_id):
+        for result in self._search_layout_candidates_for_pages(query_signatures_by_page, template_id, limit=10):
             candidate_template_id = self._template_id_from_vector_candidate(result)
             if not candidate_template_id or candidate_template_id in seen_template_ids:
                 continue
@@ -3105,6 +3200,7 @@ class AdminTemplateService:
             )
             candidate["source"] = "published"
             candidate["source_label"] = "Published / Layout Signature"
+            candidate["page_match_details"] = result.get("page_match_details", [])
             candidates.append(candidate)
             if len(candidates) >= 4:
                 break
@@ -3114,6 +3210,7 @@ class AdminTemplateService:
         draft_candidate["source_label"] = "Draft / Layout References"
         draft_candidate["matched_layout_reference"] = draft_reference_match["best_reference"]
         draft_candidate["layout_reference_count"] = draft_reference_match["reference_count"]
+        draft_candidate["page_match_details"] = draft_reference_match.get("page_matches", [])
 
         candidates = sorted([draft_candidate, *candidates], key=lambda item: item["final_score"], reverse=True)[:5]
         for index, candidate in enumerate(candidates, start=1):
@@ -3168,6 +3265,7 @@ class AdminTemplateService:
                 "input_page_count": len(uploaded_page_paths),
                 "query_page_paths": [str(path) for path in uploaded_page_paths],
                 "normalized_query_page_paths": query_paths,
+                "query_page_numbers": sorted(query_signatures_by_page.keys()),
                 "draft_global_score": round(draft_global_score, 4),
                 "draft_layout_reference_match": draft_reference_match,
             },
