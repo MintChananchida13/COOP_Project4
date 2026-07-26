@@ -14,7 +14,6 @@ import {
   ADMIN_API_BASE_URL,
   detectTemplateDev,
   fetchTemplateBundle,
-  type DetectionCandidate,
   type DetectionDevResult,
 } from "../admin/adminApi";
 import { InlineState } from "../shared/ui";
@@ -247,77 +246,78 @@ function loadImageElement(src: string) {
   });
 }
 
-function findDetectionPageCandidate(detection: DetectionDevResult | null | undefined, templateId: string, pageNumber: number) {
-  const page = detection?.pages?.find((item) => item.pageIndex === pageNumber);
-  return (
-    page?.candidates?.find((candidate) => candidate.templateId === templateId) ||
-    (page?.bestCandidate?.templateId === templateId ? page.bestCandidate : null) ||
-    null
-  );
-}
-
-function candidateFieldRoi(field: TemplateField, pageCandidate: DetectionCandidate | null) {
-  void pageCandidate;
-  return { roi: field.roi, source: "template_roi" };
-}
-
 async function templateFieldsToWorkspaceRois(
   fields: TemplateField[],
   imageList: string[],
   detection?: DetectionDevResult | null,
   templateId?: string
 ) {
+  void detection;
+  void templateId;
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
-
-  return fields
+  const extractionFields = fields
     .filter((field) => !field.useForVerification)
-    .sort(
-      (left, right) =>
-        left.pageNumber - right.pageNumber ||
-        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
-        left.fieldName.localeCompare(right.fieldName)
-    )
-    .map((field) => {
-      const pageCandidate = templateId ? findDetectionPageCandidate(detection, templateId, field.pageNumber) : null;
-      const { roi, source } = candidateFieldRoi(field, pageCandidate);
-      const pageIndex = Math.max(0, roi.pageNumber - 1);
-      const pageImage = pageImages[pageIndex];
-      const displayWidth = 750;
-      const displayHeight = pageImage?.naturalWidth
-        ? (pageImage.naturalHeight / pageImage.naturalWidth) * displayWidth
-        : 1000;
+    .sort(compareTemplateFieldsForWorkspace);
+  const workspaceRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[] = [];
 
-      const type =
-        field.extractionMethod === "ocr_table" || field.extractionMethod === "table_recognition_v2" || field.dataType === "table"
-          ? "table"
-          : field.extractionMethod === "extract_image" || field.dataType === "image"
-            ? "image"
-            : "text";
+  for (const field of extractionFields) {
+    const roi = field.roi;
+    const pageIndex = Math.max(0, roi.pageNumber - 1);
+    const pageImage = pageImages[pageIndex];
+    const displayWidth = 750;
+    const displayHeight = pageImage?.naturalWidth
+      ? (pageImage.naturalHeight / pageImage.naturalWidth) * displayWidth
+      : 1000;
+    const type = getWorkspaceRoiType(field);
 
-      return {
-        id: stableNumericId(`template-field:${field.id}`),
-        fieldName: field.displayLabel || field.fieldName,
-        x: roi.xRatio * displayWidth,
-        y: roi.yRatio * displayHeight,
-        width: roi.widthRatio * displayWidth,
-        height: roi.heightRatio * displayHeight,
-        pageIndex,
-        type,
-        dataType: field.dataType || type,
-        extractionMethod:
-          field.extractionMethod === "ocr_table" ||
-          field.extractionMethod === "table_recognition_v2" ||
-          field.extractionMethod === "paddle_thai_ocr" ||
-          field.extractionMethod === "extract_image"
-            ? field.extractionMethod
-            : field.dataType === "table"
-              ? "table_recognition_v2"
-              : "paddle_thai_ocr",
-        role: "data_extraction",
-        enabled: field.defaultSelected !== false,
-        roiCoordinateSource: source,
-      } satisfies ROI & { pageIndex?: number; roiCoordinateSource?: string };
+    workspaceRois.push({
+      id: stableNumericId(`template-field:${field.id}`),
+      fieldName: field.displayLabel || field.fieldName,
+      x: roi.xRatio * displayWidth,
+      y: roi.yRatio * displayHeight,
+      width: roi.widthRatio * displayWidth,
+      height: roi.heightRatio * displayHeight,
+      pageIndex,
+      type,
+      dataType: field.dataType || type,
+      extractionMethod: getWorkspaceExtractionMethod(field),
+      role: "data_extraction",
+      enabled: field.defaultSelected !== false,
+      roiCoordinateSource: "template_roi",
     });
+  }
+
+  return workspaceRois;
+}
+
+function compareTemplateFieldsForWorkspace(left: TemplateField, right: TemplateField) {
+  return (
+    left.pageNumber - right.pageNumber ||
+    (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+    left.fieldName.localeCompare(right.fieldName)
+  );
+}
+
+function getWorkspaceRoiType(field: TemplateField): "text" | "table" | "image" {
+  if (field.extractionMethod === "ocr_table" || field.extractionMethod === "table_recognition_v2" || field.dataType === "table") {
+    return "table";
+  }
+  if (field.extractionMethod === "extract_image" || field.dataType === "image") {
+    return "image";
+  }
+  return "text";
+}
+
+function getWorkspaceExtractionMethod(field: TemplateField) {
+  if (
+    field.extractionMethod === "ocr_table" ||
+    field.extractionMethod === "table_recognition_v2" ||
+    field.extractionMethod === "paddle_thai_ocr" ||
+    field.extractionMethod === "extract_image"
+  ) {
+    return field.extractionMethod;
+  }
+  return field.dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr";
 }
 
 async function buildTemplateCanvasImages(sourceImages: string[], detection: DetectionDevResult, templateId: string) {
