@@ -615,10 +615,10 @@ export default function AdjustZone({
 
 return (
   <div className="max-w-7xl mx-auto rounded-2xl border border-slate-200 bg-[#f8fafc] p-4 md:p-6">
-    <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-stretch">
       {/* Left Preview */}
-      <div className="xl:col-span-8 space-y-4">
-        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl flex items-center justify-center min-h-[640px] md:h-[calc(100vh-220px)] overflow-hidden shadow-inner relative p-6">
+      <div className="flex flex-col gap-4 xl:col-span-8 xl:h-[calc(100vh-140px)] xl:min-h-[720px]">
+        <div className="relative flex min-h-[520px] flex-1 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-[#edf2f7] p-6 shadow-inner sm:min-h-[640px] xl:min-h-0">
           <div className="relative flex items-center justify-center w-full h-full">
             {isCropped && liveCropPreviewUrl ? (
               <img
@@ -682,7 +682,7 @@ return (
           </div>
         </div>
 
-        <div className="bg-[#edf2f7] border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex shrink-0 flex-col items-center justify-between gap-4 rounded-xl border border-slate-200 bg-[#edf2f7] p-3 sm:flex-row">
           <div className="text-slate-600 text-xs font-semibold px-2 shrink-0">
             เอกสารในคิว:
             <span className="text-blue-600 font-mono font-bold ml-1">
@@ -743,8 +743,8 @@ return (
       </div>
 
 {/* Right Tools */}
-<div className="xl:col-span-4 flex flex-col">
-  <div className="min-h-[640px] md:h-[calc(100vh-220px)] overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+<div className="flex flex-col xl:col-span-4 xl:h-[calc(100vh-140px)] xl:min-h-[720px]">
+  <div className="min-h-0 flex-1 overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
     <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
       <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
         <RotateCcw size={13} /> รีเซ็ตการปรับแต่ง
@@ -1014,7 +1014,7 @@ return (
     ))}
   </div>
 
-  <div className="-mt-px rounded-b-xl border border-t-0 border-slate-200 bg-white p-4 shadow-sm">
+  <div className="-mt-px shrink-0 rounded-b-xl border border-t-0 border-slate-200 bg-white p-4 shadow-sm">
     <button
       type="button"
       disabled={isProcessing}
