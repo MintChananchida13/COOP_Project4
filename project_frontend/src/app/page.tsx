@@ -805,8 +805,10 @@ function HomeWorkspace() {
       setTemplateDecisionStatus("กำลังค้นหา Template ที่ใกล้เคียงที่สุด");
       let detection: DetectionDevResult;
       try {
-        const file = await dataUrlToFile(firstImage, "confirmed-document.jpg");
-        detection = await detectTemplateDev(file);
+        const detectionFiles = await Promise.all(
+          finalProcessedImages.map((src, index) => dataUrlToFile(src, `confirmed-document-page-${index + 1}.jpg`))
+        );
+        detection = await detectTemplateDev(detectionFiles.length > 1 ? detectionFiles : detectionFiles[0]);
         devTemplateFlowLog("detection completed", {
           matched: detection.matched,
           candidateCount: detection.candidates.length,

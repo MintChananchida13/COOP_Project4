@@ -1,3 +1,5 @@
+import io
+
 from fastapi import APIRouter, HTTPException, Request
 
 from .db import connect as connect_db
@@ -82,6 +84,35 @@ def database_health() -> ApiResponse:
         ) from error
 
 
+def _images_to_pdf_bytes(files: list[bytes]) -> bytes:
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise HTTPException(status_code=501, detail="Multi-page detection requires Pillow") from error
+
+    images = []
+    for file_bytes in files:
+        if file_bytes.lstrip().startswith(b"%PDF"):
+            if len(files) == 1:
+                return file_bytes
+            raise HTTPException(status_code=400, detail="Multi-file detection accepts image pages, not mixed PDF files")
+        try:
+            image = Image.open(io.BytesIO(file_bytes))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            images.append(image.copy())
+        except Exception as error:
+            raise HTTPException(status_code=400, detail="Uploaded page is not a valid image") from error
+
+    if not images:
+        raise HTTPException(status_code=400, detail="No uploaded image file found")
+
+    output = io.BytesIO()
+    first, rest = images[0], images[1:]
+    first.save(output, format="PDF", save_all=True, append_images=rest)
+    return output.getvalue()
+
+
 def _extract_multipart_file(content_type: str, body: bytes) -> bytes:
     boundary_token = "boundary="
     if boundary_token not in content_type:
@@ -91,6 +122,7 @@ def _extract_multipart_file(content_type: str, body: bytes) -> bytes:
         raise HTTPException(status_code=400, detail="Multipart upload is missing boundary")
 
     delimiter = f"--{boundary}".encode("utf-8")
+    files: list[bytes] = []
     for part in body.split(delimiter):
         if b"Content-Disposition" not in part or b"filename=" not in part:
             continue
@@ -101,8 +133,12 @@ def _extract_multipart_file(content_type: str, body: bytes) -> bytes:
         if data.endswith(b"--"):
             data = data[:-2]
         if data:
-            return data
-    raise HTTPException(status_code=400, detail="No uploaded image file found")
+            files.append(data)
+    if not files:
+        raise HTTPException(status_code=400, detail="No uploaded image file found")
+    if len(files) == 1:
+        return files[0]
+    return _images_to_pdf_bytes(files)
 
 
 async def _read_dev_detection_image(request: Request) -> bytes:

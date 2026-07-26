@@ -1196,9 +1196,12 @@ export const failEmbeddingJobDev = async (jobId: string) =>
     })
   );
 
-export const detectTemplateDev = async (file: File): Promise<DetectionDevResult> => {
+export const detectTemplateDev = async (file: File | File[]): Promise<DetectionDevResult> => {
   const formData = new FormData();
-  formData.append("file", file);
+  const files = Array.isArray(file) ? file : [file];
+  files.forEach((item, index) => {
+    formData.append("file", item, item.name || `page-${index + 1}.jpg`);
+  });
   const response = await fetch(`${ADMIN_API_BASE_URL}/api/templates/detect-dev`, {
     method: "POST",
     body: formData,
