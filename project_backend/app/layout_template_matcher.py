@@ -85,11 +85,13 @@ def search_layout_candidates(
                 tlr.layout_signature_json AS layout_signature_json
             FROM template_layout_references tlr
             JOIN templates t ON t.id = tlr.template_id
-            LEFT JOIN template_pages tp ON tp.template_id = t.id AND tp.page_number = 1
+            LEFT JOIN template_pages tp ON tp.template_id = t.id AND tp.page_number = tlr.page_number
             WHERE tlr.layout_signature_json IS NOT NULL
               AND tlr.review_status = 'approved'
+              AND tlr.page_number = ?
             ORDER BY t.updated_at DESC, tlr.is_canonical DESC, tlr.page_number ASC
-            """
+            """,
+            (page_number,),
         ).fetchall()
 
         fallback_rows = conn.execute(
@@ -113,6 +115,7 @@ def search_layout_candidates(
             FROM template_pages tp
             JOIN templates t ON t.id = tp.template_id
             WHERE tp.layout_signature_json IS NOT NULL
+              AND tp.page_number = ?
               AND NOT EXISTS (
                   SELECT 1
                   FROM template_layout_references tlr
@@ -121,7 +124,8 @@ def search_layout_candidates(
                     AND tlr.review_status = 'approved'
             )
             ORDER BY t.updated_at DESC, tp.page_number ASC
-            """
+            """,
+            (page_number,),
         ).fetchall()
 
         rows = [*reference_rows, *fallback_rows]
