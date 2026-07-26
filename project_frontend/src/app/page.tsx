@@ -649,6 +649,7 @@ function HomeWorkspace() {
   const [uploadedSourceFileId, setUploadedSourceFileId] = useState<string>("");
   const [uploadedSourceFileName, setUploadedSourceFileName] = useState<string>("");
   const [uploadedSourceFileType, setUploadedSourceFileType] = useState<"pdf" | "image" | "">("");
+  const [uploadedSourceFile, setUploadedSourceFile] = useState<File | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [pagesConfig, setPagesConfig] = useState<PageConfig[]>([]);
@@ -707,10 +708,11 @@ function HomeWorkspace() {
     setOcrResults(next);
   };
 
-  const handleUploadSuccess = (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image") => {
+  const handleUploadSuccess = (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image", sourceFile?: File) => {
     setUploadedSourceFileId(`user_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     setUploadedSourceFileName(sourceFileName || "ไฟล์ต้นทาง");
     setUploadedSourceFileType(sourceFileType || (sourceFileName?.toLowerCase().endsWith(".pdf") ? "pdf" : "image"));
+    setUploadedSourceFile(sourceFile || null);
     setImagesList(urls);
     setOriginalImagesList([...urls]);
     setCurrentIndex(0);
@@ -753,6 +755,7 @@ function HomeWorkspace() {
     setUploadedSourceFileId("");
     setUploadedSourceFileName("");
     setUploadedSourceFileType("");
+    setUploadedSourceFile(null);
     setCurrentIndex(0);
     setPagesConfig([]);
     setPreviewUrl("");
@@ -805,15 +808,20 @@ function HomeWorkspace() {
       setTemplateDecisionStatus("กำลังค้นหา Template ที่ใกล้เคียงที่สุด");
       let detection: DetectionDevResult;
       try {
-        const detectionFiles = await Promise.all(
-          finalProcessedImages.map((src, index) => dataUrlToFile(src, `confirmed-document-page-${index + 1}.jpg`))
-        );
-        detection = await detectTemplateDev(detectionFiles.length > 1 ? detectionFiles : detectionFiles[0]);
+        const shouldUseOriginalPdfForDetection =
+          uploadedSourceFileType === "pdf" &&
+          uploadedSourceFile &&
+          (uploadedSourceFile.type === "application/pdf" || uploadedSourceFile.name.toLowerCase().endsWith(".pdf"));
+        const detectionInput = shouldUseOriginalPdfForDetection
+          ? uploadedSourceFile
+          : await Promise.all(finalProcessedImages.map((src, index) => dataUrlToFile(src, `confirmed-document-page-${index + 1}.jpg`)));
+        detection = await detectTemplateDev(Array.isArray(detectionInput) && detectionInput.length === 1 ? detectionInput[0] : detectionInput);
         devTemplateFlowLog("detection completed", {
           matched: detection.matched,
           candidateCount: detection.candidates.length,
           pageCount: detection.pages.length,
           bestTemplateId: detection.bestCandidate?.templateId ?? null,
+          usedOriginalPdf: shouldUseOriginalPdfForDetection,
         });
       } catch (error) {
         throw contextualTemplateError("Template detection mapping failed", error);
