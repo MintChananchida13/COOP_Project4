@@ -414,7 +414,30 @@ const dataUrlMimeType = (dataUrl: string) => {
 
 const dataUrlBase64 = (dataUrl: string) => dataUrl.split(",", 2)[1] || "";
 
-const foldBase64 = (value: string) => value.replace(/(.{76})/g, "$1\r\n");
+const xmlEscape = (value: unknown) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+
+const spreadsheetColumnName = (index: number) => {
+  let value = index + 1;
+  let name = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
+};
+
+const xlsxCell = (rowIndex: number, colIndex: number, value: unknown, style = 1) =>
+  `<c r="${spreadsheetColumnName(colIndex)}${rowIndex + 1}" t="inlineStr" s="${style}"><is><t>${xmlEscape(value)}</t></is></c>`;
+
+const xlsxRow = (rowIndex: number, values: unknown[], style = 1) =>
+  `<row r="${rowIndex + 1}">${values.map((value, colIndex) => xlsxCell(rowIndex, colIndex, value, style)).join("")}</row>`;
 
 const crc32 = (bytes: Uint8Array) => {
   let crc = 0xffffffff;
@@ -1464,39 +1487,94 @@ function HomeWorkspace() {
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}h1{font-size:18pt;text-align:left}h3{font-size:12pt;margin-top:16px;text-align:left}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap;text-align:left;mso-number-format:"\\@";}th{background:#e2e8f0;font-weight:bold}img{display:block}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
   };
 
-  const buildExcelMhtmlBlob = async (
+  const buildExcelXlsxBlob = async (
     content: ExportContentOptions = exportContent,
     options: ExportDisplayOptions = exportOptions
   ) => {
     const imageCrops = await buildImageFieldCrops(content);
-    const html = await buildExcelHtml(content, options);
-    const boundary = `----=_OCR_EXPORT_${Date.now()}`;
-    const origin = "file:///C:/ocr-export.xls";
-    const parts = [
-      `MIME-Version: 1.0`,
-      `X-Document-Type: Workbook`,
-      `Content-Type: multipart/related; boundary="${boundary}"`,
-      "",
-      `--${boundary}`,
-      `Content-Type: text/html; charset="utf-8"`,
-      `Content-Location: ${origin}`,
-      "",
-      html,
-      "",
-      ...imageCrops.flatMap((crop) => [
-        `--${boundary}`,
-        `Content-Type: ${dataUrlMimeType(crop.dataUrl)}`,
-        `Content-Transfer-Encoding: base64`,
-        `Content-ID: <excel-image-${crop.resultId}>`,
-        `Content-Location: excel-image-${crop.resultId}`,
-        "",
-        foldBase64(dataUrlBase64(crop.dataUrl)),
-        "",
-      ]),
-      `--${boundary}--`,
-      "",
-    ];
-    return new Blob([parts.join("\r\n")], { type: "application/vnd.ms-excel" });
+    const textResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image");
+    const tableResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "table");
+    const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
+    const imageByResult = new Map(imageCrops.map((crop) => [crop.resultId, crop]));
+    const encoder = new TextEncoder();
+    const files: { name: string; bytes: Uint8Array }[] = [];
+    const sheetNames = ["Text", "Tables", "Images"];
+
+    const worksheet = (rows: string, beforeSheetData = "", afterSheetData = "") =>
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="18"/>${beforeSheetData}<sheetData>${rows}</sheetData>${afterSheetData}</worksheet>`;
+
+    const textRows = [
+      ...(options.showDocumentTitle ? [xlsxRow(0, [matchedTemplate?.name || "OCR Export"], 2)] : []),
+      xlsxRow(options.showDocumentTitle ? 2 : 0, options.showFieldNames ? ["Field", "Ground Truth"] : ["Ground Truth"], 2),
+      ...textResults.map((result, index) =>
+        xlsxRow((options.showDocumentTitle ? 3 : 1) + index, options.showFieldNames ? [result.fieldName, result.extractedText] : [result.extractedText])
+      ),
+    ].join("");
+
+    const tableRows: string[] = [];
+    let tableRowIndex = 0;
+    if (options.showDocumentTitle) {
+      tableRows.push(xlsxRow(tableRowIndex, [matchedTemplate?.name || "OCR Export"], 2));
+      tableRowIndex += 2;
+    }
+    tableResults.forEach((result) => {
+      if (options.showFieldNames) {
+        tableRows.push(xlsxRow(tableRowIndex, [result.fieldName], 2));
+        tableRowIndex += 1;
+      }
+      const structured = getStructuredTableForExport(result);
+      const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
+      rows.forEach((row, rowOffset) => {
+        tableRows.push(xlsxRow(tableRowIndex, row, rowOffset === 0 ? 2 : 1));
+        tableRowIndex += 1;
+      });
+      tableRowIndex += 1;
+    });
+
+    const imageRows: string[] = [];
+    let imageRowIndex = 0;
+    imageRows.push(xlsxRow(imageRowIndex, options.showFieldNames ? ["Field", "Image", "Filename", "Page"] : ["Image", "Filename", "Page"], 2));
+    imageRowIndex += 1;
+    imageResults.forEach((result) => {
+      const crop = imageByResult.get(result.id);
+      const rowValues = options.showFieldNames
+        ? [result.fieldName, crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
+        : [crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
+      imageRows.push(`<row r="${imageRowIndex + 1}" ht="118" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
+      imageRowIndex += 1;
+    });
+
+    files.push(
+      { name: "[Content_Types].xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`) },
+      { name: "_rels/.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
+      { name: "xl/workbook.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetNames.map((name, index) => `<sheet name="${name}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets></workbook>`) },
+      { name: "xl/_rels/workbook.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) },
+      { name: "xl/styles.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="1" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>`) },
+      { name: "xl/worksheets/sheet1.xml", bytes: encoder.encode(worksheet(textRows, `<cols><col min="1" max="1" width="28" customWidth="1"/><col min="2" max="2" width="64" customWidth="1"/></cols>`)) },
+      { name: "xl/worksheets/sheet2.xml", bytes: encoder.encode(worksheet(tableRows.join(""), `<cols><col min="1" max="20" width="22" customWidth="1"/></cols>`)) }
+    );
+
+    const imageDrawingRel = imageCrops.length > 0 ? `<drawing r:id="rId1"/>` : "";
+    files.push({ name: "xl/worksheets/sheet3.xml", bytes: encoder.encode(worksheet(imageRows.join(""), `<cols><col min="1" max="1" width="${options.showFieldNames ? 28 : 24}" customWidth="1"/><col min="2" max="2" width="28" customWidth="1"/><col min="3" max="4" width="24" customWidth="1"/></cols>`, imageDrawingRel)) });
+    if (imageCrops.length > 0) {
+      files.push(
+        { name: "xl/worksheets/_rels/sheet3.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`) },
+        { name: "xl/drawings/_rels/drawing1.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${imageCrops.map((crop, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${index + 1}.${dataUrlMimeType(crop.dataUrl).includes("png") ? "png" : "jpg"}"/>`).join("")}</Relationships>`) },
+        { name: "xl/drawings/drawing1.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${imageCrops.map((crop, index) => {
+          const row = imageResults.findIndex((result) => result.id === crop.resultId) + 1;
+          const col = options.showFieldNames ? 1 : 0;
+          return `<xdr:twoCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${col + 1}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row + 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${index + 1}" name="${xmlEscape(crop.filename)}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId${index + 1}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`;
+        }).join("")}</xdr:wsDr>`) }
+      );
+      imageCrops.forEach((crop, index) => {
+        files.push({
+          name: `xl/media/image${index + 1}.${dataUrlMimeType(crop.dataUrl).includes("png") ? "png" : "jpg"}`,
+          bytes: dataUrlToBytes(crop.dataUrl),
+        });
+      });
+    }
+
+    return createZipBlob(files);
   };
 
   const openExportJson = () => {
@@ -1582,7 +1660,7 @@ function HomeWorkspace() {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    downloadBlobFile(`ocr-export-${Date.now()}.xls`, await buildExcelMhtmlBlob(exportContent, exportOptions));
+    downloadBlobFile(`ocr-export-${Date.now()}.xlsx`, await buildExcelXlsxBlob(exportContent, exportOptions));
   };
 
   const downloadImageZipExport = async () => {
