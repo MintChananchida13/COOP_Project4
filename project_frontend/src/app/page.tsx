@@ -1560,8 +1560,8 @@ function HomeWorkspace() {
       const displaySize = crop ? fitExcelImageSize(crop.width, crop.height) : null;
       const rowHeight = displaySize ? Math.ceil(displaySize.height * 0.75 + 10) : 28;
       const rowValues = options.showFieldNames
-        ? [result.fieldName, crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
-        : [crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
+        ? [result.fieldName, crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
+        : [crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
       imageRows.push(`<row r="${imageRowIndex + 1}" ht="${rowHeight}" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
       imageRowIndex += 1;
     });
@@ -1778,8 +1778,42 @@ function HomeWorkspace() {
     { key: "json", label: "JSON" },
     { key: "images", label: "Images" },
   ];
+  const availableExportContent = useMemo(() => {
+    const availability = { text: false, tables: false, images: false };
+    ocrResults.forEach((result) => {
+      const fieldType = getResultFieldType(result);
+      if (fieldType === "table") {
+        availability.tables = true;
+      } else if (fieldType === "image") {
+        availability.images = true;
+      } else {
+        availability.text = true;
+      }
+    });
+    return availability;
+  }, [ocrResults, rois]);
+  const exportContentChoiceOptions: { key: keyof ExportContentOptions; label: string }[] = [
+    { key: "text", label: "Text" },
+    { key: "tables", label: "Tables" },
+    { key: "images", label: "Images" },
+  ];
+  const exportContentChoices = exportContentChoiceOptions.filter((choice) => availableExportContent[choice.key]);
+  const visibleExportFormats = exportFormats.filter((format) => format.key !== "images" || availableExportContent.images);
   const exportPreviewImages = buildImageFieldPreviewList(exportContent);
   const exportPreviewResults = getIncludedExportResults(exportContent);
+  useEffect(() => {
+    if (!availableExportContent.images && exportFormat === "images") {
+      setExportFormat("word");
+    }
+    setExportContent((prev) => {
+      const next = {
+        text: availableExportContent.text ? prev.text : false,
+        tables: availableExportContent.tables ? prev.tables : false,
+        images: availableExportContent.images ? prev.images : false,
+      };
+      return next.text === prev.text && next.tables === prev.tables && next.images === prev.images ? prev : next;
+    });
+  }, [availableExportContent, exportFormat]);
   useEffect(() => {
     let cancelled = false;
     if (!isExportMenuOpen || exportFormat !== "json") return;
@@ -2342,7 +2376,7 @@ function HomeWorkspace() {
                       <div>
                         <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Format</p>
                         <div className="mt-2 grid grid-cols-2 gap-2">
-                          {exportFormats.map((format) => (
+                          {visibleExportFormats.map((format) => (
                             <button
                               key={format.key}
                               type="button"
@@ -2362,16 +2396,17 @@ function HomeWorkspace() {
                       <div>
                         <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Content</p>
                         <div className="mt-2 space-y-2">
-                          {[
-                            ["text", "Text"],
-                            ["tables", "Tables"],
-                            ["images", "Images"],
-                          ].map(([key, label]) => (
+                          {exportContentChoices.length === 0 && (
+                            <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-500">
+                              ไม่มีข้อมูลสำหรับ Export
+                            </div>
+                          )}
+                          {exportContentChoices.map(({ key, label }) => (
                             <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
                               <input
                                 type="checkbox"
-                                checked={exportContent[key as keyof ExportContentOptions]}
-                                onChange={() => toggleExportContent(key as keyof ExportContentOptions)}
+                                checked={exportContent[key]}
+                                onChange={() => toggleExportContent(key)}
                                 className="h-4 w-4 rounded border-slate-300 text-blue-600"
                               />
                               {label}
@@ -2422,6 +2457,7 @@ function HomeWorkspace() {
                     <button
                       type="button"
                       onClick={() => requestExport(exportFormat)}
+                      disabled={exportPreviewResults.length === 0}
                       className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white shadow-sm hover:bg-indigo-700"
                     >
                       Export {exportFormats.find((format) => format.key === exportFormat)?.label}
