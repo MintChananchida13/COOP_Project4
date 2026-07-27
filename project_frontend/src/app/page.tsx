@@ -1778,42 +1778,52 @@ function HomeWorkspace() {
     { key: "json", label: "JSON" },
     { key: "images", label: "Images" },
   ];
-  const availableExportContent = useMemo(() => {
-    const availability = { text: false, tables: false, images: false };
+  const exportableContentCounts = useMemo(() => {
+    const counts = { text: 0, tables: 0, images: 0 };
     ocrResults.forEach((result) => {
       const fieldType = getResultFieldType(result);
       if (fieldType === "table") {
-        availability.tables = true;
+        counts.tables += 1;
       } else if (fieldType === "image") {
-        availability.images = true;
+        counts.images += 1;
       } else {
-        availability.text = true;
+        counts.text += 1;
       }
     });
-    return availability;
+    return counts;
   }, [ocrResults, rois]);
+  const availableExportContent = {
+    text: exportableContentCounts.text > 0,
+    tables: exportableContentCounts.tables > 0,
+    images: exportableContentCounts.images > 0,
+  };
   const exportContentChoiceOptions: { key: keyof ExportContentOptions; label: string }[] = [
     { key: "text", label: "Text" },
     { key: "tables", label: "Tables" },
     { key: "images", label: "Images" },
   ];
-  const exportContentChoices = exportContentChoiceOptions.filter((choice) => availableExportContent[choice.key]);
+  const exportContentChoices = exportContentChoiceOptions.filter((choice) => {
+    if (!availableExportContent[choice.key]) return false;
+    if (exportFormat === "images") return choice.key === "images";
+    return true;
+  });
   const visibleExportFormats = exportFormats.filter((format) => format.key !== "images" || availableExportContent.images);
   const exportPreviewImages = buildImageFieldPreviewList(exportContent);
   const exportPreviewResults = getIncludedExportResults(exportContent);
+  const hasSelectedExportContent = exportPreviewResults.length > 0;
   useEffect(() => {
     if (!availableExportContent.images && exportFormat === "images") {
       setExportFormat("word");
     }
     setExportContent((prev) => {
       const next = {
-        text: availableExportContent.text ? prev.text : false,
-        tables: availableExportContent.tables ? prev.tables : false,
+        text: exportFormat === "images" ? false : availableExportContent.text ? prev.text : false,
+        tables: exportFormat === "images" ? false : availableExportContent.tables ? prev.tables : false,
         images: availableExportContent.images ? prev.images : false,
       };
       return next.text === prev.text && next.tables === prev.tables && next.images === prev.images ? prev : next;
     });
-  }, [availableExportContent, exportFormat]);
+  }, [availableExportContent.text, availableExportContent.tables, availableExportContent.images, exportFormat]);
   useEffect(() => {
     let cancelled = false;
     if (!isExportMenuOpen || exportFormat !== "json") return;
@@ -2457,8 +2467,8 @@ function HomeWorkspace() {
                     <button
                       type="button"
                       onClick={() => requestExport(exportFormat)}
-                      disabled={exportPreviewResults.length === 0}
-                      className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white shadow-sm hover:bg-indigo-700"
+                      disabled={!hasSelectedExportContent}
+                      className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                     >
                       Export {exportFormats.find((format) => format.key === exportFormat)?.label}
                     </button>
