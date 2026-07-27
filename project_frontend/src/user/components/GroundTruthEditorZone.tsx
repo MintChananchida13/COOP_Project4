@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { ArrowLeft, Save, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2, Columns3 } from 'lucide-react';
+import { ArrowLeft, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2, Columns3 } from 'lucide-react';
 import { ROI, OCRResult, StructuredTableResult, TableMergedCell } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
@@ -1102,7 +1102,6 @@ interface GroundTruthEditorZoneProps {
   ocrResults: (OCRResult & { pageIndex?: number })[];
   setOcrResults: React.Dispatch<React.SetStateAction<(OCRResult & { pageIndex?: number })[]>>;
   onBackToStudio: () => void;
-  onApproveAndSave: () => Promise<void>;
   
   imageList?: string[];              
   currentImageIndex?: number;         
@@ -1115,7 +1114,6 @@ export default function GroundTruthEditorZone({
   ocrResults,
   setOcrResults,
   onBackToStudio,
-  onApproveAndSave,
   imageList = [previewUrl], 
   currentImageIndex = 0,
   onImageIndexChange,
@@ -1827,14 +1825,10 @@ export default function GroundTruthEditorZone({
           </div>
 
           <div className="p-4 border-t bg-slate-50/50 flex gap-3 relative">
-            <button 
-              type="button"
-              onClick={onApproveAndSave} 
-              disabled={ocrResults.length === 0}
-              className="flex-grow py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 flex items-center justify-center gap-2 disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
-            >
-              <Save size={15} /> {ocrResults.length === 0 ? "ยังไม่มีผล OCR ให้บันทึก" : "บันทึกการเปลี่ยนแปลง"}
-            </button>
+            <div className="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-700">
+              <CheckCircle size={15} />
+              {ocrResults.length === 0 ? "ยังไม่มีผล OCR" : "อัปเดตอัตโนมัติ - Export จะใช้ค่าล่าสุดทันที"}
+            </div>
           </div>
         </div>
 

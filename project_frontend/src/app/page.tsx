@@ -83,7 +83,7 @@ const USER_FLOW_STEPS = [
   {
     key: "editor",
     title: "ตรวจผลและส่งออก",
-    description: "แก้ไขผล OCR แล้วบันทึกก่อน Export",
+    description: "แก้ไขผล OCR แล้ว Export ด้วยค่าล่าสุด",
     note: "ผลลัพธ์ที่ส่งออกจะใช้ค่าที่ผู้ใช้แก้ไขล่าสุด",
   },
 ] as const;
@@ -106,7 +106,7 @@ const USER_STEP_ACTIONS: Record<(typeof USER_FLOW_STEPS)[number]["key"], string[
   ],
   editor: [
     "ตรวจข้อความ ตาราง และรูปภาพที่ OCR อ่านได้",
-    "แก้ไขค่าที่ไม่ถูกต้อง แล้วกดบันทึกการเปลี่ยนแปลง",
+    "แก้ไขค่าที่ไม่ถูกต้อง ระบบจะอัปเดตให้อัตโนมัติ",
     "กด Export แล้วเลือกรูปแบบไฟล์ที่ต้องการ",
   ],
 };
@@ -643,12 +643,7 @@ function HomeWorkspace() {
   const [exportJson, setExportJson] = useState<string>("");
   const [exportText, setExportText] = useState<string>("");
   const [copyStatus, setCopyStatus] = useState<string>("");
-  const [isGroundTruthSaved, setIsGroundTruthSaved] = useState<boolean>(false);
-  const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string>("");
-  const [saveNotice, setSaveNotice] = useState<{ tone: "success" | "error"; title: string; message: string } | null>(null);
-  const [isExportWarningOpen, setIsExportWarningOpen] = useState<boolean>(false);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
-  const [pendingExportType, setPendingExportType] = useState<ExportFormat>("json");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("word");
   const [exportContent, setExportContent] = useState<ExportContentOptions>({ text: true, tables: true, images: true });
   const [exportOptions, setExportOptions] = useState<ExportDisplayOptions>({ showFieldNames: true, showDocumentTitle: true });
@@ -676,11 +671,6 @@ function HomeWorkspace() {
     router.replace("/login");
   };
 
-  const handleGroundTruthResultsChange = (next: Parameters<typeof setOcrResults>[0]) => {
-    setIsGroundTruthSaved(false);
-    setOcrResults(next);
-  };
-
   const handleUploadSuccess = (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image", sourceFile?: File) => {
     setUploadedSourceFileId(`user_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     setUploadedSourceFileName(sourceFileName || "ไฟล์ต้นทาง");
@@ -694,8 +684,6 @@ function HomeWorkspace() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
-    setIsGroundTruthSaved(false);
-    setLastDraftSavedAt("");
     setClassificationStatus("");
     setTemplateDetectionNotice(null);
     setOperationNotice(null);
@@ -736,8 +724,6 @@ function HomeWorkspace() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
-    setIsGroundTruthSaved(false);
-    setLastDraftSavedAt("");
     setClassificationStatus("");
     setTemplateDetectionNotice(null);
     setOperationNotice(null);
@@ -755,8 +741,6 @@ function HomeWorkspace() {
     setRois([]);
     setSelectedId(null);
     setOcrResults([]);
-    setIsGroundTruthSaved(false);
-    setLastDraftSavedAt("");
     setMatchedTemplate(null);
     setOperationNotice(null);
     setCurrentStep("studio");
@@ -915,7 +899,6 @@ function HomeWorkspace() {
 
     setIsLoading(true);
     setOcrResults([]);
-    setIsGroundTruthSaved(false);
     setOperationNotice(null);
     setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
@@ -1047,7 +1030,6 @@ function HomeWorkspace() {
 
       if (combinedResults.length > 0) {
         setOcrResults(combinedResults);
-        setIsGroundTruthSaved(false);
         setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
@@ -1073,7 +1055,6 @@ function HomeWorkspace() {
   const handleRunFullPageOCR = async () => {
     setIsLoading(true);
     setOcrResults([]);
-    setIsGroundTruthSaved(false);
     setOperationNotice(null);
     setOcrProgress({ currentPage: 0, totalPages: imagesList.length, completedPages: 0 });
 
@@ -1176,7 +1157,6 @@ function HomeWorkspace() {
         });
 
         setOcrResults(allOcrResults);
-        setIsGroundTruthSaved(false);
         setCurrentIndex(0);
         setCurrentStep("editor");
       } else {
@@ -1196,31 +1176,6 @@ function HomeWorkspace() {
     } finally {
       setIsLoading(false);
       setOcrProgress(null);
-    }
-  };
-
-  const handleApproveAndSave = async () => {
-    try {
-      const savedPayload = {
-        saved_at: new Date().toISOString(),
-        ...buildExportPayload(),
-      };
-      window.localStorage.setItem("ocr-studio:last-saved-result", JSON.stringify(savedPayload));
-      setIsGroundTruthSaved(true);
-      setSaveNotice({
-        tone: "success",
-        title: "บันทึกการเปลี่ยนแปลงแล้ว",
-        message: `บันทึกผล OCR ของหน้า ${currentIndex + 1} ไว้ในเครื่องเรียบร้อยแล้ว สามารถส่งออก JSON หรือ Text ได้`,
-      });
-      return;
-    } catch (error) {
-      console.error(error);
-      setSaveNotice({
-        tone: "error",
-        title: "บันทึกไม่สำเร็จ",
-        message: error instanceof Error ? error.message : "เกิดข้อผิดพลาดในการบันทึกข้อมูล",
-      });
-      return;
     }
   };
 
@@ -1371,7 +1326,7 @@ function HomeWorkspace() {
     if (!content.images) return [];
     const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
     const usedNames = new Map<string, number>();
-    const crops: { fieldName: string; filename: string; dataUrl: string }[] = [];
+    const crops: { resultId: number; fieldName: string; filename: string; dataUrl: string; page: number }[] = [];
 
     for (const result of imageResults) {
       const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
@@ -1388,9 +1343,11 @@ function HomeWorkspace() {
       usedNames.set(baseName, nextCount);
       const extension = cropped.startsWith("data:image/png") ? "png" : "jpg";
       crops.push({
+        resultId: result.id,
         fieldName: result.fieldName,
         filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.${extension}`,
         dataUrl: cropped,
+        page: pageIndex + 1,
       });
     }
     return crops;
@@ -1401,7 +1358,7 @@ function HomeWorkspace() {
     options: ExportDisplayOptions = exportOptions
   ) => {
     const imageCrops = await buildImageFieldCrops(content);
-    const imageByField = new Map(imageCrops.map((crop) => [crop.fieldName, crop]));
+    const imageByResult = new Map(imageCrops.map((crop) => [crop.resultId, crop]));
     const body = getIncludedExportResults(content).map((result) => {
       const fieldType = getResultFieldType(result);
       const heading = options.showFieldNames ? `<h2>${escapeHtml(result.fieldName)}</h2>` : "";
@@ -1409,7 +1366,7 @@ function HomeWorkspace() {
         return `${heading}${renderHtmlTable(result)}`;
       }
       if (fieldType === "image") {
-        const crop = imageByField.get(result.fieldName);
+        const crop = imageByResult.get(result.id);
         return `${heading}${crop ? `<p><img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:520px;height:auto"></p>` : "<p>Image field</p>"}`;
       }
       return `${heading}<p>${escapeHtml(result.extractedText)}</p>`;
@@ -1419,10 +1376,12 @@ function HomeWorkspace() {
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}</style></head><body>${title}${body || "<p>No content selected</p>"}</body></html>`;
   };
 
-  const buildExcelHtml = (
+  const buildExcelHtml = async (
     content: ExportContentOptions = exportContent,
     options: ExportDisplayOptions = exportOptions
   ) => {
+    const imageCrops = await buildImageFieldCrops(content);
+    const imageByResult = new Map(imageCrops.map((crop) => [crop.resultId, crop]));
     const sections: string[] = [];
     if (options.showDocumentTitle) {
       sections.push(`<h1>${escapeHtml(matchedTemplate?.name || "OCR Export")}</h1>`);
@@ -1447,32 +1406,22 @@ function HomeWorkspace() {
         });
     }
     if (content.images) {
-      const rows = buildImageFieldPreviewList(content)
-        .map((image) => `<tr>${options.showFieldNames ? `<td>${escapeHtml(image.fieldName)}</td>` : ""}<td>${escapeHtml(image.filename)}</td><td>${image.page}</td></tr>`)
-        .join("");
-      const header = `<tr>${options.showFieldNames ? "<th>Field</th>" : ""}<th>Filename</th><th>Page</th></tr>`;
-      sections.push(`<h3>Images</h3><table>${header}${rows || "<tr><td colspan=\"3\">No image fields</td></tr>"}</table>`);
-    }
-    return `<!doctype html><html><head><meta charset="utf-8"><style>h1{font-size:18pt}h3{font-size:12pt;margin-top:16px}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap}th{background:#e2e8f0}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
-  };
-
-  useEffect(() => {
-    if (currentStep !== "editor" || ocrResults.length === 0) return;
-
-    const timeoutId = window.setTimeout(() => {
-      const savedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        "ocr-studio:draft-result",
-        JSON.stringify({
-          draft_saved_at: savedAt,
-          ...buildExportPayload(),
+      const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
+      const rows = imageResults
+        .map((result) => {
+          const crop = imageByResult.get(result.id);
+          const fallbackPage = Math.max(0, result.pageIndex ?? 0) + 1;
+          const imageCell = crop
+            ? `<img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:180px;max-height:140px;width:auto;height:auto;display:block">`
+            : "Image crop unavailable";
+          return `<tr>${options.showFieldNames ? `<td>${escapeHtml(result.fieldName)}</td>` : ""}<td>${imageCell}</td><td>${escapeHtml(crop?.filename || result.fieldName || "image")}</td><td>${crop?.page ?? fallbackPage}</td></tr>`;
         })
-      );
-      setLastDraftSavedAt(savedAt);
-    }, 600);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [currentStep, ocrResults, rois, imagesList.length, matchedTemplate?.name]);
+        .join("");
+      const header = `<tr>${options.showFieldNames ? "<th>Field</th>" : ""}<th>Image</th><th>Filename</th><th>Page</th></tr>`;
+      sections.push(`<h3>Images</h3><table>${header}${rows || `<tr><td colspan="${options.showFieldNames ? 4 : 3}">No image fields</td></tr>`}</table>`);
+    }
+    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}h1{font-size:18pt;text-align:left}h3{font-size:12pt;margin-top:16px;text-align:left}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap;text-align:left;mso-number-format:"\\@";}th{background:#e2e8f0;font-weight:bold}img{display:block}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
+  };
 
   const openExportJson = () => {
     setCopyStatus("");
@@ -1550,11 +1499,11 @@ function HomeWorkspace() {
     downloadTextFile(`ocr-export-${Date.now()}.doc`, await buildWordHtml(exportContent, exportOptions), "application/msword");
   };
 
-  const downloadExcelExport = () => {
+  const downloadExcelExport = async () => {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    downloadTextFile(`ocr-export-${Date.now()}.xls`, buildExcelHtml(exportContent, exportOptions), "application/vnd.ms-excel");
+    downloadTextFile(`ocr-export-${Date.now()}.xls`, await buildExcelHtml(exportContent, exportOptions), "application/vnd.ms-excel");
   };
 
   const downloadImageZipExport = async () => {
@@ -1587,18 +1536,13 @@ function HomeWorkspace() {
       return;
     }
     if (type === "excel") {
-      downloadExcelExport();
+      await downloadExcelExport();
       return;
     }
     await downloadImageZipExport();
   };
 
   const requestExport = (type: ExportFormat) => {
-    setPendingExportType(type);
-    if (!isGroundTruthSaved) {
-      setIsExportWarningOpen(true);
-      return;
-    }
     setIsExportMenuOpen(false);
     void runExport(type);
   };
@@ -1621,12 +1565,6 @@ function HomeWorkspace() {
   const handleOpenExportImages = () => {
     setExportFormat("images");
     setIsExportMenuOpen(true);
-  };
-
-  const continuePendingExport = () => {
-    setIsExportWarningOpen(false);
-    setIsExportMenuOpen(false);
-    void runExport(pendingExportType);
   };
 
   const handleCopyExportJson = async () => {
@@ -1768,7 +1706,7 @@ function HomeWorkspace() {
                   {fieldType === "table" ? (
                     <div className="mt-2 overflow-auto" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
                   ) : fieldType === "image" ? (
-                    <p className="mt-2 text-sm font-semibold text-slate-600">Image crop จะถูกใส่ในเอกสาร Word</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-600">Image crop จะถูกใส่ในเอกสาร Word และ Excel</p>
                   ) : (
                     <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{result.extractedText || "-"}</p>
                   )}
@@ -1880,13 +1818,9 @@ function HomeWorkspace() {
     }
 
     return {
-      tone: isGroundTruthSaved ? "success" : "warning",
-      title: isGroundTruthSaved ? "ผล OCR ถูกบันทึกแล้ว" : "ตรวจสอบผล OCR ก่อนส่งออก",
-      message: isGroundTruthSaved
-        ? "สามารถส่งออก JSON หรือ Text ได้"
-        : lastDraftSavedAt
-          ? `ระบบบันทึก draft อัตโนมัติไว้แล้ว ${new Date(lastDraftSavedAt).toLocaleTimeString("th-TH")}`
-          : "แก้ไขผล OCR ให้เรียบร้อย จากนั้นกดบันทึกการเปลี่ยนแปลง",
+      tone: "success",
+      title: "ใช้ค่าล่าสุดอัตโนมัติ",
+      message: "แก้ไขข้อความ ตาราง หรือชื่อ Field แล้ว Export จะใช้ค่าปัจจุบันทันที",
     };
   };
 
@@ -2061,9 +1995,8 @@ function HomeWorkspace() {
               previewUrl={imagesList[currentIndex] || previewUrl}
               rois={rois}
               ocrResults={ocrResults}
-              setOcrResults={handleGroundTruthResultsChange}
+              setOcrResults={setOcrResults}
               onBackToStudio={() => setCurrentStep("studio")}
-              onApproveAndSave={handleApproveAndSave}
               imageList={imagesList}
               currentImageIndex={currentIndex}
               onImageIndexChange={(nextIdx) => setCurrentIndex(nextIdx)}
@@ -2394,53 +2327,6 @@ function HomeWorkspace() {
                     <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-slate-100">
                       {exportText}
                     </pre>
-                  </div>
-                </section>
-              </div>
-            )}
-            {saveNotice && (
-              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-                <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                  <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full ${
-                    saveNotice.tone === "success" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
-                  }`}>
-                    {saveNotice.tone === "success" ? "✓" : "!"}
-                  </div>
-                  <h2 className="mt-4 text-center text-base font-black text-slate-950">{saveNotice.title}</h2>
-                  <p className="mt-2 text-center text-sm font-semibold leading-relaxed text-slate-500">{saveNotice.message}</p>
-                  <button
-                    type="button"
-                    onClick={() => setSaveNotice(null)}
-                    className="mt-5 w-full rounded-xl bg-slate-900 px-4 py-3 text-xs font-black text-white hover:bg-slate-800"
-                  >
-                    ตกลง
-                  </button>
-                </section>
-              </div>
-            )}
-            {isExportWarningOpen && (
-              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-                <section className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
-                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-50 text-amber-600">!</div>
-                  <h2 className="mt-4 text-center text-base font-black text-slate-950">ยังไม่ได้บันทึกการเปลี่ยนแปลง</h2>
-                  <p className="mt-2 text-center text-sm font-semibold leading-relaxed text-slate-500">
-                    ควรบันทึกผล OCR ที่แก้ไขแล้วก่อนส่งออก เพื่อให้แน่ใจว่าไฟล์ที่ส่งออกเป็นข้อมูลล่าสุด
-                  </p>
-                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsExportWarningOpen(false)}
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
-                    >
-                      กลับไปบันทึก
-                    </button>
-                    <button
-                      type="button"
-                      onClick={continuePendingExport}
-                      className="rounded-xl bg-indigo-600 px-4 py-3 text-xs font-black text-white hover:bg-indigo-700"
-                    >
-                      ส่งออกต่อ
-                    </button>
                   </div>
                 </section>
               </div>
