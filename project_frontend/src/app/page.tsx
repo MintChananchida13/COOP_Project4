@@ -66,6 +66,8 @@ type ImageFieldCrop = {
   filename: string;
   dataUrl: string;
   page: number;
+  width: number;
+  height: number;
 };
 
 const USER_FLOW_STEPS = [
@@ -438,6 +440,20 @@ const xlsxCell = (rowIndex: number, colIndex: number, value: unknown, style = 1)
 
 const xlsxRow = (rowIndex: number, values: unknown[], style = 1) =>
   `<row r="${rowIndex + 1}">${values.map((value, colIndex) => xlsxCell(rowIndex, colIndex, value, style)).join("")}</row>`;
+
+const EXCEL_IMAGE_MAX_WIDTH_PX = 180;
+const EXCEL_IMAGE_MAX_HEIGHT_PX = 120;
+const EXCEL_EMUS_PER_PIXEL = 9525;
+
+const fitExcelImageSize = (width: number, height: number) => {
+  const safeWidth = Math.max(1, width || EXCEL_IMAGE_MAX_WIDTH_PX);
+  const safeHeight = Math.max(1, height || EXCEL_IMAGE_MAX_HEIGHT_PX);
+  const scale = Math.min(EXCEL_IMAGE_MAX_WIDTH_PX / safeWidth, EXCEL_IMAGE_MAX_HEIGHT_PX / safeHeight);
+  return {
+    width: Math.max(1, Math.round(safeWidth * scale)),
+    height: Math.max(1, Math.round(safeHeight * scale)),
+  };
+};
 
 const crc32 = (bytes: Uint8Array) => {
   let crc = 0xffffffff;
@@ -1400,7 +1416,9 @@ function HomeWorkspace() {
       const img = await loadImageElement(sourceImage);
       const displayWidth = 750;
       const displayHeight = img.naturalWidth > 0 ? (img.naturalHeight / img.naturalWidth) * displayWidth : 1000;
-      const cropped = cropRoiToImage(img, matchedRoi, img.naturalWidth / displayWidth, img.naturalHeight / displayHeight);
+      const scaleX = img.naturalWidth / displayWidth;
+      const scaleY = img.naturalHeight / displayHeight;
+      const cropped = cropRoiToImage(img, matchedRoi, scaleX, scaleY);
       if (!cropped) continue;
       const baseName = safeFilename(result.fieldName || matchedRoi.fieldName || "image");
       const nextCount = (usedNames.get(baseName) || 0) + 1;
@@ -1412,6 +1430,8 @@ function HomeWorkspace() {
         filename: `${baseName}${nextCount > 1 ? `_${nextCount}` : ""}.${extension}`,
         dataUrl: cropped,
         page: pageIndex + 1,
+        width: Math.max(1, Math.round(matchedRoi.width * scaleX)),
+        height: Math.max(1, Math.round(matchedRoi.height * scaleY)),
       });
     }
     return crops;
@@ -1537,10 +1557,12 @@ function HomeWorkspace() {
     imageRowIndex += 1;
     imageResults.forEach((result) => {
       const crop = imageByResult.get(result.id);
+      const displaySize = crop ? fitExcelImageSize(crop.width, crop.height) : null;
+      const rowHeight = displaySize ? Math.ceil(displaySize.height * 0.75 + 10) : 28;
       const rowValues = options.showFieldNames
         ? [result.fieldName, crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
         : [crop ? "ดูรูปใน cell นี้" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
-      imageRows.push(`<row r="${imageRowIndex + 1}" ht="118" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
+      imageRows.push(`<row r="${imageRowIndex + 1}" ht="${rowHeight}" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
       imageRowIndex += 1;
     });
 
@@ -1555,7 +1577,7 @@ function HomeWorkspace() {
     );
 
     const imageDrawingRel = imageCrops.length > 0 ? `<drawing r:id="rId1"/>` : "";
-    files.push({ name: "xl/worksheets/sheet3.xml", bytes: encoder.encode(worksheet(imageRows.join(""), `<cols><col min="1" max="1" width="${options.showFieldNames ? 28 : 24}" customWidth="1"/><col min="2" max="2" width="28" customWidth="1"/><col min="3" max="4" width="24" customWidth="1"/></cols>`, imageDrawingRel)) });
+    files.push({ name: "xl/worksheets/sheet3.xml", bytes: encoder.encode(worksheet(imageRows.join(""), `<cols><col min="1" max="1" width="${options.showFieldNames ? 28 : 30}" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/><col min="3" max="4" width="24" customWidth="1"/></cols>`, imageDrawingRel)) });
     if (imageCrops.length > 0) {
       files.push(
         { name: "xl/worksheets/_rels/sheet3.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`) },
@@ -1563,7 +1585,10 @@ function HomeWorkspace() {
         { name: "xl/drawings/drawing1.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${imageCrops.map((crop, index) => {
           const row = imageResults.findIndex((result) => result.id === crop.resultId) + 1;
           const col = options.showFieldNames ? 1 : 0;
-          return `<xdr:twoCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${col + 1}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row + 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${index + 1}" name="${xmlEscape(crop.filename)}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId${index + 1}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`;
+          const displaySize = fitExcelImageSize(crop.width, crop.height);
+          const cx = displaySize.width * EXCEL_EMUS_PER_PIXEL;
+          const cy = displaySize.height * EXCEL_EMUS_PER_PIXEL;
+          return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${index + 1}" name="${xmlEscape(crop.filename)}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId${index + 1}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
         }).join("")}</xdr:wsDr>`) }
       );
       imageCrops.forEach((crop, index) => {
