@@ -60,6 +60,13 @@ type ExportDisplayOptions = {
   showFieldNames: boolean;
   showDocumentTitle: boolean;
 };
+type ImageFieldCrop = {
+  resultId: number;
+  fieldName: string;
+  filename: string;
+  dataUrl: string;
+  page: number;
+};
 
 const USER_FLOW_STEPS = [
   {
@@ -650,6 +657,7 @@ function HomeWorkspace() {
   const [isTemplateDecisionOpen, setIsTemplateDecisionOpen] = useState<boolean>(false);
   const [templateDecisionStatus, setTemplateDecisionStatus] = useState<string>("");
   const [exportJson, setExportJson] = useState<string>("");
+  const [exportPreviewJsonText, setExportPreviewJsonText] = useState<string>("");
   const [exportText, setExportText] = useState<string>("");
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
@@ -1198,8 +1206,10 @@ function HomeWorkspace() {
 
   const buildExportPayload = (
     content: ExportContentOptions = exportContent,
-    options: ExportDisplayOptions = exportOptions
+    options: ExportDisplayOptions = exportOptions,
+    imageCrops: ImageFieldCrop[] = []
   ) => {
+    const imageCropByResult = new Map(imageCrops.map((crop) => [crop.resultId, crop]));
     const pages = Array.from({ length: Math.max(imagesList.length, 1) }, (_, index) => ({
       page: index + 1,
       fields: options.showFieldNames ? ({} as Record<string, unknown>) : ([] as unknown[]),
@@ -1247,9 +1257,17 @@ function HomeWorkspace() {
       }
 
       if (fieldType === "image") {
+        const crop = imageCropByResult.get(result.id);
         addField(page, fieldName, {
           type: "image",
           hasImage: true,
+          ...(crop
+            ? {
+                filename: crop.filename,
+                mimeType: dataUrlMimeType(crop.dataUrl),
+                base64: dataUrlBase64(crop.dataUrl),
+              }
+            : {}),
         });
         return;
       }
@@ -1263,6 +1281,11 @@ function HomeWorkspace() {
       pages,
     };
   };
+
+  const buildExportPayloadWithImages = async (
+    content: ExportContentOptions = exportContent,
+    options: ExportDisplayOptions = exportOptions
+  ) => buildExportPayload(content, options, await buildImageFieldCrops(content));
 
   const getResultFieldType = (result: OCRResult & { pageIndex?: number }) => {
     const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
@@ -1344,7 +1367,7 @@ function HomeWorkspace() {
     if (!content.images) return [];
     const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
     const usedNames = new Map<string, number>();
-    const crops: { resultId: number; fieldName: string; filename: string; dataUrl: string; page: number }[] = [];
+    const crops: ImageFieldCrop[] = [];
 
     for (const result of imageResults) {
       const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
@@ -1479,7 +1502,10 @@ function HomeWorkspace() {
   const openExportJson = () => {
     setCopyStatus("");
     setExportText("");
-    setExportJson(JSON.stringify(buildExportPayload(), null, 2));
+    setExportJson("กำลังเตรียม JSON พร้อมรูปภาพ...");
+    void buildExportPayloadWithImages().then((payload) => {
+      setExportJson(JSON.stringify(payload, null, 2));
+    });
   };
 
   const renderPlainValue = (value: unknown, indent = ""): string => {
@@ -1580,7 +1606,7 @@ function HomeWorkspace() {
 
   const runExport = async (type: ExportFormat) => {
     if (type === "json") {
-      const json = JSON.stringify(buildExportPayload(exportContent, exportOptions), null, 2);
+      const json = JSON.stringify(await buildExportPayloadWithImages(exportContent, exportOptions), null, 2);
       downloadTextFile(`ocr-export-${Date.now()}.json`, json);
       return;
     }
@@ -1649,9 +1675,34 @@ function HomeWorkspace() {
     { key: "json", label: "JSON" },
     { key: "images", label: "Images" },
   ];
-  const exportPreviewJson = JSON.stringify(buildExportPayload(exportContent, exportOptions), null, 2);
   const exportPreviewImages = buildImageFieldPreviewList(exportContent);
   const exportPreviewResults = getIncludedExportResults(exportContent);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isExportMenuOpen || exportFormat !== "json") return;
+    setExportPreviewJsonText("กำลังเตรียม JSON พร้อมรูปภาพ...");
+    void buildExportPayloadWithImages(exportContent, exportOptions)
+      .then((payload) => {
+        if (!cancelled) setExportPreviewJsonText(JSON.stringify(payload, null, 2));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setExportPreviewJsonText(
+            JSON.stringify(
+              {
+                error: "สร้าง JSON Preview ไม่สำเร็จ",
+                detail: error instanceof Error ? error.message : String(error),
+              },
+              null,
+              2
+            )
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isExportMenuOpen, exportFormat, exportContent, exportOptions, ocrResults, rois, imagesList, previewUrl, matchedTemplate?.name]);
   const textPreviewItems = useMemo(() => {
     return ocrResults
       .filter((result) => (result.pageIndex !== undefined ? Number(result.pageIndex) : 0) === currentIndex)
@@ -1689,7 +1740,7 @@ function HomeWorkspace() {
     if (exportFormat === "json") {
       return (
         <pre className="max-h-[46vh] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
-          {exportPreviewJson}
+          {exportPreviewJsonText || "กำลังเตรียม JSON พร้อมรูปภาพ..."}
         </pre>
       );
     }
