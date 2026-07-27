@@ -400,6 +400,15 @@ const dataUrlToBytes = (dataUrl: string) => {
   return bytes;
 };
 
+const dataUrlMimeType = (dataUrl: string) => {
+  const match = /^data:([^;,]+)[;,]/.exec(dataUrl);
+  return match?.[1] || "image/jpeg";
+};
+
+const dataUrlBase64 = (dataUrl: string) => dataUrl.split(",", 2)[1] || "";
+
+const foldBase64 = (value: string) => value.replace(/(.{76})/g, "$1\r\n");
+
 const crc32 = (bytes: Uint8Array) => {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -1209,7 +1218,7 @@ function HomeWorkspace() {
       const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
       const page = pages[pageIndex] || pages[0];
       const fieldName = result.fieldName || matchedRoi?.fieldName || `field_${Object.keys(page.fields).length + 1}`;
-      const fieldType = result.type || matchedRoi?.type || matchedRoi?.dataType || "text";
+      const fieldType = getResultFieldType(result);
       const rawValue = result.extractedText || "";
 
       if (fieldType === "table") {
@@ -1257,7 +1266,16 @@ function HomeWorkspace() {
 
   const getResultFieldType = (result: OCRResult & { pageIndex?: number }) => {
     const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
-    return result.type || matchedRoi?.type || matchedRoi?.dataType || "text";
+    const markers = [
+      result.type,
+      result.dataType,
+      matchedRoi?.type,
+      matchedRoi?.dataType,
+      matchedRoi?.extractionMethod,
+    ].map((value) => String(value || "").toLowerCase());
+    if (markers.some((value) => value === "image" || value === "extract_image")) return "image";
+    if (markers.some((value) => value === "table" || value === "table_recognition_v2" || value === "ocr_table")) return "table";
+    return "text";
   };
 
   const getStructuredTableForExport = (result: OCRResult & { pageIndex?: number }) => {
@@ -1412,7 +1430,7 @@ function HomeWorkspace() {
           const crop = imageByResult.get(result.id);
           const fallbackPage = Math.max(0, result.pageIndex ?? 0) + 1;
           const imageCell = crop
-            ? `<img src="${crop.dataUrl}" alt="${escapeHtml(result.fieldName)}" style="max-width:180px;max-height:140px;width:auto;height:auto;display:block">`
+            ? `<img src="cid:excel-image-${crop.resultId}" alt="${escapeHtml(result.fieldName)}" style="width:180px;height:auto;display:block">`
             : "Image crop unavailable";
           return `<tr>${options.showFieldNames ? `<td>${escapeHtml(result.fieldName)}</td>` : ""}<td>${imageCell}</td><td>${escapeHtml(crop?.filename || result.fieldName || "image")}</td><td>${crop?.page ?? fallbackPage}</td></tr>`;
         })
@@ -1421,6 +1439,41 @@ function HomeWorkspace() {
       sections.push(`<h3>Images</h3><table>${header}${rows || `<tr><td colspan="${options.showFieldNames ? 4 : 3}">No image fields</td></tr>`}</table>`);
     }
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}h1{font-size:18pt;text-align:left}h3{font-size:12pt;margin-top:16px;text-align:left}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap;text-align:left;mso-number-format:"\\@";}th{background:#e2e8f0;font-weight:bold}img{display:block}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
+  };
+
+  const buildExcelMhtmlBlob = async (
+    content: ExportContentOptions = exportContent,
+    options: ExportDisplayOptions = exportOptions
+  ) => {
+    const imageCrops = await buildImageFieldCrops(content);
+    const html = await buildExcelHtml(content, options);
+    const boundary = `----=_OCR_EXPORT_${Date.now()}`;
+    const origin = "file:///C:/ocr-export.xls";
+    const parts = [
+      `MIME-Version: 1.0`,
+      `X-Document-Type: Workbook`,
+      `Content-Type: multipart/related; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      `Content-Type: text/html; charset="utf-8"`,
+      `Content-Location: ${origin}`,
+      "",
+      html,
+      "",
+      ...imageCrops.flatMap((crop) => [
+        `--${boundary}`,
+        `Content-Type: ${dataUrlMimeType(crop.dataUrl)}`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-ID: <excel-image-${crop.resultId}>`,
+        `Content-Location: excel-image-${crop.resultId}`,
+        "",
+        foldBase64(dataUrlBase64(crop.dataUrl)),
+        "",
+      ]),
+      `--${boundary}--`,
+      "",
+    ];
+    return new Blob([parts.join("\r\n")], { type: "application/vnd.ms-excel" });
   };
 
   const openExportJson = () => {
@@ -1503,7 +1556,7 @@ function HomeWorkspace() {
     setCopyStatus("");
     setExportJson("");
     setExportText("");
-    downloadTextFile(`ocr-export-${Date.now()}.xls`, await buildExcelHtml(exportContent, exportOptions), "application/vnd.ms-excel");
+    downloadBlobFile(`ocr-export-${Date.now()}.xls`, await buildExcelMhtmlBlob(exportContent, exportOptions));
   };
 
   const downloadImageZipExport = async () => {

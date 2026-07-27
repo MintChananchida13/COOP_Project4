@@ -95,7 +95,6 @@ export default function MatchedTemplateWorkspaceZone({
       }
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
         const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
-        const selectedRoi = currentPageRois.find((roi) => roi.id === selectedId);
         const filteredRois = currentPageRois.filter((roi) =>
           `${roi.fieldName} ${roi.type || ""} ${roi.extractionMethod || ""}`.toLowerCase().includes(fieldQuery.trim().toLowerCase())
         );
@@ -235,16 +234,6 @@ export default function MatchedTemplateWorkspaceZone({
                 )}
               </div>
             </section>
-
-            {selectedRoi && (
-              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <h3 className="ui-label text-slate-700">ข้อมูลที่เลือก</h3>
-                <p className="ui-card-title mt-2 text-slate-900">{selectedRoi.fieldName}</p>
-                <p className="ui-caption mt-1 text-slate-500">
-                  {readableTypeLabel(selectedRoi)} · Page {(selectedRoi.pageIndex ?? 0) + 1}
-                </p>
-              </section>
-            )}
 
             </div>
 
