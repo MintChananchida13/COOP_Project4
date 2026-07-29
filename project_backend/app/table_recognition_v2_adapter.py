@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize_table
+from .ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 
 
 class TableRecognitionV2UnavailableError(RuntimeError):
@@ -220,6 +221,9 @@ class _TableHtmlParser(HTMLParser):
 def _rows_from_html(html: str) -> List[List[str]]:
     if not html:
         return []
+    bs4_result = parse_table_html_with_bs4(html)
+    if bs4_result:
+        return bs4_result.get("rows") or []
     parser = _TableHtmlParser()
     try:
         parser.feed(html)
@@ -236,6 +240,14 @@ def _rows_from_html(html: str) -> List[List[str]]:
 def _structured_from_html(html: str) -> Optional[Dict[str, Any]]:
     if not html:
         return None
+    bs4_result = parse_table_html_with_bs4(html)
+    if bs4_result:
+        return {
+            "rows": bs4_result["rows"],
+            "cells": bs4_result["cells"],
+            "headerRowCount": bs4_result.get("headerRowCount", 1),
+            "postProcessing": bs4_result.get("parser"),
+        }
     parser = _TableHtmlParser()
     try:
         parser.feed(html)
@@ -268,11 +280,11 @@ def _cells_from_rows(rows: List[List[str]], source_cells: Optional[List[Dict[str
             cell: Dict[str, Any] = {
                 "row": row_index,
                 "col": col_index,
-                "text": str(text or ""),
+                "text": normalize_ocr_text(text),
                 "rowSpan": int(source.get("rowSpan") or source.get("rowspan") or source.get("row_span") or 1),
                 "colSpan": int(source.get("colSpan") or source.get("colspan") or source.get("col_span") or 1),
-                "ocrText": str(source.get("ocrText") or source.get("ocr_text") or source.get("text") or text or ""),
-                "groundTruth": str(text or ""),
+                "ocrText": normalize_ocr_text(source.get("ocrText") or source.get("ocr_text") or source.get("text") or text or ""),
+                "groundTruth": normalize_ocr_text(text),
             }
             if bbox is not None:
                 cell["bbox"] = bbox
@@ -300,7 +312,7 @@ def _normalize_cell_dicts(cells: Any) -> List[Dict[str, Any]]:
     for cell in cells:
         if not isinstance(cell, dict):
             continue
-        text = str(cell.get("text") or cell.get("content") or cell.get("value") or "").strip()
+        text = normalize_ocr_text(cell.get("text") or cell.get("content") or cell.get("value") or "")
         row = cell.get("row") or cell.get("row_index") or cell.get("start_row")
         col = cell.get("col") or cell.get("col_index") or cell.get("start_col")
         if row is None or col is None:
@@ -350,7 +362,7 @@ def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
     for key in ("rows", "table_rows"):
         value = result.get(key)
         if isinstance(value, list) and value and all(isinstance(row, list) for row in value):
-            return [[str(cell or "") for cell in row] for row in value]
+            return normalize_table_rows(value)
     return []
 
 
@@ -364,6 +376,36 @@ def _extract_structured_table(result: Dict[str, Any], rows: List[List[str]], htm
         if structured:
             return structured
     return _structured_from_rows(rows)
+
+
+def _postprocess_table_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    processed = dict(result)
+    html = str(processed.get("table_html") or processed.get("html") or "")
+    rows = processed.get("table_rows")
+    if isinstance(rows, list) and rows and all(isinstance(row, list) for row in rows):
+        normalized_rows = normalize_table_rows(rows)
+    else:
+        normalized_rows = _rows_from_html(html)
+
+    structured = processed.get("table_structured")
+    if not isinstance(structured, dict):
+        structured = _extract_structured_table(processed, normalized_rows, html)
+
+    if normalized_rows:
+        processed["table_rows"] = normalized_rows
+        processed["text"] = _markdown_table(normalized_rows)
+    elif processed.get("text") is not None:
+        processed["text"] = normalize_ocr_text(processed.get("text"))
+
+    if structured:
+        processed["table_structured"] = structured
+
+    debug = processed.get("table_debug")
+    if isinstance(debug, dict):
+        debug.setdefault("post_processing", "beautifulsoup4+lxml")
+    else:
+        processed["table_debug"] = {"post_processing": "beautifulsoup4+lxml"}
+    return processed
 
 
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
@@ -415,9 +457,10 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         if structured_table is None:
             structured_table = _extract_structured_table(item, rows, html)
 
+    rows = normalize_table_rows(rows)
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
-    return {
+    return _postprocess_table_result({
         "text": text,
         "confidence": 1.0 if text or html else 0.0,
         "segments": [],
@@ -439,7 +482,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             "input_size": [int(input_width), int(input_height)],
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         },
-    }
+    })
 
 
 def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
@@ -461,6 +504,6 @@ def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
             remote_debug.setdefault("remote_runtime_called", True)
         else:
             remote_result["table_debug"] = {"remote_runtime_called": True}
-        return remote_result
+        return _postprocess_table_result(remote_result)
 
     return recognize_table_v2_local(image)

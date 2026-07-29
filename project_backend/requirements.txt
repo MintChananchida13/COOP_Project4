@@ -6,6 +6,9 @@ pillow
 numpy
 pymupdf
 psycopg2-binary>=2.9.9
+pythainlp
+beautifulsoup4
+lxml
 
 # Optional SigLIP embedding mode:
 torch

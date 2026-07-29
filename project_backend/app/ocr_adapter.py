@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 import cv2
 
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
+from .ocr_postprocess import normalize_ocr_text
 from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from .table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 
@@ -57,7 +58,7 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
         raise OcrUnavailableError(str(error)) from error
 
     return {
-        "text": str(result.get("text") or ""),
+        "text": normalize_ocr_text(result.get("text")),
         "confidence": round(float(result.get("confidence") or 0.0), 4),
         "preprocessing": result.get("preprocessing") or "paddle_text_recognition",
         "segments": result.get("segments") or [],
@@ -191,7 +192,7 @@ def _recognize_text_crops_with_detection(text_items: List[Tuple[str, Any]]) -> D
     batch_results = run_paddle_thai_ocr_batch(recognition_crops)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for meta, result in zip(recognition_meta, batch_results):
-        text = str(result.get("text") or "").strip()
+        text = normalize_ocr_text(result.get("text"))
         confidence = round(float(result.get("confidence") or 0.0), 4)
         grouped.setdefault(meta["key"], []).append(
             {
@@ -213,7 +214,7 @@ def _recognize_text_crops_with_detection(text_items: List[Tuple[str, Any]]) -> D
         detection_meta = per_key_detection.get(key, {})
         fallback_used = bool(detection_meta.get("fallback_used")) or any(segment.get("fallback") for segment in segments)
         results[key] = {
-            "text": " ".join(text_segments).strip(),
+            "text": normalize_ocr_text(" ".join(text_segments)),
             "confidence": round(sum(confidences) / len(confidences), 4) if confidences else 0.0,
             "preprocessing": "paddle_text_detection_then_recognition"
             if not fallback_used
@@ -321,7 +322,7 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
 
     for key, result in text_results.items():
         results[key] = {
-            "text": str(result.get("text") or ""),
+            "text": normalize_ocr_text(result.get("text")),
             "confidence": round(float(result.get("confidence") or 0.0), 4),
             "preprocessing": result.get("preprocessing") or "paddle_text_detection_then_recognition",
             "segments": result.get("segments") or [],

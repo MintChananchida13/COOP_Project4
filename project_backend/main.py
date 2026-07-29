@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.routes import router as blueprint_router
 from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
 from app.ocr_adapter import recognize_text_crop_with_detection
+from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 
@@ -180,14 +181,15 @@ def _structured_table_from_rows(rows: List[List[str]], regions: List[Dict[str, A
         for col_index, text in enumerate(row):
             flat_index = row_index * max_columns + col_index
             source_region = source_regions[flat_index] if flat_index < len(source_regions) else {}
+            normalized_text = normalize_ocr_text(text)
             cell: Dict[str, Any] = {
                 "row": row_index,
                 "col": col_index,
-                "text": str(text or ""),
+                "text": normalized_text,
                 "rowSpan": 1,
                 "colSpan": 1,
-                "ocrText": str(text or ""),
-                "groundTruth": str(text or ""),
+                "ocrText": normalized_text,
+                "groundTruth": normalized_text,
             }
             bbox = source_region.get("bbox") if isinstance(source_region, dict) else None
             if bbox is not None:
@@ -203,7 +205,7 @@ def _structured_table_from_rows(rows: List[List[str]], regions: List[Dict[str, A
 def _group_table_cells(regions: List[Dict[str, Any]], recognitions: List[Dict[str, Any]]) -> List[List[str]]:
     cells: List[Dict[str, Any]] = []
     for region, recognized in zip(regions, recognitions):
-        text = str(recognized.get("text") or "").strip()
+        text = normalize_ocr_text(recognized.get("text"))
         if not text:
             continue
         bbox = region.get("bbox") or {}
@@ -244,7 +246,7 @@ def _group_table_cells(regions: List[Dict[str, Any]], recognitions: List[Dict[st
     for row in rows:
         sorted_row = sorted(row, key=lambda item: item["x"])
         grouped_rows.append([item["text"] for item in sorted_row])
-    return grouped_rows
+    return normalize_table_rows(grouped_rows)
 
 
 def process_table_roi_with_engine(crop_img: np.ndarray) -> Dict[str, Any]:
@@ -431,7 +433,7 @@ async def process_document(payload: DocumentPayload):
 
                 crop_img = opencv_img[y : y + h, x : x + w]
                 ocr_result = run_paddle_thai_ocr(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": []}
-                text = str(ocr_result.get("text") or "")
+                text = normalize_ocr_text(ocr_result.get("text"))
                 conf = float(ocr_result.get("confidence") or 0.0)
                 filepath = ""
                 if crop_img.size > 0:
@@ -479,7 +481,7 @@ async def process_document(payload: DocumentPayload):
                 cv2.imwrite(filepath, crop_img)
 
                 ocr_result = process_roi_with_engine(crop_img, roi)
-                extracted_text = str(ocr_result.get("text") or "")
+                extracted_text = normalize_ocr_text(ocr_result.get("text"))
                 confidence_score = float(ocr_result.get("confidence") or 0.0)
                 if not extracted_text and (roi.type or "").lower() != "image":
                     extracted_text = "(no text found in ROI)"

@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import importlib.util
 from unittest.mock import patch
 
 import numpy as np
@@ -12,6 +13,7 @@ from app.table_recognition_v2_adapter import (
     recognize_table_v2_local,
     table_recognition_runtime_summary,
 )
+from app.ocr_postprocess import normalize_ocr_text, parse_table_html_with_bs4
 
 
 class FakeTableRecognitionPipelineV2:
@@ -148,6 +150,18 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = recognize_table_v2_local(image)
 
         self.assertEqual(result["table_rows"], [["A", "B"]])
+
+    @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
+    def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:
+        result = parse_table_html_with_bs4("<table><tr><th> วันที่ </th><th>ยอดเงิน</th></tr><tr><td>  1  ม.ค.  </td><td>  100.00 </td></tr></table>")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["rows"], [["วันที่", "ยอดเงิน"], ["1 ม.ค.", "100.00"]])
+        self.assertEqual(result["parser"], "beautifulsoup4+lxml")
+
+    @unittest.skipUnless(importlib.util.find_spec("pythainlp"), "pythainlp not installed")
+    def test_ocr_text_postprocess_uses_pythainlp_normalization(self) -> None:
+        self.assertEqual(normalize_ocr_text("  ทดสอบ   OCR  \n\n  ภาษาไทย  "), "ทดสอบ OCR\nภาษาไทย")
 
 
 if __name__ == "__main__":
