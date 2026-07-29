@@ -44,6 +44,7 @@ const DEFAULT_MATCHING_WEIGHTS = {
   textAnchorWeight: 0.3,
   imageAnchorWeight: 0.3,
 };
+const MIN_DUAL_ANCHOR_WEIGHT = 0.2;
 
 const stableNumericId = (value: string) =>
   Math.abs(value.split("").reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7));
@@ -101,7 +102,7 @@ const calculateMatchingWeights = ({
   if (hasText && hasImage) {
     const text = preferredTextWeight === undefined
       ? roundWeight(remaining / 2)
-      : roundWeight(Math.max(0, Math.min(remaining, preferredTextWeight)));
+      : roundWeight(Math.max(MIN_DUAL_ANCHOR_WEIGHT, Math.min(remaining - MIN_DUAL_ANCHOR_WEIGHT, preferredTextWeight)));
     return {
       layoutWeight: layout,
       textAnchorWeight: text,
@@ -268,6 +269,8 @@ function MatchingWeightsPanel({
   const textPercent = Math.round(effectiveMatchingWeights.textAnchorWeight * 100);
   const imagePercent = Math.round(effectiveMatchingWeights.imageAnchorWeight * 100);
   const textImageLocked = hasText && hasImage;
+  const dualAnchorMinPercent = textImageLocked ? MIN_DUAL_ANCHOR_WEIGHT * 100 : 0;
+  const dualAnchorMaxPercent = textImageLocked ? remaining - dualAnchorMinPercent : remaining;
   const layoutOptions = [30, 35, 40, 45, 50];
 
   return (
@@ -325,8 +328,8 @@ function MatchingWeightsPanel({
           <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Text</span>
           <input
             type="range"
-            min="0"
-            max={remaining}
+            min={dualAnchorMinPercent}
+            max={dualAnchorMaxPercent}
             step="1"
             value={textPercent}
             disabled={!hasText || !textImageLocked}
@@ -338,8 +341,8 @@ function MatchingWeightsPanel({
           <div className="mt-2 flex items-center gap-2">
             <input
               type="number"
-              min="0"
-              max={remaining}
+              min={dualAnchorMinPercent}
+              max={dualAnchorMaxPercent}
               step="1"
               value={textPercent}
               disabled={!hasText || !textImageLocked}
@@ -358,8 +361,8 @@ function MatchingWeightsPanel({
           <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Image</span>
           <input
             type="range"
-            min="0"
-            max={remaining}
+            min={dualAnchorMinPercent}
+            max={dualAnchorMaxPercent}
             step="1"
             value={imagePercent}
             disabled={!hasImage || !textImageLocked}
@@ -371,8 +374,8 @@ function MatchingWeightsPanel({
           <div className="mt-2 flex items-center gap-2">
             <input
               type="number"
-              min="0"
-              max={remaining}
+              min={dualAnchorMinPercent}
+              max={dualAnchorMaxPercent}
               step="1"
               value={imagePercent}
               disabled={!hasImage || !textImageLocked}
@@ -391,7 +394,7 @@ function MatchingWeightsPanel({
       <div className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-800">
         Effective Matching Weights: Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} / Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} / Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
         {!hasAnyAnchor && <span className="block text-[10px] text-indigo-600">No Text/Image Anchor. Layout is 100%.</span>}
-        {hasText && hasImage && <span className="block text-[10px] text-indigo-600">Text + Image always equals Remaining.</span>}
+        {hasText && hasImage && <span className="block text-[10px] text-indigo-600">Text + Image always equals Remaining. Each side must be at least 20%.</span>}
       </div>
     </div>
   );
@@ -651,7 +654,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     };
   }, [testDocumentPreviewUrl]);
 
-  const safePages = pages.length > 0 ? pages : [{ id: "empty", templateId, pageNumber: 1, sampleImageUrl: samplePage, similarityThreshold: 0.75, finalConfidenceThreshold: 0.8 }];
+  const safePages = pages.length > 0 ? pages : [{ id: "empty", templateId, pageNumber: 1, sampleImageUrl: samplePage, similarityThreshold: 0.75, finalConfidenceThreshold: DEFAULT_FINAL_CONFIDENCE_THRESHOLD }];
   const safeCurrentPage = Math.min(currentPage, Math.max(safePages.length - 1, 0));
   const currentPageNumber = safePages[safeCurrentPage]?.pageNumber || safeCurrentPage + 1;
   const currentPageImage = safePages[safeCurrentPage]?.normalizedImageUrl || safePages[safeCurrentPage]?.sampleImageUrl || samplePage;
