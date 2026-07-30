@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import BaseWorkspace, { WorkspacePage } from "../shared/workspace/BaseWorkspace";
+import { WorkspacePage } from "../shared/workspace/BaseWorkspace";
+import PageNavigator from "../shared/workspace/PageNavigator";
 import {
   DEFAULT_WORKSPACE_IMAGE_METRICS,
   ratioToImageBox,
@@ -137,8 +138,8 @@ export default function AdminRequestDetailPage({
     if (!panel) return;
 
     const updatePreviewWidth = () => {
-      const panelWidth = panel.getBoundingClientRect().width;
-      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth)));
+      const panelWidth = panel.clientWidth || panel.getBoundingClientRect().width;
+      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth - 2)));
     };
 
     updatePreviewWidth();
@@ -151,7 +152,7 @@ export default function AdminRequestDetailPage({
     const observer = new ResizeObserver(updatePreviewWidth);
     observer.observe(panel);
     return () => observer.disconnect();
-  }, []);
+  }, [loadStatus]);
 
   const rois = useMemo(() => {
     return (request?.requestedFields || []).map((field, index) =>
@@ -392,32 +393,39 @@ export default function AdminRequestDetailPage({
       </section>
 
       <div className="grid w-full gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
-        <div ref={previewPanelRef} className="min-w-0 overflow-hidden">
+        <div className="flex min-h-[640px] min-w-0 flex-col overflow-hidden xl:h-[calc(100vh-230px)] xl:min-h-0">
           {workspacePages.length > 0 ? (
-            <BaseWorkspace
-              pages={workspacePages}
-              currentPage={safeCurrentPage}
-              onPageChange={setCurrentPage}
-              title="ตัวอย่างคำขอ"
-            >
-              <WorkspaceCanvas
-                imageSrc={workspacePages[safeCurrentPage]?.src || ""}
-                width={previewCanvasWidth}
-                className="h-[620px] w-full overflow-x-hidden overflow-y-auto p-0"
-                onImageMetricsChange={setImageMetrics}
-              >
-                {request.requestMode === "image_with_roi" && (
-                  <RoiLayer
-                    rois={rois}
-                    currentPage={safeCurrentPage}
-                    readonly
-                    showLabels
-                  />
-                )}
-              </WorkspaceCanvas>
-            </BaseWorkspace>
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="mb-2 flex shrink-0 flex-col gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-sm font-black text-slate-800">ตัวอย่างคำขอ</h2>
+                  <p className="text-[11px] font-semibold text-slate-400">
+                    Page {Math.min(safeCurrentPage + 1, Math.max(workspacePages.length, 1))} of {Math.max(workspacePages.length, 1)}
+                  </p>
+                </div>
+                <PageNavigator pages={workspacePages} currentPage={safeCurrentPage} onPageChange={setCurrentPage} />
+              </div>
+
+              <div ref={previewPanelRef} className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                <WorkspaceCanvas
+                  imageSrc={workspacePages[safeCurrentPage]?.src || ""}
+                  width={previewCanvasWidth}
+                  className="h-full w-full overflow-x-hidden overflow-y-auto p-0 [&>div]:mx-auto"
+                  onImageMetricsChange={setImageMetrics}
+                >
+                  {request.requestMode === "image_with_roi" && (
+                    <RoiLayer
+                      rois={rois}
+                      currentPage={safeCurrentPage}
+                      readonly
+                      showLabels
+                    />
+                  )}
+                </WorkspaceCanvas>
+              </div>
+            </section>
           ) : (
-            <section className="flex min-h-[620px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+            <section className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
               <h3 className="text-base font-black text-slate-900">ยังไม่มีไฟล์ในคำขอนี้</h3>
               <p className="mt-2 max-w-md text-sm font-semibold text-slate-500">
                 ยังไม่มีภาพจากไฟล์ต้นทางสำหรับสร้าง Template
