@@ -138,7 +138,7 @@ export default function AdminRequestDetailPage({
 
     const updatePreviewWidth = () => {
       const panelWidth = panel.getBoundingClientRect().width;
-      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth - 50)));
+      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth)));
     };
 
     updatePreviewWidth();
@@ -403,7 +403,7 @@ export default function AdminRequestDetailPage({
               <WorkspaceCanvas
                 imageSrc={workspacePages[safeCurrentPage]?.src || ""}
                 width={previewCanvasWidth}
-                className="h-[620px] w-full overflow-x-hidden overflow-y-auto"
+                className="h-[620px] w-full overflow-x-hidden overflow-y-auto p-0"
                 onImageMetricsChange={setImageMetrics}
               >
                 {request.requestMode === "image_with_roi" && (
