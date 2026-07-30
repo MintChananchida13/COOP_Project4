@@ -23,7 +23,7 @@ _TABLE_MODEL: Any = None
 _TABLE_MODEL_KIND = ""
 _TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
 _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MODEL_NAME", "th_PP-OCRv5_mobile_rec")
-_TABLE_DEVICE = os.getenv("PADDLE_TABLE_DEVICE", "cpu").strip() or "cpu"
+_TABLE_DEVICE = "cpu"
 
 
 def _model_service_url() -> str:

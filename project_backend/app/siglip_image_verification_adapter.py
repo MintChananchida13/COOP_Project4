@@ -352,8 +352,8 @@ def _load_siglip_runtime():
 
     if _SIGLIP_PROCESSOR is None or _SIGLIP_MODEL is None or _SIGLIP_DEVICE is None:
         _SIGLIP_PROCESSOR = AutoProcessor.from_pretrained(SIGLIP_MODEL_NAME)
-        device_map = os.getenv("SIGLIP_DEVICE_MAP", "").strip()
-        device = os.getenv("SIGLIP_DEVICE", "").strip().lower() or ("cuda" if torch.cuda.is_available() else "cpu")
+        device_map = ""
+        device = "cpu"
         load_kwargs: Dict[str, Any] = {}
         if device_map:
             load_kwargs["device_map"] = device_map

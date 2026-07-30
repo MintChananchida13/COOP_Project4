@@ -1,3 +1,4 @@
+import os
 import sys
 import types
 import unittest
@@ -112,21 +113,21 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertIsNotNone(FakeTableRecognitionPipelineV2.init_kwargs)
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "cpu")
 
-    def test_paddle_table_device_gpu_is_used_by_pipeline_and_summary(self) -> None:
+    def test_paddle_table_device_env_gpu_is_ignored_for_cpu_only_runtime(self) -> None:
         fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
 
-        with patch("app.table_recognition_v2_adapter._TABLE_DEVICE", "gpu:0"), patch.dict(sys.modules, {"paddleocr": fake_paddleocr}):
+        with patch.dict("os.environ", {"PADDLE_TABLE_DEVICE": "gpu:0"}, clear=False), patch.dict(sys.modules, {"paddleocr": fake_paddleocr}):
             summary = table_recognition_runtime_summary()
 
-        self.assertEqual(summary["device"], "gpu:0")
+        self.assertEqual(summary["device"], "cpu")
         self.assertIsNotNone(FakeTableRecognitionPipelineV2.init_kwargs)
-        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "gpu:0")
+        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "cpu")
 
     def test_cached_pipeline_is_reused(self) -> None:
         image = np.zeros((10, 10, 3), dtype=np.uint8)
         fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
 
-        with patch("app.table_recognition_v2_adapter._TABLE_DEVICE", "gpu:0"), patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
             "app.table_recognition_v2_adapter.cv2.imwrite",
             return_value=True,
         ), patch("app.table_recognition_v2_adapter.Path.unlink"):
