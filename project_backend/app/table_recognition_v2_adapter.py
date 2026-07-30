@@ -23,7 +23,19 @@ logger = logging.getLogger(__name__)
 
 _TABLE_MODEL: Any = None
 _TABLE_MODEL_KIND = ""
-_TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
+_TABLE_WIRED_MODEL_NAME = (
+    os.getenv("PADDLE_TABLE_WIRED_MODEL_NAME")
+    or os.getenv("PADDLE_TABLE_MODEL_NAME")
+    or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME")
+    or "SLANeXt_wired"
+)
+_TABLE_WIRELESS_MODEL_NAME = (
+    os.getenv("PADDLE_TABLE_WIRELESS_MODEL_NAME")
+    or os.getenv("PADDLE_TABLE_MODEL_NAME")
+    or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME")
+    or "SLANeXt_wireless"
+)
+_TABLE_MODEL_NAME = f"{_TABLE_WIRED_MODEL_NAME}/{_TABLE_WIRELESS_MODEL_NAME}"
 _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MODEL_NAME", "th_PP-OCRv5_mobile_rec")
 _TABLE_DEVICE = "cpu"
 _BORDERLESS_MIN_COLUMNS = 2
@@ -63,8 +75,8 @@ def _load_table_model() -> Any:
     try:
         logger.info("Loading TableRecognitionPipelineV2 (device=%s)", _TABLE_DEVICE)
         _TABLE_MODEL = TableRecognitionPipelineV2(
-            wired_table_structure_recognition_model_name=_TABLE_MODEL_NAME,
-            wireless_table_structure_recognition_model_name=_TABLE_MODEL_NAME,
+            wired_table_structure_recognition_model_name=_TABLE_WIRED_MODEL_NAME,
+            wireless_table_structure_recognition_model_name=_TABLE_WIRELESS_MODEL_NAME,
             text_recognition_model_name=_TABLE_TEXT_RECOGNITION_MODEL_NAME,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
@@ -85,6 +97,8 @@ def table_recognition_runtime_summary() -> Dict[str, Any]:
     return {
         "enabled": True,
         "structure_model": _TABLE_MODEL_NAME,
+        "wired_structure_model": _TABLE_WIRED_MODEL_NAME,
+        "wireless_structure_model": _TABLE_WIRELESS_MODEL_NAME,
         "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
         "device": _TABLE_DEVICE,
     }

@@ -43,7 +43,9 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             "app.table_recognition_v2_adapter",
             _TABLE_MODEL=None,
             _TABLE_MODEL_KIND="",
-            _TABLE_MODEL_NAME="SLANet_plus",
+            _TABLE_WIRED_MODEL_NAME="SLANeXt_wired",
+            _TABLE_WIRELESS_MODEL_NAME="SLANeXt_wireless",
+            _TABLE_MODEL_NAME="SLANeXt_wired/SLANeXt_wireless",
             _TABLE_TEXT_RECOGNITION_MODEL_NAME="th_PP-OCRv5_mobile_rec",
             _TABLE_DEVICE="cpu",
         )
@@ -99,9 +101,9 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = recognize_table_v2(image)
 
         self.assertEqual(result["engine"], "table_recognition_v2")
-        self.assertEqual(result["model"], "SLANet_plus")
-        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wired_table_structure_recognition_model_name"], "SLANet_plus")
-        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wireless_table_structure_recognition_model_name"], "SLANet_plus")
+        self.assertEqual(result["model"], "SLANeXt_wired/SLANeXt_wireless")
+        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wired_table_structure_recognition_model_name"], "SLANeXt_wired")
+        self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wireless_table_structure_recognition_model_name"], "SLANeXt_wireless")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["text_recognition_model_name"], "th_PP-OCRv5_mobile_rec")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "cpu")
 
@@ -115,7 +117,9 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             summary,
             {
                 "enabled": True,
-                "structure_model": "SLANet_plus",
+                "structure_model": "SLANeXt_wired/SLANeXt_wireless",
+                "wired_structure_model": "SLANeXt_wired",
+                "wireless_structure_model": "SLANeXt_wireless",
                 "text_recognition_model": "th_PP-OCRv5_mobile_rec",
                 "device": "cpu",
             },
@@ -146,8 +150,8 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             FakeTableRecognitionPipelineV2.init_kwargs = {"sentinel": "should_not_be_reinitialized"}
             second = recognize_table_v2_local(image)
 
-        self.assertEqual(first_model, "SLANet_plus")
-        self.assertEqual(second["model"], "SLANet_plus")
+        self.assertEqual(first_model, "SLANeXt_wired/SLANeXt_wireless")
+        self.assertEqual(second["model"], "SLANeXt_wired/SLANeXt_wireless")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs, {"sentinel": "should_not_be_reinitialized"})
 
     def test_runtime_endpoint_can_use_warmed_local_model_function(self) -> None:

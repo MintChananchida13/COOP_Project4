@@ -160,7 +160,10 @@ def health() -> Dict[str, Any]:
         "layout_model": "PP-DocLayoutV3",
         "text_detection_model": "PP-OCRv5_server_det",
         "ocr_model": os.getenv("PADDLE_THAI_OCR_MODEL_NAME", "th_PP-OCRv5_mobile_rec"),
-        "table_model": os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus"),
+        "table_model": (
+            f"{os.getenv('PADDLE_TABLE_WIRED_MODEL_NAME') or os.getenv('PADDLE_TABLE_MODEL_NAME') or os.getenv('PADDLE_TABLE_RECOGNITION_MODEL_NAME') or 'SLANeXt_wired'}/"
+            f"{os.getenv('PADDLE_TABLE_WIRELESS_MODEL_NAME') or os.getenv('PADDLE_TABLE_MODEL_NAME') or os.getenv('PADDLE_TABLE_RECOGNITION_MODEL_NAME') or 'SLANeXt_wireless'}"
+        ),
         "image_verification_model": "google/siglip-so400m-patch14-384",
     }
 
