@@ -2092,7 +2092,43 @@ class TemplateRequestService:
         }
 
     def update(self, request_id: str, payload: TemplateRequestUpdate) -> Dict[str, Any]:
-        return {"id": request_id, **payload.model_dump(exclude_unset=True), "updated_at": _now()}
+        patch = payload.model_dump(exclude_unset=True)
+        if not patch:
+            return self.get(request_id)
+
+        allowed_columns = {
+            "request_title",
+            "document_type",
+            "sample_file_url",
+            "request_mode",
+            "status",
+            "user_note",
+            "admin_note",
+            "page_count",
+        }
+        column_values = {key: value for key, value in patch.items() if key in allowed_columns}
+        if not column_values:
+            return self.get(request_id)
+
+        assignments = ", ".join(f"{column} = ?" for column in column_values)
+        values = list(column_values.values())
+
+        with _connect() as conn:
+            current = conn.execute("SELECT id FROM template_requests WHERE id = ?", (request_id,)).fetchone()
+            if current is None:
+                raise HTTPException(status_code=404, detail="Template request not found.")
+
+            conn.execute(
+                f"""
+                UPDATE template_requests
+                SET {assignments}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (*values, request_id),
+            )
+            conn.commit()
+
+        return self.get(request_id)
 
     def delete(self, request_id: str) -> Dict[str, Any]:
         with _connect() as conn:

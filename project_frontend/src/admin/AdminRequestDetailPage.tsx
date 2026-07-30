@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import BaseWorkspace, { WorkspacePage } from "../shared/workspace/BaseWorkspace";
 import {
   DEFAULT_WORKSPACE_IMAGE_METRICS,
@@ -22,6 +22,7 @@ import {
   deleteTemplateRequest,
   fetchTemplateRequest,
   fetchTemplateRequestPages,
+  updateTemplateRequest,
   updateTemplateRequestImage,
 } from "./adminApi";
 
@@ -78,6 +79,7 @@ export default function AdminRequestDetailPage({
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(
     DEFAULT_WORKSPACE_IMAGE_METRICS
   );
+  const [templateName, setTemplateName] = useState("");
   const [adminNote, setAdminNote] = useState("");
   const [loadStatus, setLoadStatus] = useState<
     "loading" | "loaded" | "error"
@@ -87,6 +89,8 @@ export default function AdminRequestDetailPage({
   const [isConverting, setIsConverting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const [previewCanvasWidth, setPreviewCanvasWidth] = useState(750);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +111,8 @@ export default function AdminRequestDetailPage({
           pages: requestPages.length > 0 ? requestPages : requestDetail.pages,
         });
         setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
+        setTemplateName(requestDetail.requestTitle || "");
+        setAdminNote(requestDetail.adminNote || "");
         setLoadStatus("loaded");
       } catch (error) {
         console.warn("Admin request detail load failed.", error);
@@ -125,6 +131,27 @@ export default function AdminRequestDetailPage({
       cancelled = true;
     };
   }, [requestId]);
+
+  useEffect(() => {
+    const panel = previewPanelRef.current;
+    if (!panel) return;
+
+    const updatePreviewWidth = () => {
+      const panelWidth = panel.getBoundingClientRect().width;
+      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth - 50)));
+    };
+
+    updatePreviewWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updatePreviewWidth);
+      return () => window.removeEventListener("resize", updatePreviewWidth);
+    }
+
+    const observer = new ResizeObserver(updatePreviewWidth);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
 
   const rois = useMemo(() => {
     return (request?.requestedFields || []).map((field, index) =>
@@ -194,9 +221,19 @@ export default function AdminRequestDetailPage({
       return;
     }
 
+    const nextTemplateName = templateName.trim();
+    if (!nextTemplateName) {
+      setActionError("กรุณาระบุชื่อ Template ก่อนสร้าง Template");
+      return;
+    }
+
     setIsConverting(true);
 
     try {
+      const updatedRequest = await updateTemplateRequest(request.id, {
+        requestTitle: nextTemplateName,
+        adminNote,
+      });
       const primaryPageIds = new Set(primaryPages.map((page) => page.id));
       const pendingPages = pages.filter((page) => page.reviewStatus !== "approved" || !primaryPageIds.has(page.id));
       await Promise.all(
@@ -210,10 +247,11 @@ export default function AdminRequestDetailPage({
       const result = await convertTemplateRequestToTemplate(request.id);
 
       setRequest({
-        ...request,
+        ...updatedRequest,
         status: "converted",
         convertedTemplateId: result.templateId,
         adminNote,
+        pages,
       });
 
       setActionStatus("สร้าง Template ฉบับร่างเรียบร้อยแล้ว");
@@ -298,7 +336,7 @@ export default function AdminRequestDetailPage({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-xl font-black text-slate-900">
-              {request.requestTitle}
+              {templateName.trim() || request.requestTitle}
             </h2>
 
             <div className="mt-2 flex flex-wrap gap-2">
@@ -327,8 +365,34 @@ export default function AdminRequestDetailPage({
         </div>
       </div>
 
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,280px)] lg:items-end">
+          <div>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+              Template Info
+            </h3>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              ตั้งชื่อ Template ที่จะสร้างจากไฟล์ต้นทางนี้ ชื่อนี้จะถูกใช้ในคลัง Template และตอนค้นหาเอกสารของผู้ใช้
+            </p>
+          </div>
+
+          <label className="block space-y-1.5">
+            <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+              ชื่อ Template
+            </span>
+            <input
+              type="text"
+              value={templateName}
+              onChange={(event) => setTemplateName(event.target.value)}
+              placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
+              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+        </div>
+      </section>
+
       <div className="grid w-full gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
-        <div className="min-w-0">
+        <div ref={previewPanelRef} className="min-w-0 overflow-hidden">
           {workspacePages.length > 0 ? (
             <BaseWorkspace
               pages={workspacePages}
@@ -338,7 +402,8 @@ export default function AdminRequestDetailPage({
             >
               <WorkspaceCanvas
                 imageSrc={workspacePages[safeCurrentPage]?.src || ""}
-                className="h-[620px] w-full"
+                width={previewCanvasWidth}
+                className="h-[620px] w-full overflow-x-hidden overflow-y-auto"
                 onImageMetricsChange={setImageMetrics}
               >
                 {request.requestMode === "image_with_roi" && (

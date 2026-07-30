@@ -289,6 +289,7 @@ export default function WorkspaceTemplateEditorV2({
   const [imageMetrics, setImageMetrics] = useState<WorkspaceImageMetrics>(DEFAULT_WORKSPACE_IMAGE_METRICS);
   const [testStatus, setTestStatus] = useState("");
   const [testResult, setTestResult] = useState<TemplateStepTestResult | null>(null);
+  const [testResultKind, setTestResultKind] = useState<"extraction" | "verification" | null>(null);
   const [testError, setTestError] = useState("");
   const [testAction, setTestAction] = useState<"extraction" | "verification" | null>(null);
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
@@ -374,10 +375,52 @@ export default function WorkspaceTemplateEditorV2({
       : textAnchorsMissingExpected.length > 0
         ? `กรุณากรอก Expected Text ให้ครบ (${textAnchorsMissingExpected.length} รายการ)`
         : "";
+  const extractionTestSignature = useMemo(
+    () =>
+      extractionFields
+        .map((field) => `${field.id}:${field.pageNumber}:${field.fieldName}:${field.dataType}:${field.extractionMethod}:${field.roi.xRatio}:${field.roi.yRatio}:${field.roi.widthRatio}:${field.roi.heightRatio}`)
+        .join("|"),
+    [extractionFields]
+  );
+  const verificationTestSignature = useMemo(
+    () =>
+      verificationAnchors
+        .map((field) => `${field.id}:${field.pageNumber}:${field.fieldName}:${field.dataType}:${field.extractionMethod}:${field.expectedText || ""}:${field.imageCategory || ""}:${field.roi.xRatio}:${field.roi.yRatio}:${field.roi.widthRatio}:${field.roi.heightRatio}`)
+        .join("|"),
+    [verificationAnchors]
+  );
+  const extractionTestPassed =
+    testResultKind === "extraction" &&
+    Boolean(testResult?.testedCount) &&
+    testResult?.failedCount === 0 &&
+    (testResult.fields || []).every((item) => item.passed);
+  const verificationTestPassed =
+    testResultKind === "verification" &&
+    Boolean(testResult?.testedCount) &&
+    testResult?.failedCount === 0 &&
+    (testResult.anchors || []).every((item) => item.passed);
 
   useEffect(() => {
     setAnchorNameDraft(selectedAnchor?.fieldName || "");
   }, [selectedAnchor?.id, selectedAnchor?.fieldName]);
+
+  useEffect(() => {
+    if (testResultKind === "extraction") {
+      setTestResult(null);
+      setTestResultKind(null);
+      setTestStatus("");
+      setTestError("");
+    }
+  }, [extractionTestSignature]);
+
+  useEffect(() => {
+    if (testResultKind === "verification") {
+      setTestResult(null);
+      setTestResultKind(null);
+      setTestStatus("");
+      setTestError("");
+    }
+  }, [verificationTestSignature]);
 
   const commitAnchorName = () => {
     if (!selectedAnchor || anchorNameDraft === selectedAnchor.fieldName) return;
@@ -416,15 +459,15 @@ export default function WorkspaceTemplateEditorV2({
           const index = verificationAnchors.length + 1;
           onAddField(ratio, {
             id: optimisticFieldId,
-            fieldName: `anchor_${index}`,
-            displayLabel: `Anchor ${index}`,
+            fieldName: `verification_${index}`,
+            displayLabel: `Verification ${index}`,
             dataType: "text",
             userSelectable: false,
             defaultSelected: false,
             useForVerification: true,
             requiredForVerification: false,
             extractionMethod: "ocr_text",
-            roiPadding: 6,
+            roiPadding: 0,
             verificationWeight: 1,
             expectedText: "",
             matchType: "contains",
@@ -607,6 +650,7 @@ export default function WorkspaceTemplateEditorV2({
   };
   const clearStepTest = () => {
     setTestResult(null);
+    setTestResultKind(null);
     setTestStatus("");
     setTestError("");
   };
@@ -631,6 +675,7 @@ export default function WorkspaceTemplateEditorV2({
           ? await testTemplateExtractionFields(templateId)
           : await testTemplateVerificationAnchors(templateId);
       setTestResult(result);
+      setTestResultKind(kind);
       setTestStatus(`${kind === "extraction" ? "Extraction" : "Verification"} test complete: ${result.passedCount}/${result.testedCount} passed.`);
     } catch (error) {
       setTestError(error instanceof Error ? error.message : "Step test failed.");
@@ -886,7 +931,7 @@ export default function WorkspaceTemplateEditorV2({
         hideStepProgress
         rootClassName="max-w-7xl mx-auto space-y-3"
         onImageMetricsChange={setImageMetrics}
-        getRoiBadges={(roi) => (roi as AdminRoi).workspaceKind === "verification_anchors" ? ["ANCHOR"] : []}
+        getRoiBadges={() => []}
         allowedRoiTypes={step === "verification_anchors" ? ["text", "image"] : ["text", "table", "image"]}
         getRoiClassName={(roi, selected) => {
           const adminRoi = roi as AdminRoi;
@@ -934,15 +979,6 @@ export default function WorkspaceTemplateEditorV2({
                   </div>
                   {mode === "extraction_fields" && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
-                      <div className="rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
-                        <button
-                          type="button"
-                          disabled={isAutoDetecting}
-                          className="w-full rounded-md bg-indigo-600 px-2 py-1.5 text-[10px] font-black text-white shadow-sm"
-                        >
-                          Text Line
-                        </button>
-                      </div>
                       <button
                         type="button"
                         onClick={handleAutoDetectExtractionRoi}
@@ -1034,16 +1070,16 @@ export default function WorkspaceTemplateEditorV2({
                   </button>
                 </section>
                 <section className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Verification Anchors</h3>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Verification ROI</h3>
                   <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
                     Draw fixed text or logo regions used only to confirm the template.
                   </p>
                 </section>
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page {currentPage + 1} Anchors</h3>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page {currentPage + 1} ROI</h3>
                   <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
                     {currentPageAnchors.length === 0 ? (
-                      <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create an anchor.</p>
+                      <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create a verification region.</p>
                     ) : currentPageAnchors.map((anchor, index) => {
                       const isSelected = selectedAnchor?.id === anchor.id;
                       return (
@@ -1091,7 +1127,7 @@ export default function WorkspaceTemplateEditorV2({
                 </section>
                 {selectedAnchor ? (
                   <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Anchor Settings</h3>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">ROI Settings</h3>
                     <label className="space-y-1 block">
                       <span className="text-[9px] font-black uppercase text-slate-400">Name</span>
                       <input
@@ -1168,10 +1204,6 @@ export default function WorkspaceTemplateEditorV2({
                         </div>
                       );
                     })()}
-                    <label className="space-y-1 block">
-                      <span className="text-[9px] font-black uppercase text-slate-400">ROI Padding</span>
-                      <input type="number" min="0" step="1" className={inputClass} value={selectedAnchor.roiPadding ?? 6} onChange={(event) => onUpdateField(selectedAnchor.id, { roiPadding: Number(event.target.value) })} />
-                    </label>
                     {anchorMethod(selectedAnchor) === "ocr_text" && (
                       <label className="space-y-1 block">
                         <span className="text-[9px] font-black uppercase text-slate-400">Expected Text</span>
@@ -1184,11 +1216,11 @@ export default function WorkspaceTemplateEditorV2({
                       </label>
                     )}
                     <button type="button" onClick={() => onDeleteField(selectedAnchor.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-                      Delete Anchor
+                      Delete ROI
                     </button>
                   </section>
                 ) : (
-                  <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">Draw or select a verification anchor first.</p>
+                  <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">Draw or select a verification ROI first.</p>
                 )}
               </>
             )}
@@ -1257,27 +1289,39 @@ export default function WorkspaceTemplateEditorV2({
           </p>
         )}
         {step === "extraction_fields" && (
-          <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
+          <div className="mt-4 flex flex-col items-end gap-2 border-t border-slate-100 pt-4">
+            {!extractionTestPassed && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                ต้องกด Test Extraction และผลต้อง PASS ทุก ROI ก่อนเข้าสู่ Verification
+              </p>
+            )}
             <button
               type="button"
               onClick={() => {
+                if (!extractionTestPassed) return;
                 setStep("verification_anchors");
                 setMode("verification_anchors");
                 setSelectedId(null);
                 clearStepTest();
               }}
-              className="rounded-xl bg-amber-600 px-5 py-2.5 text-xs font-black text-white hover:bg-amber-700"
+              disabled={!extractionTestPassed}
+              className="rounded-xl bg-amber-600 px-5 py-2.5 text-xs font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
               Next: Verification Anchors
             </button>
           </div>
         )}
         {step === "verification_anchors" && (
-          <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
+          <div className="mt-4 flex flex-col items-end gap-2 border-t border-slate-100 pt-4">
+            {!verificationTestPassed && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                ต้องกด Test Verification และผลต้อง PASS ทุก ROI ก่อนเข้าสู่ Test Mode
+              </p>
+            )}
             <button
               type="button"
               onClick={onRunTestMode}
-              disabled={!verificationAnchorsReady}
+              disabled={!verificationAnchorsReady || !verificationTestPassed}
               className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
               Test Mode

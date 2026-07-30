@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileImage, Loader2, UploadCloud } from "lucide-react";
+import { Check, FileImage, Loader2, Pencil, UploadCloud, X } from "lucide-react";
 import { Template, TemplateStatus } from "../types/ocr";
-import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateStatus } from "./adminApi";
+import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateApi, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
 import { ActionButton, EmptyState, InlineState, LoadingState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
@@ -107,7 +107,11 @@ export default function AdminTemplatesPage() {
   const [deleteError, setDeleteError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState("");
-  const [newTemplateTitle, setNewTemplateTitle] = useState("");
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editingTemplateName, setEditingTemplateName] = useState("");
+  const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
+  const [renameMessage, setRenameMessage] = useState("");
+  const [renameError, setRenameError] = useState("");
   const [newTemplateType, setNewTemplateType] = useState("");
   const [isCreatingRequest, setIsCreatingRequest] = useState(false);
   const [createRequestError, setCreateRequestError] = useState("");
@@ -178,6 +182,57 @@ export default function AdminTemplatesPage() {
     }
   };
 
+  const startRenameTemplate = (template: Template) => {
+    setEditingTemplateId(template.id);
+    setEditingTemplateName(template.name);
+    setRenameMessage("");
+    setRenameError("");
+  };
+
+  const cancelRenameTemplate = () => {
+    setEditingTemplateId(null);
+    setEditingTemplateName("");
+    setRenameError("");
+  };
+
+  const handleRenameTemplate = async (template: Template) => {
+    if (loadStatus !== "loaded") {
+      setRenameError("ไม่สามารถเปลี่ยนชื่อ Template ได้ เพราะยังไม่ได้โหลดข้อมูลจาก Backend");
+      return;
+    }
+
+    const nextName = editingTemplateName.trim();
+    if (!nextName) {
+      setRenameError("กรุณาระบุชื่อ Template");
+      return;
+    }
+    if (nextName === template.name) {
+      cancelRenameTemplate();
+      return;
+    }
+
+    setRenamingTemplateId(template.id);
+    setRenameMessage("");
+    setRenameError("");
+    setDeleteMessage("");
+    setDeleteError("");
+    setStatusMessage("");
+    setStatusError("");
+
+    try {
+      const bundle = await updateTemplateApi(template.id, { name: nextName });
+      setTemplates((current) => current.map((item) => (item.id === template.id ? bundle.template : item)));
+      setEditingTemplateId(null);
+      setEditingTemplateName("");
+      setRenameMessage(`เปลี่ยนชื่อ Template เป็น "${bundle.template.name}" เรียบร้อยแล้ว`);
+    } catch (error) {
+      console.warn("Template rename failed.", error);
+      setRenameError(error instanceof Error ? error.message : "เปลี่ยนชื่อ Template ไม่สำเร็จ");
+    } finally {
+      setRenamingTemplateId(null);
+    }
+  };
+
   const handleCreateTemplateRequest = async (files: FileList | null) => {
     if (!files?.length) return;
     if (loadStatus !== "loaded") {
@@ -200,7 +255,7 @@ export default function AdminTemplatesPage() {
 
     try {
       const firstFile = acceptedFiles[0];
-      const requestTitle = newTemplateTitle.trim() || firstFile.name.replace(/\.[^.]+$/, "") || "Template ใหม่";
+      const requestTitle = firstFile.name.replace(/\.[^.]+$/, "") || "Template ใหม่";
       const request = await createTemplateRequest({
         requestTitle,
         documentType: newTemplateType.trim() || "เอกสารทั่วไป",
@@ -219,7 +274,6 @@ export default function AdminTemplatesPage() {
         }
       }
 
-      setNewTemplateTitle("");
       setNewTemplateType("");
       router.push(`/admin/requests/${request.id}`);
     } catch (error) {
@@ -269,20 +323,10 @@ export default function AdminTemplatesPage() {
             <div>
               <h2 className="text-base font-black text-slate-900">สร้าง Template ใหม่</h2>
               <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
-                อัปโหลดรูปภาพหรือ PDF เพื่อสร้าง Template Request ใหม่ จากนั้นระบบจะพาไปหน้า Request Detail สำหรับตรวจไฟล์ ตั้งหน้าหลัก และ Convert เป็น Template
+                อัปโหลดรูปภาพหรือ PDF เพื่อสร้างคำขอ Template ใหม่ จากนั้นระบบจะพาไปหน้า Request Detail เพื่อตรวจไฟล์ ใส่ชื่อ Template และสร้าง Template
               </p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อ Template</span>
-                <input
-                  type="text"
-                  value={newTemplateTitle}
-                  onChange={(event) => setNewTemplateTitle(event.target.value)}
-                  placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </label>
+            <div className="grid gap-3">
               <label className="space-y-1.5">
                 <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร</span>
                 <input
@@ -368,6 +412,12 @@ export default function AdminTemplatesPage() {
       {statusError && (
         <InlineState tone="danger" message={statusError} />
       )}
+      {renameMessage && (
+        <InlineState tone="success" message={renameMessage} />
+      )}
+      {renameError && (
+        <InlineState tone="danger" message={renameError} />
+      )}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filteredTemplates.map((template) => (
@@ -391,7 +441,64 @@ export default function AdminTemplatesPage() {
             </div>
             <div className="space-y-3 p-4">
             <div>
-              <div className="line-clamp-2 min-h-10 text-sm font-black leading-5 text-slate-900">{template.name}</div>
+              {editingTemplateId === template.id ? (
+                <div className="space-y-2">
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">ชื่อ Template</span>
+                    <input
+                      type="text"
+                      value={editingTemplateName}
+                      onChange={(event) => setEditingTemplateName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void handleRenameTemplate(template);
+                        }
+                        if (event.key === "Escape") {
+                          cancelRenameTemplate();
+                        }
+                      }}
+                      disabled={renamingTemplateId === template.id}
+                      autoFocus
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleRenameTemplate(template)}
+                      disabled={renamingTemplateId === template.id}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-black text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {renamingTemplateId === template.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                      บันทึก
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelRenameTemplate}
+                      disabled={renamingTemplateId === template.id}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 transition-colors hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <X size={14} />
+                      ยกเลิก
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex min-h-10 items-start justify-between gap-2">
+                  <div className="line-clamp-2 text-sm font-black leading-5 text-slate-900">{template.name}</div>
+                  <button
+                    type="button"
+                    onClick={() => startRenameTemplate(template)}
+                    disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || renamingTemplateId === template.id}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                    title="เปลี่ยนชื่อ Template"
+                    aria-label={`เปลี่ยนชื่อ ${template.name}`}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </div>
+              )}
               <div className="mt-1 flex flex-wrap gap-1.5">
                 <StatusBadge status={template.status} />
                 {loadStatus === "error" && (

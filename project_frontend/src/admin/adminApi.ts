@@ -876,6 +876,32 @@ export const fetchTemplateRequest = async (requestId: string) => {
   return mapApiRequest(json?.data as ApiTemplateRequest);
 };
 
+export const updateTemplateRequest = async (
+  requestId: string,
+  patch: {
+    requestTitle?: string;
+    documentType?: string;
+    adminNote?: string;
+    status?: string;
+  }
+) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request_title: patch.requestTitle,
+      document_type: patch.documentType,
+      admin_note: patch.adminNote,
+      status: patch.status,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(json?.detail || json?.error?.message || `Template request update failed with ${response.status}`);
+  }
+  return mapApiRequest(json?.data as ApiTemplateRequest);
+};
+
 export const fetchTemplateRequestPages = async (requestId: string) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}/pages`);
   if (!response.ok) {
