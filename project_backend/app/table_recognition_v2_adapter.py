@@ -229,12 +229,7 @@ def _rows_from_html(html: str) -> List[List[str]]:
         parser.feed(html)
     except Exception:
         return []
-    rows = [row for row in parser.rows if any(cell.strip() for cell in row)]
-    if rows:
-        return rows
-
-    empty_rows = [row for row in parser.rows if row]
-    return empty_rows
+    return [row for row in parser.rows if row]
 
 
 def _structured_from_html(html: str) -> Optional[Dict[str, Any]]:

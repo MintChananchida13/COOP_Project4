@@ -1986,15 +1986,19 @@ class TemplateRequestService:
 
     def create(self, payload: TemplateRequestCreate) -> Dict[str, Any]:
         request_id = _stub_id("tpl_req")
-        source_pages = payload.pages or [
-            {
-                "page_number": 1,
-                "original_image_url": payload.sample_file_url,
-                "normalized_image_url": payload.sample_file_url,
-                "source_file_id": f"{request_id}_source_1",
-                "source_file_name": payload.request_title,
-            }
-        ]
+        source_pages = payload.pages or (
+            [
+                {
+                    "page_number": 1,
+                    "original_image_url": payload.sample_file_url,
+                    "normalized_image_url": payload.sample_file_url,
+                    "source_file_id": f"{request_id}_source_1",
+                    "source_file_name": payload.request_title,
+                }
+            ]
+            if payload.sample_file_url
+            else []
+        )
         default_source_file_id = f"{request_id}_source_1"
         default_source_file_name = payload.request_title
 

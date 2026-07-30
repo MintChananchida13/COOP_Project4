@@ -281,6 +281,30 @@ const cloneMergedCells = (cells?: TableMergedCell[]): TableMergedCell[] =>
     originalCells: cell.originalCells?.map(row => [...row]),
   }));
 
+const mergedCellsFromStructured = (
+  structured: StructuredTableResult | null | undefined,
+  rows: string[][]
+): TableMergedCell[] => {
+  if (!structured?.cells?.length) return [];
+  return structured.cells
+    .filter(cell => !cell.hidden && ((cell.rowSpan ?? 1) > 1 || (cell.colSpan ?? 1) > 1))
+    .map(cell => {
+      const rowSpan = Math.max(1, Number(cell.rowSpan ?? 1));
+      const colSpan = Math.max(1, Number(cell.colSpan ?? 1));
+      const originalCells = Array.from({ length: rowSpan }, (_, rowOffset) =>
+        Array.from({ length: colSpan }, (_, colOffset) => rows[cell.row + rowOffset]?.[cell.col + colOffset] ?? "")
+      );
+      return {
+        id: `structured-${cell.row}-${cell.col}-${rowSpan}-${colSpan}`,
+        row: Math.max(0, Number(cell.row || 0)),
+        col: Math.max(0, Number(cell.col || 0)),
+        rowSpan,
+        colSpan,
+        originalCells,
+      };
+    });
+};
+
 const tableCellKey = (row: number, col: number) => `${row}:${col}`;
 
 const getSelectionBounds = (selection: TableSelection | null) => {
@@ -424,6 +448,7 @@ const structuredTableToJson = (structured: StructuredTableResult) =>
         bbox: cell.bbox,
         ocrText: cell.ocrText ?? cell.text,
         groundTruth: cell.groundTruth ?? cell.text,
+        hidden: cell.hidden ?? false,
       })),
     },
     null,
@@ -450,9 +475,12 @@ const EditableTableResult = ({
       const sourceWidths = structured?.colWidths?.length
         ? normalizeColumnWidths(structured.colWidths, normalizedRows[0]?.length || 1)
         : getAutoFitColumnWidths(normalizedRows, headerRowCount);
+      const sourceMergedCells = mergedCells?.length
+        ? cloneMergedCells(mergedCells)
+        : mergedCellsFromStructured(structured, normalizedRows);
       return sanitizeTableSnapshot({
         rows: normalizedRows,
-        mergedCells: cloneMergedCells(mergedCells),
+        mergedCells: sourceMergedCells,
         columnWidths: sourceWidths,
         headerRowCount,
       });

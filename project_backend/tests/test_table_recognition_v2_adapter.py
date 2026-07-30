@@ -13,7 +13,7 @@ from app.table_recognition_v2_adapter import (
     recognize_table_v2_local,
     table_recognition_runtime_summary,
 )
-from app.ocr_postprocess import normalize_ocr_text, parse_table_html_with_bs4
+from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 
 
 class FakeTableRecognitionPipelineV2:
@@ -162,6 +162,13 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("pythainlp"), "pythainlp not installed")
     def test_ocr_text_postprocess_uses_pythainlp_normalization(self) -> None:
         self.assertEqual(normalize_ocr_text("  ทดสอบ   OCR  \n\n  ภาษาไทย  "), "ทดสอบ OCR\nภาษาไทย")
+
+    def test_table_row_postprocess_preserves_empty_structure_rows(self) -> None:
+        rows = normalize_table_rows([["หัวข้อ", "จำนวน"], ["", ""], ["รวม", "10"]])
+
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[1], ["", ""])
+        self.assertEqual(rows[2][1], "10")
 
 
 if __name__ == "__main__":

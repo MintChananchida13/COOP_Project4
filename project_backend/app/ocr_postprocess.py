@@ -90,7 +90,6 @@ def parse_table_html_with_bs4(html: str) -> Optional[Dict[str, Any]]:
         if row or tr.find_all(["th", "td"]):
             rows.append(row)
 
-    rows = [row for row in rows if any(cell.strip() for cell in row)]
     if not rows:
         return None
     max_columns = max((len(row) for row in rows), default=0)
@@ -103,9 +102,12 @@ def parse_table_html_with_bs4(html: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def normalize_table_rows(rows: List[List[Any]]) -> List[List[str]]:
+def normalize_table_rows(rows: List[List[Any]], preserve_empty_rows: bool = True) -> List[List[str]]:
     if not rows:
         return []
     normalized = [[normalize_ocr_text(cell) for cell in row] for row in rows]
     max_columns = max((len(row) for row in normalized), default=0)
-    return [row + [""] * (max_columns - len(row)) for row in normalized if any(cell.strip() for cell in row)]
+    normalized = [row + [""] * (max_columns - len(row)) for row in normalized]
+    if preserve_empty_rows:
+        return normalized
+    return [row for row in normalized if any(cell.strip() for cell in row)]
