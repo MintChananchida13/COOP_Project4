@@ -27,6 +27,16 @@ class FakeTableRecognitionPipelineV2:
         return [{"html": "<table><tr><td>A</td><td>B</td></tr></table>"}]
 
 
+class EmptyTableRecognitionPipelineV2:
+    init_kwargs = None
+
+    def __init__(self, **kwargs):
+        EmptyTableRecognitionPipelineV2.init_kwargs = kwargs
+
+    def predict(self, **kwargs):
+        return [{}]
+
+
 class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         patcher = patch.multiple(
@@ -151,6 +161,41 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = recognize_table_v2_local(image)
 
         self.assertEqual(result["table_rows"], [["A", "B"]])
+
+    def test_borderless_table_fallback_clusters_text_boxes_when_slanet_is_empty(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EmptyTableRecognitionPipelineV2)
+        detected_regions = [
+            {"bbox": {"x": 10, "y": 10, "width": 45, "height": 15}},
+            {"bbox": {"x": 120, "y": 10, "width": 45, "height": 15}},
+            {"bbox": {"x": 10, "y": 50, "width": 45, "height": 15}},
+            {"bbox": {"x": 120, "y": 50, "width": 45, "height": 15}},
+        ]
+        recognitions = [
+            {"text": "Name", "confidence": 0.9},
+            {"text": "Amount", "confidence": 0.9},
+            {"text": "Alice", "confidence": 0.8},
+            {"text": "100", "confidence": 0.8},
+        ]
+
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"), patch(
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": detected_regions},
+        ) as detect, patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=recognitions,
+        ) as recognize:
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_rows"], [["Name", "Amount"], ["Alice", "100"]])
+        self.assertEqual(result["table_structured"]["rows"], [["Name", "Amount"], ["Alice", "100"]])
+        self.assertTrue(result["table_debug"]["borderless_fallback_used"])
+        self.assertEqual(result["table_debug"]["column_count"], 2)
+        detect.assert_called_once()
+        recognize.assert_called_once()
 
     @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
     def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:

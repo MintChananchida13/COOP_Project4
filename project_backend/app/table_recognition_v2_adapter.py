@@ -11,6 +11,8 @@ import numpy as np
 
 from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize_table
 from .ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
+from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
+from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr_batch
 
 
 class TableRecognitionV2UnavailableError(RuntimeError):
@@ -24,6 +26,8 @@ _TABLE_MODEL_KIND = ""
 _TABLE_MODEL_NAME = os.getenv("PADDLE_TABLE_MODEL_NAME") or os.getenv("PADDLE_TABLE_RECOGNITION_MODEL_NAME", "SLANet_plus")
 _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MODEL_NAME", "th_PP-OCRv5_mobile_rec")
 _TABLE_DEVICE = "cpu"
+_BORDERLESS_MIN_COLUMNS = 2
+_BORDERLESS_MIN_ROWS = 2
 
 
 def _model_service_url() -> str:
@@ -299,6 +303,239 @@ def _structured_from_rows(rows: List[List[str]], source_cells: Optional[List[Dic
     }
 
 
+def _table_shape(rows: List[List[str]]) -> tuple[int, int]:
+    if not rows:
+        return (0, 0)
+    return (len(rows), max((len(row) for row in rows), default=0))
+
+
+def _has_usable_table_shape(rows: List[List[str]]) -> bool:
+    row_count, column_count = _table_shape(rows)
+    non_empty_rows = sum(1 for row in rows if any(str(cell).strip() for cell in row))
+    return row_count >= _BORDERLESS_MIN_ROWS and column_count >= _BORDERLESS_MIN_COLUMNS and non_empty_rows >= _BORDERLESS_MIN_ROWS
+
+
+def _region_bbox(region: Dict[str, Any], scale_factor: float = 1.0) -> Optional[Dict[str, float]]:
+    bbox = region.get("bbox") if isinstance(region, dict) else None
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox.get("x") or 0) / scale_factor
+        y = float(bbox.get("y") or 0) / scale_factor
+        width = float(bbox.get("width") or 0) / scale_factor
+        height = float(bbox.get("height") or 0) / scale_factor
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _merge_bboxes(boxes: List[Dict[str, float]]) -> Optional[Dict[str, float]]:
+    if not boxes:
+        return None
+    left = min(box["x"] for box in boxes)
+    top = min(box["y"] for box in boxes)
+    right = max(box["x"] + box["width"] for box in boxes)
+    bottom = max(box["y"] + box["height"] for box in boxes)
+    return {"x": left, "y": top, "width": max(1.0, right - left), "height": max(1.0, bottom - top)}
+
+
+def _cluster_text_cells(cells: List[Dict[str, Any]]) -> tuple[List[List[str]], List[Dict[str, Any]]]:
+    if not cells:
+        return ([], [])
+
+    median_height = float(np.median([cell["height"] for cell in cells])) if cells else 12.0
+    row_threshold = max(8.0, median_height * 0.75)
+    row_groups: List[List[Dict[str, Any]]] = []
+    for cell in sorted(cells, key=lambda item: (item["center_y"], item["x"])):
+        target_row = None
+        for row in row_groups:
+            row_center = sum(item["center_y"] for item in row) / len(row)
+            if abs(cell["center_y"] - row_center) <= row_threshold:
+                target_row = row
+                break
+        if target_row is None:
+            row_groups.append([cell])
+        else:
+            target_row.append(cell)
+
+    row_groups = [sorted(row, key=lambda item: item["x"]) for row in row_groups]
+    x_centers = sorted(cell["center_x"] for row in row_groups for cell in row)
+    if not x_centers:
+        return ([], [])
+    median_width = float(np.median([cell["width"] for cell in cells])) if cells else 40.0
+    column_threshold = max(14.0, median_width * 0.75)
+    column_centers: List[float] = []
+    for center in x_centers:
+        if not column_centers or abs(center - column_centers[-1]) > column_threshold:
+            column_centers.append(center)
+        else:
+            column_centers[-1] = (column_centers[-1] + center) / 2
+
+    if len(column_centers) < _BORDERLESS_MIN_COLUMNS:
+        return ([], [])
+
+    rows: List[List[str]] = []
+    source_cells: List[Dict[str, Any]] = []
+    for row_index, row in enumerate(row_groups):
+        values = ["" for _ in column_centers]
+        grouped_boxes: List[List[Dict[str, float]]] = [[] for _ in column_centers]
+        grouped_texts: List[List[str]] = [[] for _ in column_centers]
+        for cell in row:
+            col_index = min(range(len(column_centers)), key=lambda index: abs(cell["center_x"] - column_centers[index]))
+            grouped_texts[col_index].append(cell["text"])
+            grouped_boxes[col_index].append(cell["bbox"])
+        for col_index, texts in enumerate(grouped_texts):
+            text = normalize_ocr_text(" ".join(texts))
+            values[col_index] = text
+            bbox = _merge_bboxes(grouped_boxes[col_index])
+            source_cell: Dict[str, Any] = {
+                "row": row_index,
+                "col": col_index,
+                "text": text,
+                "rowSpan": 1,
+                "colSpan": 1,
+                "ocrText": text,
+                "groundTruth": text,
+            }
+            if bbox:
+                source_cell["bbox"] = bbox
+            source_cells.append(source_cell)
+        rows.append(values)
+
+    rows = normalize_table_rows(rows)
+    if not _has_usable_table_shape(rows):
+        return ([], [])
+    return (rows, source_cells)
+
+
+def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
+    if image is None or image.size == 0:
+        return None
+
+    input_height, input_width = image.shape[:2]
+    working_img = image
+    scale_factor = 1.0
+    longest_side = max(input_width, input_height)
+    if longest_side < 1400:
+        scale_factor = min(4.0, max(2.0, 1400.0 / max(longest_side, 1)))
+        working_img = cv2.resize(
+            image,
+            (max(1, int(input_width * scale_factor)), max(1, int(input_height * scale_factor))),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp.close()
+    try:
+        if not cv2.imwrite(temp.name, working_img):
+            return None
+        text_detection = detect_text_boxes(temp.name)
+    except (LayoutAnalysisUnavailableError, Exception) as error:
+        logger.info("Borderless table text detection failed: %s", error)
+        return None
+    finally:
+        Path(temp.name).unlink(missing_ok=True)
+
+    regions = text_detection.get("regions") if isinstance(text_detection, dict) else []
+    if not isinstance(regions, list) or not regions:
+        return None
+
+    crops: List[np.ndarray] = []
+    valid_regions: List[Dict[str, Any]] = []
+    h_working, w_working = working_img.shape[:2]
+    for region in regions:
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            x = max(0, int(float(bbox.get("x") or 0)))
+            y = max(0, int(float(bbox.get("y") or 0)))
+            width = max(1, int(float(bbox.get("width") or 1)))
+            height = max(1, int(float(bbox.get("height") or 1)))
+        except (TypeError, ValueError):
+            continue
+        width = min(width, w_working - x)
+        height = min(height, h_working - y)
+        if width <= 0 or height <= 0:
+            continue
+        crop = working_img[y : y + height, x : x + width]
+        if crop.size == 0:
+            continue
+        valid_regions.append(region)
+        crops.append(crop)
+
+    if len(crops) < _BORDERLESS_MIN_ROWS * _BORDERLESS_MIN_COLUMNS:
+        return None
+
+    try:
+        recognitions = run_paddle_thai_ocr_batch(crops)
+    except PaddleThaiOcrUnavailableError as error:
+        logger.info("Borderless table OCR failed: %s", error)
+        return None
+
+    cells: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    for region, recognition in zip(valid_regions, recognitions):
+        text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
+        if not text:
+            continue
+        bbox = _region_bbox(region, scale_factor)
+        if not bbox:
+            continue
+        confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        confidence_values.append(confidence)
+        cells.append(
+            {
+                "text": text,
+                "confidence": confidence,
+                "bbox": bbox,
+                "x": bbox["x"],
+                "y": bbox["y"],
+                "width": bbox["width"],
+                "height": bbox["height"],
+                "center_x": bbox["x"] + bbox["width"] / 2,
+                "center_y": bbox["y"] + bbox["height"] / 2,
+            }
+        )
+
+    rows, source_cells = _cluster_text_cells(cells)
+    if not rows:
+        return None
+    structured = _structured_from_rows(rows, source_cells)
+    confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+    return {
+        "text": _markdown_table(rows),
+        "confidence": float(confidence),
+        "segments": [
+            {
+                "text": cell["text"],
+                "confidence": cell["confidence"],
+                "bbox": cell["bbox"],
+            }
+            for cell in cells
+        ],
+        "attempts": [{"step": "borderless_text_detection_clustering", "row_count": len(rows)}],
+        "preprocessing": "borderless_table_text_detection_clustering",
+        "engine": "table_recognition_v2",
+        "model": _TABLE_MODEL_NAME,
+        "table_rows": rows,
+        "table_structured": structured,
+        "table_debug": {
+            "status": "borderless_fallback",
+            "borderless_fallback_used": True,
+            "detected_boxes": len(regions),
+            "recognized_cells": len(cells),
+            "row_count": len(rows),
+            "column_count": max((len(row) for row in rows), default=0),
+            "scale_factor": scale_factor,
+            "input_size": [int(input_width), int(input_height)],
+            "working_size": [int(working_img.shape[1]), int(working_img.shape[0])],
+        },
+    }
+
+
 def _normalize_cell_dicts(cells: Any) -> List[Dict[str, Any]]:
     if not isinstance(cells, list):
         return []
@@ -453,6 +690,17 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             structured_table = _extract_structured_table(item, rows, html)
 
     rows = normalize_table_rows(rows)
+    borderless_result: Optional[Dict[str, Any]] = None
+    if not _has_usable_table_shape(rows):
+        borderless_result = _recognize_borderless_table(image)
+        if borderless_result:
+            borderless_debug = borderless_result.get("table_debug")
+            if isinstance(borderless_debug, dict):
+                borderless_debug["slan_rows_before_fallback"] = len(rows)
+                borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in rows), default=0)
+                borderless_debug["slan_status_before_fallback"] = "structure_empty" if not rows else "insufficient_shape"
+            return _postprocess_table_result(borderless_result)
+
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
     return _postprocess_table_result({
