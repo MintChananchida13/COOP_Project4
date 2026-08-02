@@ -11,6 +11,65 @@ import {
 export const ADMIN_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+let templateRequestListCache: AdminTemplateRequest[] | null = null;
+let templateListCache: Template[] | null = null;
+
+const cloneTemplateRequests = (requests: AdminTemplateRequest[]) =>
+  requests.map((request) => ({
+    ...request,
+    pages: request.pages.map((page) => ({ ...page })),
+    requestedFields: request.requestedFields.map((field) => ({ ...field, roi: { ...field.roi } })),
+  }));
+
+const cloneTemplates = (templates: Template[]) =>
+  templates.map((template) => ({
+    ...template,
+    sharedFields: template.sharedFields ? [...template.sharedFields] : undefined,
+  }));
+
+const setTemplateRequestListCache = (requests: AdminTemplateRequest[]) => {
+  templateRequestListCache = cloneTemplateRequests(requests);
+};
+
+const setTemplateListCache = (templates: Template[]) => {
+  templateListCache = cloneTemplates(templates);
+};
+
+const upsertTemplateRequestListCache = (request: AdminTemplateRequest) => {
+  if (!templateRequestListCache) return;
+  const index = templateRequestListCache.findIndex((item) => item.id === request.id);
+  const nextRequest = cloneTemplateRequests([request])[0];
+  templateRequestListCache =
+    index >= 0
+      ? templateRequestListCache.map((item, itemIndex) => (itemIndex === index ? nextRequest : item))
+      : [nextRequest, ...templateRequestListCache];
+};
+
+const removeTemplateRequestListCache = (requestId: string) => {
+  if (!templateRequestListCache) return;
+  templateRequestListCache = templateRequestListCache.filter((request) => request.id !== requestId);
+};
+
+const upsertTemplateListCache = (template: Template) => {
+  if (!templateListCache) return;
+  const index = templateListCache.findIndex((item) => item.id === template.id);
+  const nextTemplate = cloneTemplates([template])[0];
+  templateListCache =
+    index >= 0
+      ? templateListCache.map((item, itemIndex) => (itemIndex === index ? nextTemplate : item))
+      : [nextTemplate, ...templateListCache];
+};
+
+const removeTemplateListCache = (templateId: string) => {
+  if (!templateListCache) return;
+  templateListCache = templateListCache.filter((template) => template.id !== templateId);
+};
+
+export const invalidateAdminListCache = (target: "templates" | "requests" | "all" = "all") => {
+  if (target === "templates" || target === "all") templateListCache = null;
+  if (target === "requests" || target === "all") templateRequestListCache = null;
+};
+
 interface ApiTemplateRequestPage {
   id: string;
   template_request_id: string;
@@ -845,6 +904,10 @@ interface ConvertTemplateResponse {
 }
 
 export const fetchTemplateRequests = async () => {
+  if (templateRequestListCache) {
+    return cloneTemplateRequests(templateRequestListCache);
+  }
+
   const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`);
   if (!response.ok) {
     throw new Error(`Template request load failed with ${response.status}`);
@@ -852,7 +915,9 @@ export const fetchTemplateRequests = async () => {
 
   const json = await response.json();
   const apiRequests = json?.data?.template_requests as ApiTemplateRequest[] | undefined;
-  return (apiRequests || []).map(mapApiRequest);
+  const requests = (apiRequests || []).map(mapApiRequest);
+  setTemplateRequestListCache(requests);
+  return cloneTemplateRequests(requests);
 };
 
 export const fetchAdminDashboard = async () => {
@@ -910,7 +975,9 @@ export const fetchTemplateRequest = async (requestId: string) => {
   }
 
   const json = await response.json();
-  return mapApiRequest(json?.data as ApiTemplateRequest);
+  const request = mapApiRequest(json?.data as ApiTemplateRequest);
+  upsertTemplateRequestListCache(request);
+  return request;
 };
 
 export const updateTemplateRequest = async (
@@ -936,7 +1003,9 @@ export const updateTemplateRequest = async (
   if (!response.ok) {
     throw new Error(json?.detail || json?.error?.message || `Template request update failed with ${response.status}`);
   }
-  return mapApiRequest(json?.data as ApiTemplateRequest);
+  const request = mapApiRequest(json?.data as ApiTemplateRequest);
+  upsertTemplateRequestListCache(request);
+  return request;
 };
 
 export const fetchTemplateRequestPages = async (requestId: string) => {
@@ -984,6 +1053,7 @@ export const addTemplateRequestImage = async (
   if (!response.ok) {
     throw new Error(json?.detail || json?.error?.message || `Add image failed with ${response.status}`);
   }
+  invalidateAdminListCache("requests");
   const page = json?.data as ApiTemplateRequestPage;
   return {
     id: page.id,
@@ -1027,6 +1097,7 @@ export const updateTemplateRequestImage = async (
   if (!response.ok) {
     throw new Error(json?.detail || json?.error?.message || `Update image failed with ${response.status}`);
   }
+  invalidateAdminListCache("requests");
   const page = json?.data as ApiTemplateRequestPage;
   return {
     id: page.id,
@@ -1050,6 +1121,7 @@ export const deleteTemplateRequestImage = async (requestId: string, imageId: str
   if (!response.ok) {
     throw new Error(json?.detail || json?.error?.message || `Delete image failed with ${response.status}`);
   }
+  invalidateAdminListCache("requests");
   return json?.data;
 };
 
@@ -1080,6 +1152,8 @@ export const deleteTemplateRequest = async (requestId: string) => {
       throw new Error("Backend reported delete success, but the template request still exists. Restart the backend so the real delete service is loaded.");
     }
   }
+
+  removeTemplateRequestListCache(requestId);
 
   return json?.data as {
     id: string;
@@ -1114,6 +1188,10 @@ export const fetchTemplateBundle = async (templateId: string) => {
 };
 
 export const fetchTemplates = async () => {
+  if (templateListCache) {
+    return cloneTemplates(templateListCache);
+  }
+
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates`);
   if (!response.ok) {
     throw new Error(`Template list failed with ${response.status}`);
@@ -1121,7 +1199,9 @@ export const fetchTemplates = async () => {
 
   const json = await response.json();
   const templates = json?.data?.templates as ApiTemplate[] | undefined;
-  return (templates || []).map(mapApiTemplate);
+  const mappedTemplates = (templates || []).map(mapApiTemplate);
+  setTemplateListCache(mappedTemplates);
+  return cloneTemplates(mappedTemplates);
 };
 
 export const deleteTemplateApi = async (templateId: string) => {
@@ -1172,8 +1252,8 @@ const mapTemplateBundleResponse = async (response: Response, templateId: string)
   };
 };
 
-export const updateTemplateApi = async (templateId: string, patch: Partial<Template>) =>
-  mapTemplateBundleResponse(
+export const updateTemplateApi = async (templateId: string, patch: Partial<Template>) => {
+  const bundle = await mapTemplateBundleResponse(
     await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1193,6 +1273,9 @@ export const updateTemplateApi = async (templateId: string, patch: Partial<Templ
     }),
     templateId
   );
+  upsertTemplateListCache(bundle.template);
+  return bundle;
+};
 
 export const updateTemplateStatus = async (templateId: string, status: TemplateStatus) =>
   updateTemplateApi(templateId, { status });
@@ -1785,6 +1868,7 @@ export const convertTemplateRequestToTemplate = async (requestId: string) => {
   if (!templateId) {
     throw new Error("Template request conversion did not return a template id");
   }
+  invalidateAdminListCache("all");
   return {
     templateId,
     status: result.status,
@@ -1868,6 +1952,7 @@ export const convertTemplateRequestToVersion = async (
   if (!templateId) {
     throw new Error("Template version creation did not return a template id");
   }
+  invalidateAdminListCache("all");
   return {
     templateId,
     status: result.status,

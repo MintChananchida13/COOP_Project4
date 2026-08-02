@@ -95,6 +95,7 @@ export default function AdminRequestDetailPage({
   );
   const [templateName, setTemplateName] = useState("");
   const [templateDocumentType, setTemplateDocumentType] = useState("");
+  const [versionNameSuffix, setVersionNameSuffix] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
   const [sharedFieldsText, setSharedFieldsText] = useState("");
   const [creationType, setCreationType] = useState<"new_template" | "new_version">("new_template");
@@ -137,6 +138,7 @@ export default function AdminRequestDetailPage({
         setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
         setTemplateName(requestDetail.requestTitle || "");
         setTemplateDocumentType(requestDetail.documentType || requestDetail.requestTitle || "");
+        setVersionNameSuffix("");
         setAdminNote(requestDetail.adminNote || "");
         setTemplates(templateList);
         setLoadStatus("loaded");
@@ -238,15 +240,21 @@ export default function AdminRequestDetailPage({
   const templateFolders = useMemo(() => {
     const groups = new Map<string, Template[]>();
     templates.forEach((template) => {
-      const folderName = (template.name || template.documentType || "Template").trim() || "Template";
-      groups.set(folderName, [...(groups.get(folderName) || []), template]);
+      const groupId = template.templateGroupId || template.baseTemplateId || template.id;
+      groups.set(groupId, [...(groups.get(groupId) || []), template]);
     });
     return Array.from(groups.entries())
-      .map(([name, versions]) => ({
-        name,
-        documentType: name,
-        versions: versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version)),
-      }))
+      .map(([groupId, versions]) => {
+        const sortedVersions = versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
+        const baseVersion = sortedVersions.find((template) => !template.baseTemplateId) || sortedVersions[sortedVersions.length - 1] || sortedVersions[0];
+        const folderName = (baseVersion?.documentType || baseVersion?.name || "Template").trim() || "Template";
+        return {
+          groupId,
+          name: folderName,
+          documentType: folderName,
+          versions: sortedVersions,
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [templates]);
 
@@ -254,6 +262,19 @@ export default function AdminRequestDetailPage({
     () => templates.find((template) => template.id === selectedBaseTemplateId),
     [selectedBaseTemplateId, templates]
   );
+  const selectedBaseTemplateName =
+    selectedBaseTemplate?.documentType || selectedExistingTemplateName || selectedBaseTemplate?.name || "";
+
+  useEffect(() => {
+    if (creationType !== "new_version" || !selectedBaseTemplate) return;
+    const baseName = (selectedBaseTemplate.documentType || selectedExistingTemplateName || selectedBaseTemplate.name).trim();
+    const currentName = templateName.trim();
+    if (currentName.startsWith(`${baseName} - `)) {
+      setVersionNameSuffix(currentName.slice(baseName.length + 3).trim());
+    } else if (currentName && currentName !== baseName) {
+      setVersionNameSuffix(currentName);
+    }
+  }, [creationType, selectedBaseTemplate, templateName]);
 
   const versionsForSelectedTemplate = useMemo(() => {
     const selected = templates.find((template) => template.id === selectedBaseTemplateId);
@@ -323,6 +344,11 @@ export default function AdminRequestDetailPage({
       creationType === "new_template"
         ? templateDocumentType.trim()
         : selectedBaseTemplate?.documentType || selectedExistingTemplateName.trim();
+    const nextVersionSuffix = versionNameSuffix.trim();
+    const nextVersionTemplateName =
+      creationType === "new_version"
+        ? `${selectedBaseTemplateName.trim() || nextTemplateName} - ${nextVersionSuffix}`
+        : nextTemplateName;
     if (!nextTemplateName) {
       setActionError("กรุณาระบุชื่อ Template ก่อนสร้าง Template");
       return;
@@ -333,6 +359,10 @@ export default function AdminRequestDetailPage({
     }
     if (creationType === "new_version" && !selectedBaseTemplateId) {
       setActionError("กรุณาเลือก Template เดิมก่อนสร้าง Version ใหม่");
+      return;
+    }
+    if (creationType === "new_version" && !nextVersionSuffix) {
+      setActionError("กรุณากรอกชื่อต่อท้าย Version ก่อนสร้าง Version ใหม่");
       return;
     }
 
@@ -358,7 +388,7 @@ export default function AdminRequestDetailPage({
         creationType === "new_version"
           ? await convertTemplateRequestToVersion(request.id, {
               baseTemplateId: versionSuggestion?.suggested_base_version?.template_id || selectedBaseTemplateId,
-              templateName: nextTemplateName,
+              templateName: nextVersionTemplateName,
               description: templateDescription,
               sharedFields,
               documentType: nextDocumentType,
@@ -453,7 +483,7 @@ export default function AdminRequestDetailPage({
   const hasRequiredCreationInfo =
     creationType === "new_template"
       ? templateName.trim().length > 0 && templateDocumentType.trim().length > 0
-      : templateName.trim().length > 0 && selectedBaseTemplateId.trim().length > 0;
+      : templateName.trim().length > 0 && selectedBaseTemplateId.trim().length > 0 && versionNameSuffix.trim().length > 0;
   const canConvert = loadStatus === "loaded" && Boolean(primaryDocumentGroup?.pages.length) && hasRequiredCreationInfo;
 
   return (
@@ -594,13 +624,14 @@ export default function AdminRequestDetailPage({
                         const nextCreationType = option.value as "new_template" | "new_version";
                         setCreationType(nextCreationType);
                         setActionError("");
-                        setActionStatus("");
-                        if (nextCreationType === "new_template") {
-                          setSelectedExistingTemplateName("");
-                          setSelectedBaseTemplateId("");
-                        } else {
-                          setTemplateDocumentType("");
-                        }
+                      setActionStatus("");
+                      if (nextCreationType === "new_template") {
+                        setSelectedExistingTemplateName("");
+                        setSelectedBaseTemplateId("");
+                        setVersionNameSuffix("");
+                      } else {
+                        setTemplateDocumentType("");
+                      }
                       }}
                       className="mt-1"
                     />
@@ -653,7 +684,7 @@ export default function AdminRequestDetailPage({
                       Template เดิม
                     </div>
                     <div className="mt-1 text-xs font-black text-slate-900">
-                      {selectedBaseTemplate?.name || selectedExistingTemplateName || "Template เดิม"}
+                      {selectedBaseTemplateName || "Template เดิม"}
                     </div>
                     <p className="mt-1 text-[11px] font-semibold text-slate-500">
                       ใช้ Template ที่เลือกจากคลัง Template เป็นฐานสำหรับ Version ใหม่
@@ -671,7 +702,8 @@ export default function AdminRequestDetailPage({
                         const folder = templateFolders.find((item) => item.name === folderName);
                         setSelectedExistingTemplateName(folderName);
                         setSelectedBaseTemplateId(folder?.versions[0]?.id || "");
-                        if (folderName) setTemplateName(`${folderName} Version ใหม่`);
+                        if (folderName) setTemplateName(folderName);
+                        setVersionNameSuffix("");
                       }}
                       className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                     >
@@ -684,6 +716,27 @@ export default function AdminRequestDetailPage({
                     </select>
                   </label>
                 )}
+
+                <label className="block space-y-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    ชื่อต่อท้าย Version
+                  </span>
+                  <div className="flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
+                    <span className="flex max-w-[45%] shrink-0 items-center truncate border-r border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-500">
+                      {(selectedBaseTemplateName || "Template เดิม").trim()} -
+                    </span>
+                    <input
+                      type="text"
+                      value={versionNameSuffix}
+                      onChange={(event) => setVersionNameSuffix(event.target.value)}
+                      placeholder="เช่น ปรับฟอร์ม 2026"
+                      className="h-11 min-w-0 flex-1 px-3 text-xs font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+                  <p className="text-[10px] font-semibold text-slate-400">
+                    ชื่อ Version ใหม่จะขึ้นต้นด้วยชื่อ Template เดิมเสมอ
+                  </p>
+                </label>
 
                 {versionsForSelectedTemplate.length > 0 && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">

@@ -4072,6 +4072,13 @@ class AdminTemplateService:
                     shared_fields = json.loads(base_template_row.get("shared_fields_json") or "[]")
                 except (TypeError, json.JSONDecodeError):
                     shared_fields = []
+            base_template_name = str(base_template_row["document_type"] or base_template_row["name"] or "").strip()
+            requested_template_name = str(payload.template_name or "").strip()
+            version_template_name = (
+                requested_template_name
+                if requested_template_name.startswith(f"{base_template_name} - ") and requested_template_name != f"{base_template_name} -"
+                else base_template_name
+            )
 
             conn.execute(
                 """
@@ -4086,8 +4093,8 @@ class AdminTemplateService:
                 """,
                 (
                     template_id,
-                    payload.template_name or base_template_row["name"],
-                    payload.document_type or request_row["document_type"] or base_template_row["document_type"],
+                    version_template_name,
+                    base_template_row["document_type"] or payload.document_type or request_row["document_type"],
                     base_template_row["category"],
                     next_version,
                     len(approved_pages),

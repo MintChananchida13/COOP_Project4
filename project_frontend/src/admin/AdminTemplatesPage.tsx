@@ -114,6 +114,7 @@ export default function AdminTemplatesPage() {
   const [renameError, setRenameError] = useState("");
   const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplateType, setNewTemplateType] = useState("");
+  const [newVersionNameSuffix, setNewVersionNameSuffix] = useState("");
   const [selectedExistingDocumentType, setSelectedExistingDocumentType] = useState("");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [manualCreationType, setManualCreationType] = useState<"new_template" | "new_version">("new_template");
@@ -166,17 +167,19 @@ export default function AdminTemplatesPage() {
   const templateFolders = useMemo(() => {
     const groups = new Map<string, Template[]>();
     filteredTemplates.forEach((template) => {
-      const templateName = (template.name || "Template").trim() || "Template";
-      groups.set(templateName, [...(groups.get(templateName) || []), template]);
+      const groupId = template.templateGroupId || template.baseTemplateId || template.id;
+      groups.set(groupId, [...(groups.get(groupId) || []), template]);
     });
-    return Array.from(groups.entries()).map(([templateName, versions]) => {
+    return Array.from(groups.entries()).map(([groupId, versions]) => {
       const sortedVersions = versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
       const latest = sortedVersions[0];
+      const baseVersion = sortedVersions.find((template) => !template.baseTemplateId) || sortedVersions[sortedVersions.length - 1] || latest;
+      const folderName = (baseVersion?.documentType || baseVersion?.name || latest?.documentType || latest?.name || "Template").trim() || "Template";
       const activeCount = sortedVersions.filter((template) => template.status === "active").length;
       return {
-        groupId: templateName,
-        name: templateName,
-        documentType: templateName,
+        groupId,
+        name: folderName,
+        documentType: folderName,
         previewImageUrl: latest?.previewImageUrl,
         pageCount: latest?.pageCount || 0,
         activeCount,
@@ -193,7 +196,7 @@ export default function AdminTemplatesPage() {
   const canUploadCreateReference =
     manualCreationType === "new_template"
       ? newTemplateName.trim().length > 0
-      : selectedExistingDocumentType.trim().length > 0;
+      : selectedExistingDocumentType.trim().length > 0 && newVersionNameSuffix.trim().length > 0;
 
   const toggleTemplateFolder = (groupId: string) => {
     setExpandedFolderIds((current) => {
@@ -340,11 +343,15 @@ export default function AdminTemplatesPage() {
       return;
     }
 
-    const selectedBaseTemplate = templates.find((template) => template.name === selectedExistingDocumentType);
+    const selectedFolder = templateFolders.find((folder) => folder.documentType === selectedExistingDocumentType);
+    const selectedBaseTemplate = selectedFolder?.versions[0];
     const documentType = manualCreationType === "new_template" ? newTemplateName.trim() : selectedBaseTemplate?.documentType || selectedExistingDocumentType.trim();
-    const requestTitle = manualCreationType === "new_template" ? newTemplateName.trim() : `${selectedExistingDocumentType.trim()} Version ใหม่`;
+    const requestTitle =
+      manualCreationType === "new_template"
+        ? newTemplateName.trim()
+        : `${selectedExistingDocumentType.trim()} - ${newVersionNameSuffix.trim()}`;
     if (!documentType || !requestTitle) {
-      setCreateRequestError(manualCreationType === "new_template" ? "กรุณากรอกชื่อ Template ก่อนอัปโหลด" : "กรุณาเลือก Template เดิมก่อนอัปโหลด");
+      setCreateRequestError(manualCreationType === "new_template" ? "กรุณากรอกชื่อ Template ก่อนอัปโหลด" : "กรุณาเลือก Template เดิมและกรอกชื่อต่อท้าย Version ก่อนอัปโหลด");
       return;
     }
 
@@ -382,6 +389,7 @@ export default function AdminTemplatesPage() {
 
       setNewTemplateType("");
       setNewTemplateName("");
+      setNewVersionNameSuffix("");
       setSelectedExistingDocumentType("");
       setIsCreateModalOpen(false);
       const baseTemplateParam = manualCreationType === "new_version" && selectedBaseTemplate?.id ? `&baseTemplateId=${encodeURIComponent(selectedBaseTemplate.id)}` : "";
@@ -940,7 +948,8 @@ export default function AdminTemplatesPage() {
                   </label>
                 </div>
               ) : (
-                <label className="block space-y-1.5 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <label className="block space-y-1.5">
                   <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">เลือก Template เดิม</span>
                   <select
                     value={selectedExistingDocumentType}
@@ -955,6 +964,22 @@ export default function AdminTemplatesPage() {
                     ))}
                   </select>
                 </label>
+                <label className="block space-y-1.5">
+                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อต่อท้าย Version</span>
+                  <div className="flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
+                    <span className="flex max-w-[45%] shrink-0 items-center truncate border-r border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-500">
+                      {selectedExistingDocumentType.trim() || "Template เดิม"} -
+                    </span>
+                    <input
+                      type="text"
+                      value={newVersionNameSuffix}
+                      onChange={(event) => setNewVersionNameSuffix(event.target.value)}
+                      placeholder="เช่น ปรับฟอร์ม 2026"
+                      className="h-11 min-w-0 flex-1 px-3 text-sm font-semibold text-slate-800 outline-none"
+                    />
+                  </div>
+                </label>
+                </div>
               )}
 
               {createRequestError && <InlineState tone="danger" message={createRequestError} />}
