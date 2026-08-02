@@ -219,6 +219,11 @@ export default function AdminTemplatesPage() {
     setEditingFolderName("");
   };
 
+  const templateNameSuffix = (templateName: string, folderName: string) => {
+    const prefix = `${folderName.trim()} - `;
+    return templateName.startsWith(prefix) ? templateName.slice(prefix.length).trim() : templateName.trim();
+  };
+
   const handleRenameFolder = async (folder: { groupId: string; name: string; versions: Template[] }) => {
     const nextName = editingFolderName.trim();
     if (!nextName) {
@@ -239,16 +244,10 @@ export default function AdminTemplatesPage() {
     setStatusError("");
 
     try {
-      await Promise.all(folder.versions.map((template) => updateTemplateApi(template.id, { name: nextName })));
+      await Promise.all(folder.versions.map((template) => updateTemplateApi(template.id, { documentType: nextName })));
       const versionIds = new Set(folder.versions.map((template) => template.id));
-      setTemplates((current) => current.map((template) => (versionIds.has(template.id) ? { ...template, name: nextName } : template)));
-      setExpandedFolderIds((current) => {
-        const next = new Set(current);
-        next.delete(folder.groupId);
-        next.add(nextName);
-        return next;
-      });
-      setRenameMessage(`เปลี่ยนชื่อ Template เป็น "${nextName}" เรียบร้อยแล้ว`);
+      setTemplates((current) => current.map((template) => (versionIds.has(template.id) ? { ...template, documentType: nextName } : template)));
+      setRenameMessage(`เปลี่ยนชื่อโฟลเดอร์เป็น "${nextName}" เรียบร้อยแล้ว`);
       cancelRenameFolder();
     } catch (error) {
       console.warn("Template folder rename failed.", error);
@@ -285,9 +284,9 @@ export default function AdminTemplatesPage() {
     }
   };
 
-  const startRenameTemplate = (template: Template) => {
+  const startRenameTemplate = (template: Template, folderName: string) => {
     setEditingTemplateId(template.id);
-    setEditingTemplateName(template.name);
+    setEditingTemplateName(templateNameSuffix(template.name, folderName));
     setRenameMessage("");
     setRenameError("");
   };
@@ -298,17 +297,18 @@ export default function AdminTemplatesPage() {
     setRenameError("");
   };
 
-  const handleRenameTemplate = async (template: Template) => {
+  const handleRenameTemplate = async (template: Template, folderName: string) => {
     if (loadStatus !== "loaded") {
       setRenameError("ไม่สามารถเปลี่ยนชื่อ Template ได้ เพราะยังไม่ได้โหลดข้อมูลจาก Backend");
       return;
     }
 
-    const nextName = editingTemplateName.trim();
-    if (!nextName) {
+    const nextSuffix = editingTemplateName.trim();
+    if (!nextSuffix) {
       setRenameError("กรุณาระบุชื่อ Template");
       return;
     }
+    const nextName = `${folderName.trim()} - ${nextSuffix}`;
     if (nextName === template.name) {
       cancelRenameTemplate();
       return;
@@ -651,23 +651,28 @@ export default function AdminTemplatesPage() {
                           <div className="min-w-0 flex-1 space-y-2">
                             {editingTemplateId === template.id ? (
                               <div className="space-y-2">
-                                <input
-                                  type="text"
-                                  value={editingTemplateName}
-                                  onChange={(event) => setEditingTemplateName(event.target.value)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                      event.preventDefault();
-                                      void handleRenameTemplate(template);
-                                    }
-                                    if (event.key === "Escape") cancelRenameTemplate();
-                                  }}
-                                  disabled={renamingTemplateId === template.id}
-                                  autoFocus
-                                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                                />
+                                <div className="flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
+                                  <span className="flex max-w-[45%] shrink-0 items-center truncate border-r border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-500">
+                                    {folder.name} -
+                                  </span>
+                                  <input
+                                    type="text"
+                                    value={editingTemplateName}
+                                    onChange={(event) => setEditingTemplateName(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        void handleRenameTemplate(template, folder.name);
+                                      }
+                                      if (event.key === "Escape") cancelRenameTemplate();
+                                    }}
+                                    disabled={renamingTemplateId === template.id}
+                                    autoFocus
+                                    className="h-10 min-w-0 flex-1 px-3 text-sm font-bold text-slate-900 outline-none"
+                                  />
+                                </div>
                                 <div className="flex flex-wrap gap-2">
-                                  <button type="button" onClick={() => void handleRenameTemplate(template)} disabled={renamingTemplateId === template.id} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-black text-white disabled:bg-slate-300">
+                                  <button type="button" onClick={() => void handleRenameTemplate(template, folder.name)} disabled={renamingTemplateId === template.id} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-black text-white disabled:bg-slate-300">
                                     {renamingTemplateId === template.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
                                     บันทึก
                                   </button>
@@ -690,13 +695,14 @@ export default function AdminTemplatesPage() {
                                 </div>
                                 <button
                                   type="button"
-                                  onClick={() => startRenameTemplate(template)}
+                                  onClick={() => startRenameTemplate(template, folder.name)}
                                   disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || renamingTemplateId === template.id}
-                                  className="hidden"
+                                  className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
                                   title="เปลี่ยนชื่อ Template"
                                   aria-label={`เปลี่ยนชื่อ ${template.name}`}
                                 >
                                   <Pencil size={14} />
+                                  เปลี่ยนชื่อ
                                 </button>
                               </div>
                             )}
@@ -783,7 +789,7 @@ export default function AdminTemplatesPage() {
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
-                          void handleRenameTemplate(template);
+                          void handleRenameTemplate(template, template.documentType || template.name);
                         }
                         if (event.key === "Escape") {
                           cancelRenameTemplate();
@@ -797,7 +803,7 @@ export default function AdminTemplatesPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => void handleRenameTemplate(template)}
+                      onClick={() => void handleRenameTemplate(template, template.documentType || template.name)}
                       disabled={renamingTemplateId === template.id}
                       className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-black text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
                     >
@@ -820,7 +826,7 @@ export default function AdminTemplatesPage() {
                   <div className="line-clamp-2 text-sm font-black leading-5 text-slate-900">{template.name}</div>
                   <button
                     type="button"
-                    onClick={() => startRenameTemplate(template)}
+                    onClick={() => startRenameTemplate(template, template.documentType || template.name)}
                     disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || renamingTemplateId === template.id}
                     className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
                     title="เปลี่ยนชื่อ Template"
