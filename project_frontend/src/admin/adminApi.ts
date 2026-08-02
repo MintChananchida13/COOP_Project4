@@ -2037,3 +2037,18 @@ export const updateImageVerificationCategory = async (
   }
   return mapImageVerificationCategory(json?.data?.category || {});
 };
+
+export const deleteImageVerificationCategory = async (value: string): Promise<{ value: string; deleted: boolean }> => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
+    method: "DELETE",
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || json?.error || `Delete image category failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Delete image category failed with ${response.status}`);
+  }
+  return {
+    value: String(json?.data?.value || value),
+    deleted: Boolean(json?.data?.deleted),
+  };
+};

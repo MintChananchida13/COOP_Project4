@@ -305,6 +305,22 @@ class ImageVerificationCategoryService:
             conn.close()
         return {"category": require_image_verification_category(value).to_api()}
 
+    def delete(self, value: str) -> Dict[str, Any]:
+        require_image_verification_category(value)
+        if value == "other":
+            raise HTTPException(status_code=422, detail="'other' is reserved and cannot be deleted.")
+        conn = connect_db()
+        try:
+            ensure_image_verification_categories_table(conn)
+            cursor = conn.execute(
+                "DELETE FROM image_verification_categories WHERE value = ?",
+                (value,),
+            )
+            conn.commit()
+            return {"value": value, "deleted": cursor.rowcount > 0}
+        finally:
+            conn.close()
+
 
 def categories_to_runtime_payload(categories: Iterable[ImageVerificationCategory]) -> List[Dict[str, Any]]:
     return [category.to_api() for category in categories if category.enabled]

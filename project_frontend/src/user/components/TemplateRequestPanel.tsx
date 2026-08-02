@@ -430,19 +430,6 @@ export default function TemplateRequestPanel({
                   </p>
                 </div>
 
-                <label className="cursor-pointer rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100">
-                  เพิ่มไฟล์
-                  <input
-                    type="file"
-                    accept="image/*,application/pdf"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                      void handleAddFiles(event.target.files);
-                      event.target.value = "";
-                    }}
-                  />
-                </label>
               </div>
 
               <div className="mt-3 space-y-3">

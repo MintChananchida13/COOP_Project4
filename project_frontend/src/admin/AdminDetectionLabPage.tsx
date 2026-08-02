@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import {
   ADMIN_API_BASE_URL,
   detectTemplateDev,
@@ -177,6 +177,7 @@ const isPdfFile = (file?: File | null) => {
 };
 
 export default function AdminDetectionLabPage() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<DetectionDevResult | null>(null);
@@ -460,6 +461,10 @@ export default function AdminDetectionLabPage() {
     setError("");
     setResult(null);
     setPageIndex(0);
+    setSelectedPreviewRoiId(null);
+    setWorkspaceTemplateId(null);
+    setWorkspaceTemplateFields([]);
+    setWorkspaceTemplateError("");
     if (!nextFile) {
       setFile(null);
       return;
@@ -476,6 +481,13 @@ export default function AdminDetectionLabPage() {
       return;
     }
     setFile(nextFile);
+  };
+
+  const handleChooseNewDocument = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
   };
 
   const runDetection = async () => {
@@ -595,7 +607,7 @@ export default function AdminDetectionLabPage() {
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">เอกสารสำหรับทดสอบ</h3>
           <label className="mt-3 flex cursor-pointer flex-col rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-xs font-bold text-slate-600 hover:bg-white">
-            <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={handleFileChange} className="sr-only" />
+            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={handleFileChange} className="sr-only" />
             <span className="text-sm font-black text-slate-800">เลือกไฟล์ PNG, JPEG, WebP หรือ PDF หลายหน้า</span>
             <span className="mt-1">{file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "ยังไม่ได้เลือกไฟล์"}</span>
             {file && (
@@ -604,6 +616,16 @@ export default function AdminDetectionLabPage() {
               </span>
             )}
           </label>
+          {file && (
+            <button
+              type="button"
+              onClick={handleChooseNewDocument}
+              disabled={isRunning}
+              className="mt-3 inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              เปลี่ยนเอกสารใหม่
+            </button>
+          )}
 
           <button
             type="button"

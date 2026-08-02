@@ -446,9 +446,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     }
 
     Promise.all(fieldsToPersist.map((field) => updateTemplateFieldApi(templateId, field.id, { sortOrder: field.sortOrder })))
-      .then((bundles) => {
-        const latestBundle = bundles[bundles.length - 1];
-        if (latestBundle) applyBundle(latestBundle);
+      .then(() => {
         setSaved("Field order saved.");
       })
       .catch((error) => {

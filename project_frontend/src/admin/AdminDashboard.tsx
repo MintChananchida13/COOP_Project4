@@ -1,19 +1,12 @@
-
 "use client";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import {
-  ArrowUpRight,
-  BadgeCheck,
-  CircleX,
-  FileClock,
-  FilePenLine,
-} from "lucide-react";
+import { ArrowUpRight, BadgeCheck, CircleX, FileClock, FilePenLine, Plus } from "lucide-react";
 import { AdminTemplateRequest, Template } from "../types/ocr";
+import { EmptyState, StatusBadge } from "../shared/ui";
 import { fetchAdminDashboard, fetchTemplateRequests, fetchTemplates } from "./adminApi";
 import { AdminDashboardSummary } from "./adminTypes";
-import { EmptyState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 const buildDashboardFromLists = (nextRequests: AdminTemplateRequest[], nextTemplates: Template[]): AdminDashboardSummary => ({
   pendingRequests: nextRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
@@ -38,6 +31,7 @@ const mergeDashboardWithLists = (
     nextDashboard.activeTemplates === 0 &&
     nextDashboard.rejectedRequests === 0 &&
     (nextRequests.length > 0 || nextTemplates.length > 0);
+
   return {
     pendingRequests: shouldTrustListCounts ? listDashboard.pendingRequests : nextDashboard.pendingRequests,
     draftTemplates: shouldTrustListCounts ? listDashboard.draftTemplates : nextDashboard.draftTemplates,
@@ -98,82 +92,56 @@ export default function AdminDashboard() {
   }, []);
 
   const stats = [
-    ["รอตรวจ", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
-    ["ฉบับร่าง", dashboard.draftTemplates, FilePenLine, "bg-blue-50 text-blue-600"],
-    ["ใช้งานอยู่", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
-    ["ปฏิเสธ", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
+    ["Pending Requests", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
+    ["Published Templates", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
+    ["Draft Versions", dashboard.draftTemplates, FilePenLine, "bg-sky-50 text-sky-600"],
+    ["Rejected Requests", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
   ] as const;
+
+  const recentRequests = dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4);
+  const recentTemplates = dashboard.latestTemplates.length ? dashboard.latestTemplates : templates.slice(0, 4);
 
   return (
     <section className="space-y-4">
-      <PageHeader
-        eyebrow="ภาพรวมผู้ดูแล"
-        title="แดชบอร์ด Template OCR"
-        description="ติดตามคำขอสร้าง Template, ฉบับร่าง, Template ที่ใช้งานอยู่ และรายการที่ถูกปฏิเสธ"
-        actions={
-          <Link
-            href="/admin/requests"
-            className="inline-flex w-fit items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
-          >
-            {"ตรวจคำขอ"}
-            <ArrowUpRight size={13} />
-          </Link>
-        }
-      />
+      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-black tracking-tight text-slate-950">Admin Dashboard</h1>
+          <p className="mt-1 text-sm font-semibold text-slate-500">ภาพรวมคำขอและ Template ล่าสุดของระบบ OCR</p>
+        </div>
+        <Link
+          href="/admin/templates"
+          className="inline-flex w-fit items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-slate-800"
+        >
+          <Plus size={14} />
+          Create
+        </Link>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map(([label, value, Icon, tone]) => (
-          <div key={label} className={`${cardClassName} p-4`}>
-            <div className="flex items-start justify-between gap-3">
+          <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</p>
-                <p className="mt-2 text-3xl font-black text-slate-900">{value}</p>
+                <p className="text-xs font-bold text-slate-500">{label}</p>
+                <p className="mt-1 text-2xl font-black tracking-tight text-slate-950">{value}</p>
               </div>
-              <div className={`rounded-xl p-2.5 ${tone}`}>
-                <Icon size={18} />
+              <div className={`rounded-lg p-2 ${tone}`}>
+                <Icon size={16} />
               </div>
-            </div>
-            <div className="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-slate-300" style={{ width: `${Math.min(Number(value) * 12, 100)}%` }} />
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-3">
-        <div className={`${cardClassName} p-4`}>
-          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Template ทั้งหมด</p>
-          <p className="mt-2 text-2xl font-black text-slate-900">{dashboard.templateCount}</p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">รวมทุกสถานะในคลัง Template</p>
-        </div>
-        <div className={`${cardClassName} p-4`}>
-          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">คำขอทั้งหมด</p>
-          <p className="mt-2 text-2xl font-black text-slate-900">{requests.length}</p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">ข้อมูลจากรายการ Template Request จริง</p>
-        </div>
-        <div className={`${cardClassName} p-4`}>
-          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">อัปเดตล่าสุด</p>
-          <p className="mt-2 text-sm font-black text-slate-900">
-            {formatDateTime(
-              [...requests.map((item) => item.updatedAt), ...templates.map((item) => item.updatedAt)]
-                .filter(Boolean)
-                .sort()
-                .at(-1)
-            )}
-          </p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">ดูจากคำขอและ Template ล่าสุดที่โหลดได้</p>
-        </div>
-      </div>
-
       <div className="grid gap-4 xl:grid-cols-2">
         <DashboardList
-          title="คำขอล่าสุด"
-          subtitle="คำขอสร้าง Template ที่เพิ่งส่งเข้ามา"
+          title="Recent Template Requests"
+          subtitle="คำขอสร้าง Template ที่อัปเดตล่าสุด"
           href="/admin/requests"
-          items={(dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4)).map((request) => ({
+          items={recentRequests.map((request) => ({
             id: request.id,
             title: request.requestTitle,
-            meta: `${request.pageCount} หน้า · ${request.documentType || "ยังไม่ระบุประเภท"} · ${formatDateTime(request.updatedAt || request.createdAt)}`,
+            meta: `${request.pageCount} หน้า · ${request.documentType || "ไม่ระบุประเภท"} · ${formatDateTime(request.updatedAt || request.createdAt)}`,
             status: request.status,
             tone: "amber",
           }))}
@@ -181,13 +149,13 @@ export default function AdminDashboard() {
         />
 
         <DashboardList
-          title="Template ล่าสุด"
-          subtitle="Template ที่มีการอัปเดตล่าสุด"
+          title="Recent Templates"
+          subtitle="Template ที่อัปเดตล่าสุด"
           href="/admin/templates"
-          items={(dashboard.latestTemplates.length ? dashboard.latestTemplates : templates.slice(0, 4)).map((template) => ({
+          items={recentTemplates.map((template) => ({
             id: template.id,
             title: template.name,
-            meta: `${template.documentType || "ยังไม่ระบุประเภท"} · ${template.pageCount} หน้า · ${formatDateTime(template.updatedAt || template.createdAt)}`,
+            meta: `${template.documentType || "ไม่ระบุประเภท"} · ${template.pageCount} หน้า · ${formatDateTime(template.updatedAt || template.createdAt)}`,
             status: template.status,
             tone: "indigo",
             editHref: `/admin/templates/${template.id}/edit`,
@@ -220,33 +188,33 @@ function DashboardList({
   emptyText: string;
 }) {
   return (
-    <div className={`${cardClassName} p-4`}>
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">{title}</h2>
-          <p className="text-xs font-semibold text-slate-400">{subtitle}</p>
+          <h2 className="text-sm font-black tracking-tight text-slate-950">{title}</h2>
+          <p className="text-xs font-semibold text-slate-500">{subtitle}</p>
         </div>
-        <Link href={href} className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-indigo-600 hover:text-indigo-700">
-          {"ดูทั้งหมด"}
+        <Link href={href} className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-slate-600 hover:text-slate-950">
+          ดูทั้งหมด
           <ArrowUpRight size={12} />
         </Link>
       </div>
 
-      <div className="space-y-2">
+      <div className="divide-y divide-slate-100">
         {items.length === 0 ? (
           <EmptyState title={emptyText} message="ข้อมูลจะแสดงที่นี่เมื่อโหลดจาก Backend สำเร็จ" />
         ) : (
           items.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+            <div key={item.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
               <div className="min-w-0">
-                <p className="truncate text-sm font-black text-slate-800">{item.title}</p>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{item.meta}</p>
+                <p className="truncate text-sm font-black text-slate-900">{item.title}</p>
+                <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{item.meta}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <StatusBadge status={item.status} tone={item.tone === "amber" ? "warning" : "primary"} />
                 {item.editHref && (
-                  <Link href={item.editHref} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">
-                    {"แก้ไข"}
+                  <Link href={item.editHref} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">
+                    แก้ไข
                   </Link>
                 )}
               </div>

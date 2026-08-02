@@ -508,7 +508,7 @@ function DraftCandidateCard({
                   Candidate นี้ถูกปฏิเสธด้วย required_verification_failed เพราะมี Required Verification Anchor อย่างน้อย 1 รายการที่ FAIL.
                 </p>
               )}
-              <h4 className="mt-4 text-[10px] font-black uppercase tracking-wider text-slate-500">ROI Preview / Debug</h4>
+              <h4 className="mt-4 text-[10px] font-black uppercase tracking-wider text-slate-500">ROI Preview</h4>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 {candidate.verificationDetails.map((detail, index) => (
                   <div key={`${candidate.templateId}-detail-${index}`} className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-600">
@@ -527,32 +527,15 @@ function DraftCandidateCard({
                         <p className="rounded bg-slate-50 p-2">Actual: {String(readPrepublishValue(detail, ["actual_text", "ocr_text"]) || "N/A")}</p>
                       </div>
                     )}
-                    {(readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]) ||
-                      readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"])) && (
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
-                        <div className="rounded border border-slate-100 bg-slate-50 p-2">
-                          <div className="text-[9px] font-black uppercase text-slate-400">Reference ROI</div>
-                          {readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]) ? (
-                            <img
-                              src={String(readPrepublishValue(detail, ["reference_crop_preview_data_url", "reference_crop_preview_url"]))}
-                              alt=""
-                              className="mt-2 h-24 w-full rounded object-contain"
-                            />
-                          ) : (
-                            <p className="mt-2 text-[10px] text-slate-400">No preview</p>
-                          )}
-                        </div>
+                    {readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]) && (
+                      <div className="mt-3">
                         <div className="rounded border border-slate-100 bg-slate-50 p-2">
                           <div className="text-[9px] font-black uppercase text-slate-400">Test ROI</div>
-                          {readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]) ? (
-                            <img
-                              src={String(readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]))}
-                              alt=""
-                              className="mt-2 h-24 w-full rounded object-contain"
-                            />
-                          ) : (
-                            <p className="mt-2 text-[10px] text-slate-400">No preview</p>
-                          )}
+                          <img
+                            src={String(readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]))}
+                            alt=""
+                            className="mt-2 h-28 w-full rounded object-contain"
+                          />
                         </div>
                       </div>
                     )}
@@ -584,6 +567,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [simulationStep, setSimulationStep] = useState(0);
   const [simulationError, setSimulationError] = useState("");
   const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [showPublishSuccessDialog, setShowPublishSuccessDialog] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [validationStep, setValidationStep] = useState(1);
   const [testDocumentFile, setTestDocumentFile] = useState<File | null>(null);
@@ -823,7 +807,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     setTestDocumentFile(file);
     setDetectionTest(null);
     setDetectionTestError("");
-    if (file && file.type.startsWith("image/")) {
+    if (file && (file.type.startsWith("image/") || file.type === "application/pdf")) {
       setTestDocumentPreviewUrl(URL.createObjectURL(file));
     } else {
       setTestDocumentPreviewUrl(null);
@@ -855,8 +839,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       const result = await confirmTemplatePublish(templateId);
       setTemplate(result.template);
       setPublishConfirmed(true);
-      window.alert("Template published successfully.");
-      setStatusMessage("Layout signature generated, image anchors validated with SigLIP, and template published as Active.");
+      setShowPublishSuccessDialog(true);
+      setStatusMessage("Publish สำเร็จ Template พร้อมใช้งานแล้ว");
     } catch (error) {
       console.warn("Template publish failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Template publish failed.");
@@ -1363,6 +1347,25 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </div>
         </div>}
         <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
+          {simulationAction === "run" && (
+            <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 p-4">
+              <div className="flex items-center gap-3">
+                <span className="h-3 w-3 animate-pulse rounded-full bg-indigo-600" />
+                <div>
+                  <div className="text-sm font-black text-indigo-950">กำลังสร้าง Layout Simulation</div>
+                  <p className="mt-1 text-xs font-semibold text-indigo-700">
+                    ระบบกำลังสร้าง Layout Signature ชั่วคราวและตรวจความพร้อมก่อนทดสอบเอกสารใหม่
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3">
+                <ProgressBar value={((simulationStep + 1) / prepublishSimulationSteps.length) * 100} tone="indigo" />
+                <div className="mt-2 text-[11px] font-bold text-indigo-700">
+                  {prepublishSimulationSteps[simulationStep] || "Processing"}
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Layout Reference Images</h4>
@@ -1469,11 +1472,22 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 <div className="mt-1">{Math.round(testDocumentFile.size / 1024)} KB</div>
               </div>
             )}
-            {testDocumentPreviewUrl ? (
+            {testDocumentPreviewUrl && testDocumentFile?.type === "application/pdf" ? (
+              <object
+                data={`${testDocumentPreviewUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0`}
+                type="application/pdf"
+                className="mt-3 h-56 w-full rounded-lg border border-slate-200 bg-white"
+                aria-label="PDF first page preview"
+              >
+                <div className="flex h-56 w-full items-center justify-center rounded-lg bg-white p-4 text-center text-[11px] font-semibold text-slate-500">
+                  เลือก PDF แล้ว ระบบจะแสดงพรีวิวจาก backend หลังทดสอบ
+                </div>
+              </object>
+            ) : testDocumentPreviewUrl ? (
               <img src={testDocumentPreviewUrl} alt="" className="mt-3 max-h-44 w-full rounded-lg border border-slate-200 bg-white object-contain" />
             ) : (
               <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-[11px] font-semibold text-slate-500">
-                {testDocumentFile?.type === "application/pdf" ? "PDF selected. Preview will be generated by backend during test." : "PNG, JPEG, WebP, or PDF"}
+                PNG, JPEG, WebP หรือ PDF
               </div>
             )}
             {!simulationPassed && (
@@ -1644,14 +1658,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
 
       {validationStep === 4 && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="Publish Review" subtitle="ตรวจสอบขั้นตอนสุดท้ายก่อนสร้าง Layout Signature จริงและ Publish Template." />
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <DraftSectionHeader title="Publish Review" subtitle="ตรวจสอบความพร้อมครั้งสุดท้ายก่อนเปิดใช้งาน Template" />
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {[
-            ["ROI & OCR Preview", ocrPreviewPassed],
-            ["Verification Anchors", verificationAnchors.length > 0],
-            ["Simulation", simulationPassed],
-            ["New Document Test", detectionTestPassed],
-            ["Overall", overallReady],
+            ["ROI พร้อมใช้งาน", ocrPreviewPassed],
+            ["Layout Simulation", simulationPassed],
+            ["ทดสอบเอกสารใหม่", detectionTestPassed],
           ].map(([label, passed]) => (
             <div key={String(label)} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 p-3">
               <span className="text-xs font-black text-slate-800">{String(label)}</span>
@@ -1659,44 +1671,49 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             </div>
           ))}
         </div>
-        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                {overallReady ? "READY TO PUBLISH" : "NOT READY"}
-              </h4>
-              <p className="mt-2 text-xs font-semibold text-slate-500">
-                Confirm generates the real layout signature, validates image anchors with SigLIP, and publishes only after every operation succeeds.
-              </p>
-              {!simulationPassed && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">Run Simulation must pass before publishing.</p>}
-              {simulationPassed && !detectionTest && (
-                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
-                  Run at least one New Document Detection Test before publishing.
-                </p>
-              )}
-              {detectionTest && !detectionTestPassed && (
-                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
-                  The draft template must rank first and pass the new document test before publishing.
-                </p>
-              )}
+        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h4 className="text-sm font-black text-slate-900">{overallReady ? "พร้อมเผยแพร่" : "ยังเผยแพร่ไม่ได้"}</h4>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              {overallReady ? "เมื่อตกลง ระบบจะบันทึก Layout Signature จริงและเปิดใช้งาน Template" : "ต้องให้ Layout Simulation และ New Document Test ผ่านก่อน"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleConfirmPublish}
+            disabled={!canConfirmPublish}
+            className="ui-stable-action-lg rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+          >
+            {template.status === "active" ? "เผยแพร่แล้ว" : simulationAction === "confirm" ? "กำลังเผยแพร่..." : "เผยแพร่ Template"}
+          </button>
+        </div>
+      </section>
+      )}
+
+      {showPublishSuccessDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-6 text-center shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+              <CheckCircle2 size={30} />
             </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
+            <h3 className="mt-4 text-lg font-black text-slate-950">เผยแพร่ Template สำเร็จ</h3>
+            <p className="mt-2 text-sm font-semibold text-slate-500">
+              Template นี้ถูกเปิดใช้งานแล้ว ผู้ใช้สามารถค้นหาและใช้งานได้ตามกระบวนการจริง
+            </p>
+            <div className="mt-5 flex justify-center gap-2">
               <button
                 type="button"
-                onClick={handleConfirmPublish}
-                disabled={!canConfirmPublish}
-                className="ui-stable-action-lg rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
+                onClick={() => setShowPublishSuccessDialog(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700"
               >
-                {template.status === "active"
-                  ? "Publish Template Complete"
-                  : simulationAction === "confirm"
-                    ? "Publishing..."
-                    : "Confirm and Publish Template"}
+                ปิด
               </button>
+              <Link href="/admin/templates" className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white">
+                ไปคลัง Template
+              </Link>
             </div>
           </div>
         </div>
-      </section>
       )}
     </section>
   );

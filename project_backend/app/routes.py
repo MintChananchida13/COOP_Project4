@@ -303,6 +303,11 @@ def update_image_verification_category(
     return ok(image_categories.update(category_value, payload.model_dump(exclude_unset=True)))
 
 
+@router.delete("/admin/image-verification-categories/{category_value}", response_model=ApiResponse)
+def delete_image_verification_category(category_value: str) -> ApiResponse:
+    return ok(image_categories.delete(category_value))
+
+
 @router.get("/admin/template-requests", response_model=ApiResponse)
 def admin_list_template_requests() -> ApiResponse:
     return ok(template_requests.list())

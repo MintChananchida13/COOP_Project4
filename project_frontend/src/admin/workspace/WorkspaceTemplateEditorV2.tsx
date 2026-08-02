@@ -9,6 +9,7 @@ import { IgnoreRegion, ROI, RoiRatio, TemplateField } from "../../types/ocr";
 import {
   ImageVerificationCategory,
   createImageVerificationCategory,
+  deleteImageVerificationCategory,
   listImageVerificationCategories,
   TemplateStepTestItem,
   TemplateStepTestResult,
@@ -446,7 +447,6 @@ export default function WorkspaceTemplateEditorV2({
   const persistRois = (nextRois: SetStateAction<(ROI & { pageIndex?: number })[]>) => {
     const resolved = (typeof nextRois === "function" ? nextRois(activeRois) : nextRois) as AdminRoi[];
     const previousById = new Map(activeRois.map((roi) => [roi.id, roi]));
-    const nextById = new Map(resolved.map((roi) => [roi.id, roi]));
 
     resolved.forEach((roi) => {
       const previous = previousById.get(roi.id);
@@ -511,12 +511,6 @@ export default function WorkspaceTemplateEditorV2({
       }
     });
 
-    activeRois.forEach((roi) => {
-      if (!nextById.has(roi.id) && (roi.pageIndex ?? 0) === currentPage && roi.sourceId) {
-        if (roi.workspaceKind === "ignore_regions") onDeleteIgnoreRegion(roi.sourceId);
-        else onDeleteField(roi.sourceId);
-      }
-    });
   };
 
   const anchorMethod = (anchor: TemplateField) => anchor.dataType === "image" ? "image_feature" : "ocr_text";
@@ -704,6 +698,30 @@ export default function WorkspaceTemplateEditorV2({
       await reloadImageCategories();
     } catch (error) {
       setCategoryError(error instanceof Error ? error.message : "เพิ่มประเภทภาพไม่สำเร็จ");
+    }
+  };
+
+  const deleteCategoryDraft = async (value: string) => {
+    const category = imageCategories.find((item) => item.value === value);
+    const label = category?.label || value;
+    if (!window.confirm(`ลบคำแทน "${label}" หรือไม่?`)) return;
+    try {
+      setCategoryError("");
+      await deleteImageVerificationCategory(value);
+      fields.forEach((field) => {
+        const nextCategories = fieldImageCategories(field.imageCategory).filter((item) => item !== value);
+        if (nextCategories.length !== fieldImageCategories(field.imageCategory).length) {
+          onUpdateField(field.id, { imageCategory: nextCategories });
+        }
+      });
+      setCategoryDrafts((current) => {
+        const next = { ...current };
+        delete next[value];
+        return next;
+      });
+      await reloadImageCategories();
+    } catch (error) {
+      setCategoryError(error instanceof Error ? error.message : "ลบประเภทภาพไม่สำเร็จ");
     }
   };
 
@@ -1434,7 +1452,14 @@ export default function WorkspaceTemplateEditorV2({
                         value={draft.prompt}
                         onChange={(event) => setCategoryDrafts((current) => ({ ...current, [category.value]: { ...draft, prompt: event.target.value } }))}
                       />
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] font-black text-red-700 hover:bg-red-100"
+                          onClick={() => deleteCategoryDraft(category.value)}
+                        >
+                          ลบ
+                        </button>
                         <button
                           type="button"
                           className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black text-white hover:bg-slate-800"
