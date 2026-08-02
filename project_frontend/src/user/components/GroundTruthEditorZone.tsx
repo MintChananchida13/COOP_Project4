@@ -1419,7 +1419,7 @@ export default function GroundTruthEditorZone({
                           </svg>
                         )}
 
-                        {showLabels && (
+                        {showLabels && isCurrentActive && (
                           <span className={`absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow font-bold border transition-all ${
                             isCurrentActive 
                               ? "bg-orange-600 border-orange-600 text-white font-extrabold z-40" 
