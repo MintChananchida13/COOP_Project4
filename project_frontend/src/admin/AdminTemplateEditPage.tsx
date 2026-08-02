@@ -94,6 +94,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const localFieldSequenceRef = useRef(0);
   const fieldUpdateSequenceRef = useRef(new Map<string, number>());
   const pendingLocalFieldPatchesRef = useRef(new Map<string, Partial<TemplateField>>());
+  const dirtyFieldPatchesRef = useRef(new Map<string, Partial<TemplateField>>());
+  const pendingDeletedFieldIdsRef = useRef(new Set<string>());
   const selectedTemplateFieldsRef = useRef<TemplateField[]>([]);
   const pendingFieldSavePromisesRef = useRef(new Set<Promise<unknown>>());
 
@@ -119,6 +121,71 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const waitForPendingFieldSaves = async () => {
     while (pendingFieldSavePromisesRef.current.size > 0) {
       await Promise.allSettled(Array.from(pendingFieldSavePromisesRef.current));
+    }
+  };
+
+  const flushFieldDrafts = async () => {
+    await waitForPendingFieldSaves();
+    if (!canPersistToBackend) {
+      setLocalOnly("Field changes saved locally.");
+      return;
+    }
+
+    let latestBundle: TemplateBundle | null = null;
+    const deletedIds = Array.from(pendingDeletedFieldIdsRef.current).filter((fieldId) => !fieldId.startsWith("local_field_"));
+    for (const fieldId of deletedIds) {
+      latestBundle = await deleteTemplateFieldApi(templateId, fieldId);
+      pendingDeletedFieldIdsRef.current.delete(fieldId);
+      dirtyFieldPatchesRef.current.delete(fieldId);
+      pendingLocalFieldPatchesRef.current.delete(fieldId);
+    }
+
+    let currentFields = selectedTemplateFieldsRef.current;
+    const localFields = currentFields.filter((field) => field.id.startsWith("local_field_"));
+    for (const localField of localFields) {
+      const localPatch = pendingLocalFieldPatchesRef.current.get(localField.id) || {};
+      const fieldToCreate = { ...localField, ...localPatch };
+      latestBundle = await createTemplateFieldApi(templateId, fieldToCreate);
+      const savedField =
+        latestBundle.fields.find((field) => field.id === localField.id) ||
+        latestBundle.fields.find(
+          (field) =>
+            field.templatePageId === fieldToCreate.templatePageId &&
+            field.pageNumber === fieldToCreate.pageNumber &&
+            field.fieldName === fieldToCreate.fieldName &&
+            field.sortOrder === fieldToCreate.sortOrder
+        ) ||
+        latestBundle.fields.find(
+          (field) =>
+            field.templatePageId === fieldToCreate.templatePageId &&
+            field.pageNumber === fieldToCreate.pageNumber &&
+            field.fieldName === fieldToCreate.fieldName
+        );
+      if (savedField) {
+        const preservedField = {
+          ...savedField,
+          ...fieldToCreate,
+          id: savedField.id,
+          templateId: savedField.templateId,
+          templatePageId: savedField.templatePageId,
+        };
+        currentFields = currentFields.map((field) => (field.id === localField.id ? preservedField : field));
+        setSelectedTemplateFields(currentFields);
+        selectedTemplateFieldsRef.current = currentFields;
+        pendingLocalFieldPatchesRef.current.delete(localField.id);
+        dirtyFieldPatchesRef.current.delete(localField.id);
+      }
+    }
+
+    const dirtyEntries = Array.from(dirtyFieldPatchesRef.current.entries()).filter(([fieldId]) => !fieldId.startsWith("local_field_"));
+    for (const [fieldId, patch] of dirtyEntries) {
+      latestBundle = await updateTemplateFieldApi(templateId, fieldId, patch);
+      dirtyFieldPatchesRef.current.delete(fieldId);
+    }
+
+    if (latestBundle) {
+      applyBundle(latestBundle);
+      setSaved("Field changes saved.");
     }
   };
 
@@ -335,92 +402,26 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       sortOrder: nextIndex,
     };
     setSelectedTemplateFields((prev) => [...prev, optimisticField]);
-
-    if (!canPersistToBackend) {
-      setLocalOnly("Field added locally.");
-      return;
-    }
-
-    const createPromise = trackFieldSave(createTemplateFieldApi(templateId, optimisticField));
-    createPromise
-      .then((bundle) => {
-        const savedField =
-          bundle.fields.find((field) => field.id === optimisticId) ||
-          bundle.fields.find(
-            (field) =>
-              field.templatePageId === optimisticField.templatePageId &&
-              field.pageNumber === optimisticField.pageNumber &&
-              field.fieldName === optimisticField.fieldName
-          );
-        if (savedField) {
-          const latestLocalField = selectedTemplateFieldsRef.current.find((field) => field.id === optimisticId) || optimisticField;
-          const pendingPatch = pendingLocalFieldPatchesRef.current.get(optimisticId);
-          const preservedField = {
-            ...savedField,
-            ...latestLocalField,
-            ...(pendingPatch || {}),
-            id: savedField.id,
-            templateId: savedField.templateId,
-            templatePageId: savedField.templatePageId,
-          };
-          setSelectedTemplateFields((prev) => prev.map((field) => (field.id === optimisticId ? preservedField : field)));
-          pendingLocalFieldPatchesRef.current.delete(optimisticId);
-          if (pendingPatch && Object.keys(pendingPatch).length > 0) {
-            trackFieldSave(updateTemplateFieldApi(templateId, savedField.id, pendingPatch))
-              .then((latestBundle) => {
-                const latestSavedField = latestBundle.fields.find((field) => field.id === savedField.id);
-                if (latestSavedField) {
-                  setSelectedTemplateFields((prev) =>
-                    prev.map((field) => (field.id === savedField.id ? { ...field, ...latestSavedField, ...pendingPatch } : field))
-                  );
-                }
-              })
-              .catch((error) => {
-                console.warn("Pending field update after create failed.", error);
-                setLocalOnly("Field saved locally; latest ROI/type changes could not be persisted yet.");
-              });
-          }
-        }
-        setSelectedTemplate(bundle.template);
-        setSaved("Field saved.");
-      })
-      .catch((error) => {
-        console.warn("Field create failed.", error);
-        setLocalOnly("Field added locally.");
-      });
+    pendingLocalFieldPatchesRef.current.set(optimisticId, optimisticField);
+    setSaved("Field added to draft.");
   };
 
   const handleUpdateField = (fieldId: string, patch: Partial<TemplateField>) => {
     const requestSequence = (fieldUpdateSequenceRef.current.get(fieldId) || 0) + 1;
     fieldUpdateSequenceRef.current.set(fieldId, requestSequence);
     setSelectedTemplateFields((prev) => prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)));
-    if (!canPersistToBackend || fieldId.startsWith("local_field_")) {
-      if (fieldId.startsWith("local_field_")) {
-        pendingLocalFieldPatchesRef.current.set(fieldId, {
-          ...(pendingLocalFieldPatchesRef.current.get(fieldId) || {}),
-          ...patch,
-        });
-      }
-      setLocalOnly("Field saved locally.");
-      return;
-    }
-
-    trackFieldSave(updateTemplateFieldApi(templateId, fieldId, patch))
-      .then((bundle) => {
-        if (fieldUpdateSequenceRef.current.get(fieldId) !== requestSequence) return;
-        const savedField = bundle.fields.find((field) => field.id === fieldId);
-        if (savedField) {
-          setSelectedTemplateFields((prev) =>
-            prev.map((field) => (field.id === fieldId ? { ...field, ...savedField, ...patch } : field))
-          );
-        }
-        setSelectedTemplate(bundle.template);
-        setSaved("Field saved.");
-      })
-      .catch((error) => {
-        console.warn("Field update failed.", error);
-        setLocalOnly("Field saved locally.");
+    if (fieldId.startsWith("local_field_")) {
+      pendingLocalFieldPatchesRef.current.set(fieldId, {
+        ...(pendingLocalFieldPatchesRef.current.get(fieldId) || {}),
+        ...patch,
       });
+    } else {
+      dirtyFieldPatchesRef.current.set(fieldId, {
+        ...(dirtyFieldPatchesRef.current.get(fieldId) || {}),
+        ...patch,
+      });
+    }
+    setSaved("Field changes saved to draft.");
   };
 
   const handleReorderFields = (orderedFieldIds: string[]) => {
@@ -439,41 +440,43 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       })
     );
 
-    const fieldsToPersist = changedFields.filter((field) => !field.id.startsWith("local_field_"));
-    if (!canPersistToBackend || fieldsToPersist.length === 0) {
-      setLocalOnly("Field order saved locally.");
-      return;
-    }
-
-    Promise.all(fieldsToPersist.map((field) => updateTemplateFieldApi(templateId, field.id, { sortOrder: field.sortOrder })))
-      .then(() => {
-        setSaved("Field order saved.");
-      })
-      .catch((error) => {
-        console.warn("Field reorder failed.", error);
-        setSelectedTemplateFields(previousFields);
-        setLocalOnly("Field order could not be persisted.");
-      });
+    changedFields.forEach((field) => {
+      const patch = { sortOrder: field.sortOrder };
+      if (field.id.startsWith("local_field_")) {
+        pendingLocalFieldPatchesRef.current.set(field.id, {
+          ...(pendingLocalFieldPatchesRef.current.get(field.id) || {}),
+          ...patch,
+        });
+      } else {
+        dirtyFieldPatchesRef.current.set(field.id, {
+          ...(dirtyFieldPatchesRef.current.get(field.id) || {}),
+          ...patch,
+        });
+      }
+    });
+    setSaved("Field order saved to draft.");
   };
 
   const handleDeleteField = (fieldId: string) => {
-    const previousFields = selectedTemplateFields;
     setSelectedTemplateFields((prev) => prev.filter((field) => field.id !== fieldId));
-    if (!canPersistToBackend || fieldId.startsWith("local_field_")) {
-      setLocalOnly("Field deleted locally.");
-      return;
+    pendingLocalFieldPatchesRef.current.delete(fieldId);
+    dirtyFieldPatchesRef.current.delete(fieldId);
+    if (!fieldId.startsWith("local_field_")) {
+      pendingDeletedFieldIdsRef.current.add(fieldId);
     }
+    setSaved("Field deleted from draft.");
+  };
 
-    deleteTemplateFieldApi(templateId, fieldId)
-      .then((bundle) => {
-        applyBundle(bundle);
-        setSaved("Field deleted.");
-      })
-      .catch((error) => {
-        console.warn("Field delete failed.", error);
-        setSelectedTemplateFields(previousFields);
-        setLocalOnly("Field delete could not be persisted.");
-      });
+  const handleEnterTemplateTestMode = () => {
+    void (async () => {
+      await flushFieldDrafts();
+      if (selectedTemplate?.status === "active") {
+        window.alert("อัปเดต Template เรียบร้อยแล้ว");
+        router.push("/admin/templates");
+        return;
+      }
+      router.push(`/admin/templates/${templateId}/test`);
+    })();
   };
 
   const handleReplacePageExtractionFields = (pageNumber: number, detectedFields: AutoDetectedTemplateField[]) => {
@@ -821,23 +824,9 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onAddIgnoreRegion={handleAddIgnoreRegion}
               onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
               onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
-              onGenerateEmbedding={() => {
-                if (selectedTemplate?.status === "active") {
-                  window.alert("อัปเดต Template เรียบร้อยแล้ว");
-                  router.push("/admin/templates");
-                  return;
-                }
-                router.push(`/admin/templates/${templateId}/test`);
-              }}
-              onRunTestMode={() => {
-                if (selectedTemplate?.status === "active") {
-                  window.alert("อัปเดต Template เรียบร้อยแล้ว");
-                  router.push("/admin/templates");
-                  return;
-                }
-                router.push(`/admin/templates/${templateId}/test`);
-              }}
-              onBeforeRunTest={waitForPendingFieldSaves}
+              onGenerateEmbedding={handleEnterTemplateTestMode}
+              onRunTestMode={handleEnterTemplateTestMode}
+              onBeforeRunTest={flushFieldDrafts}
               testModeLabel={selectedTemplate?.status === "active" ? "อัปเดต Template" : "Test Mode"}
               onBackToAdjust={() => setEditorStage("adjust")}
             />
