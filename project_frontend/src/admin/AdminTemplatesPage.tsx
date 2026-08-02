@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, FileImage, Loader2, Pencil, Plus, UploadCloud, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileImage, Folder, Loader2, Pencil, Plus, UploadCloud, X } from "lucide-react";
 import { Template, TemplateStatus } from "../types/ocr";
 import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateApi, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
@@ -115,6 +115,7 @@ export default function AdminTemplatesPage() {
   const [newTemplateType, setNewTemplateType] = useState("");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [manualCreationType, setManualCreationType] = useState<"new_template" | "new_version">("new_template");
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [isCreatingRequest, setIsCreatingRequest] = useState(false);
   const [createRequestError, setCreateRequestError] = useState("");
 
@@ -155,6 +156,37 @@ export default function AdminTemplatesPage() {
     draft: templates.filter((template) => template.status === "draft").length,
     active: templates.filter((template) => template.status === "active").length,
     nonactive: templates.filter((template) => template.status !== "draft" && template.status !== "active").length,
+  };
+
+  const templateFolders = useMemo(() => {
+    const groups = new Map<string, Template[]>();
+    filteredTemplates.forEach((template) => {
+      const groupId = template.templateGroupId || template.id;
+      groups.set(groupId, [...(groups.get(groupId) || []), template]);
+    });
+    return Array.from(groups.entries()).map(([groupId, versions]) => {
+      const sortedVersions = versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
+      const latest = sortedVersions[0];
+      const activeCount = sortedVersions.filter((template) => template.status === "active").length;
+      return {
+        groupId,
+        name: latest?.name || "Template",
+        documentType: latest?.documentType,
+        previewImageUrl: latest?.previewImageUrl,
+        pageCount: latest?.pageCount || 0,
+        activeCount,
+        versions: sortedVersions,
+      };
+    });
+  }, [filteredTemplates]);
+
+  const toggleTemplateFolder = (groupId: string) => {
+    setExpandedFolderIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
   };
 
   const handleChangeTemplateStatus = async (template: Template, nextStatus: TemplateStatus) => {
@@ -440,7 +472,158 @@ export default function AdminTemplatesPage() {
         <InlineState tone="danger" message={renameError} />
       )}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <div className="space-y-3">
+        {templateFolders.map((folder) => {
+          const isExpanded = expandedFolderIds.has(folder.groupId);
+          return (
+            <div key={folder.groupId} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => toggleTemplateFolder(folder.groupId)}
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600">
+                  <Folder size={30} strokeWidth={1.8} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="truncate text-sm font-black text-slate-900">{folder.name}</h3>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">
+                      {folder.versions.length} Version
+                    </span>
+                    {folder.activeCount > 0 && (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                        Active {folder.activeCount}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {folder.documentType || "No document type"} · {folder.pageCount} หน้า
+                  </p>
+                </div>
+                <div className="shrink-0 text-slate-400">
+                  {isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-slate-100 bg-slate-50 p-3">
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {folder.versions.map((template) => (
+                      <div key={template.id} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                        <div className="flex gap-3">
+                          <div className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                            {template.previewImageUrl ? (
+                              <img src={template.previewImageUrl} alt={`${template.name} template preview`} className="h-full w-full bg-white object-contain" />
+                            ) : (
+                              <div className="flex h-full flex-col items-center justify-center gap-1 text-slate-400">
+                                <FileImage size={22} strokeWidth={1.8} />
+                                <span className="text-[9px] font-bold">No preview</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1 space-y-2">
+                            {editingTemplateId === template.id ? (
+                              <div className="space-y-2">
+                                <input
+                                  type="text"
+                                  value={editingTemplateName}
+                                  onChange={(event) => setEditingTemplateName(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      void handleRenameTemplate(template);
+                                    }
+                                    if (event.key === "Escape") cancelRenameTemplate();
+                                  }}
+                                  disabled={renamingTemplateId === template.id}
+                                  autoFocus
+                                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                                />
+                                <div className="flex flex-wrap gap-2">
+                                  <button type="button" onClick={() => void handleRenameTemplate(template)} disabled={renamingTemplateId === template.id} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-black text-white disabled:bg-slate-300">
+                                    {renamingTemplateId === template.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                                    บันทึก
+                                  </button>
+                                  <button type="button" onClick={cancelRenameTemplate} disabled={renamingTemplateId === template.id} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-600">
+                                    <X size={14} />
+                                    ยกเลิก
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-black text-slate-900">{template.name}</div>
+                                  <div className="mt-1 flex flex-wrap gap-1.5">
+                                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                                      Version {template.versionNumber || template.version}
+                                    </span>
+                                    <StatusBadge status={template.status} />
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => startRenameTemplate(template)}
+                                  disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || renamingTemplateId === template.id}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                                  title="เปลี่ยนชื่อ Template"
+                                  aria-label={`เปลี่ยนชื่อ ${template.name}`}
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              </div>
+                            )}
+
+                            <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                              {template.documentType || "No document type"} · {template.pageCount} หน้า
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
+                              <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+                              <label className="min-w-[150px]">
+                                <span className="sr-only">Template status</span>
+                                <select
+                                  value={manageableStatuses.includes(template.status) ? (template.status === "disabled" ? "nonactive" : template.status) : template.status}
+                                  onChange={(event) => {
+                                    const nextStatus = event.target.value as TemplateStatus;
+                                    if (nextStatus !== template.status) handleChangeTemplateStatus(template, nextStatus);
+                                  }}
+                                  disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || !manageableStatuses.includes(template.status)}
+                                  className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400"
+                                >
+                                  {!manageableStatuses.includes(template.status) && <option value={template.status}>{statusSelectLabel(template.status)}</option>}
+                                  <option value="active">ใช้งานอยู่</option>
+                                  <option value="nonactive">ปิดใช้งานชั่วคราว</option>
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTemplate(template)}
+                                disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id}
+                                className="ui-stable-action-sm rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-600 hover:bg-red-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                              >
+                                {deletingTemplateId === template.id ? "กำลังลบ..." : "ลบ"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {loadStatus === "loaded" && templateFolders.length === 0 && (
+          <EmptyState title="ไม่พบ Template" message="ไม่มี Template ที่ตรงกับสถานะที่เลือก" />
+        )}
+      </div>
+
+      <div className="hidden">
         {filteredTemplates.map((template) => (
           <div key={template.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="relative h-44 border-b border-slate-200 bg-slate-100">
