@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, ChevronRight, FileImage, Folder, Loader2, Pencil, Plus, UploadCloud, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileImage, Folder, Loader2, Pencil, Plus, Search, UploadCloud, X } from "lucide-react";
 import { Template, TemplateStatus } from "../types/ocr";
 import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateApi, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
@@ -100,6 +100,7 @@ export default function AdminTemplatesPage() {
   const router = useRouter();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<AdminStatusFilter>("all");
+  const [templateSearch, setTemplateSearch] = useState("");
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [statusUpdatingTemplateId, setStatusUpdatingTemplateId] = useState<string | null>(null);
@@ -118,7 +119,7 @@ export default function AdminTemplatesPage() {
   const [selectedExistingDocumentType, setSelectedExistingDocumentType] = useState("");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [manualCreationType, setManualCreationType] = useState<"new_template" | "new_version">("new_template");
-  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
+  const [expandedFolderId, setExpandedFolderId] = useState<string | null>(null);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState("");
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
@@ -188,6 +189,19 @@ export default function AdminTemplatesPage() {
     });
   }, [filteredTemplates]);
 
+  const visibleTemplateFolders = useMemo(() => {
+    const query = templateSearch.trim().toLowerCase();
+    if (!query) return templateFolders;
+    return templateFolders.filter((folder) => {
+      const folderText = `${folder.name} ${folder.documentType}`.toLowerCase();
+      const versionText = folder.versions
+        .map((template) => `${template.name} ${template.documentType || ""}`)
+        .join(" ")
+        .toLowerCase();
+      return folderText.includes(query) || versionText.includes(query);
+    });
+  }, [templateFolders, templateSearch]);
+
   const existingDocumentTypes = useMemo(
     () => templateFolders.map((folder) => folder.documentType).filter(Boolean).sort((a, b) => a.localeCompare(b)),
     [templateFolders]
@@ -199,12 +213,9 @@ export default function AdminTemplatesPage() {
       : selectedExistingDocumentType.trim().length > 0 && newVersionNameSuffix.trim().length > 0;
 
   const toggleTemplateFolder = (groupId: string) => {
-    setExpandedFolderIds((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
+    setExpandedFolderId((current) => (current === groupId ? null : groupId));
+    setEditingFolderId(null);
+    setEditingTemplateId(null);
   };
 
   const startRenameFolder = (folder: { groupId: string; name: string }) => {
@@ -555,15 +566,41 @@ export default function AdminTemplatesPage() {
         <InlineState tone="danger" message={renameError} />
       )}
 
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <label className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 focus-within:border-indigo-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-100">
+          <Search size={17} className="shrink-0 text-slate-400" />
+          <input
+            type="search"
+            value={templateSearch}
+            onChange={(event) => {
+              setTemplateSearch(event.target.value);
+              setExpandedFolderId(null);
+            }}
+            placeholder="ค้นหาชื่อ Template หรือชื่อ Version"
+            className="h-11 min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-400"
+          />
+          <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-black text-slate-500">
+            {visibleTemplateFolders.length} โฟลเดอร์
+          </span>
+        </label>
+      </div>
+
       <div className="space-y-3">
-        {templateFolders.map((folder) => {
-          const isExpanded = expandedFolderIds.has(folder.groupId);
+        {visibleTemplateFolders.map((folder) => {
+          const isExpanded = expandedFolderId === folder.groupId;
           return (
             <div key={folder.groupId} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => toggleTemplateFolder(folder.groupId)}
-                className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-slate-50"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleTemplateFolder(folder.groupId);
+                  }
+                }}
+                className="flex w-full cursor-pointer items-center gap-4 p-4 text-left transition-colors hover:bg-slate-50"
               >
                 <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600">
                   <Folder size={30} strokeWidth={1.8} />
@@ -571,6 +608,19 @@ export default function AdminTemplatesPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="truncate text-sm font-black text-slate-900">{folder.name}</h3>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        startRenameFolder(folder);
+                      }}
+                      disabled={loadStatus !== "loaded" || renamingFolderId === folder.groupId}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                      title="เปลี่ยนชื่อโฟลเดอร์"
+                      aria-label={`เปลี่ยนชื่อโฟลเดอร์ ${folder.name}`}
+                    >
+                      <Pencil size={13} />
+                    </button>
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">
                       {folder.versions.length} Version
                     </span>
@@ -587,9 +637,9 @@ export default function AdminTemplatesPage() {
                 <div className="shrink-0 text-slate-400">
                   {isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
                 </div>
-              </button>
+              </div>
 
-              <div className="flex justify-end border-t border-slate-100 px-4 py-2">
+              <div className={editingFolderId === folder.groupId ? "flex justify-end border-t border-slate-100 px-4 py-2" : "hidden"}>
                 {editingFolderId === folder.groupId ? (
                   <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
                     <input
@@ -623,7 +673,7 @@ export default function AdminTemplatesPage() {
                     type="button"
                     onClick={() => startRenameFolder(folder)}
                     disabled={loadStatus !== "loaded" || renamingFolderId === folder.groupId}
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                    className="hidden"
                   >
                     <Pencil size={14} />
                     เปลี่ยนชื่อ Template
@@ -713,9 +763,6 @@ export default function AdminTemplatesPage() {
 
                             <div className="flex flex-wrap gap-2">
                               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-                              {template.status !== "active" && (
-                                <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
-                              )}
                               <label className="min-w-[150px]">
                                 <span className="sr-only">Template status</span>
                                 <select
@@ -751,7 +798,7 @@ export default function AdminTemplatesPage() {
             </div>
           );
         })}
-        {loadStatus === "loaded" && templateFolders.length === 0 && (
+        {loadStatus === "loaded" && visibleTemplateFolders.length === 0 && (
           <EmptyState title="ไม่พบ Template" message="ไม่มี Template ที่ตรงกับสถานะที่เลือก" />
         )}
       </div>
@@ -848,9 +895,6 @@ export default function AdminTemplatesPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-              {template.status !== "active" && (
-                <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
-              )}
               <label className="min-w-[170px]">
                 <span className="sr-only">Template status</span>
                 <select
