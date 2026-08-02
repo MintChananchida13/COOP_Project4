@@ -177,7 +177,6 @@ export default function TemplateRequestPanel({
   const [requestImages, setRequestImages] = useState<string[]>([]);
   const [requestImageItems, setRequestImageItems] = useState<RequestImageItem[]>([]);
   const [requestTitle, setRequestTitle] = useState("");
-  const [documentType, setDocumentType] = useState("");
   const [userNote, setUserNote] = useState("");
   const [requestMode, setRequestMode] = useState<TemplateRequestMode>("image_only");
   const [status, setStatus] = useState<RequestStatus>("idle");
@@ -284,7 +283,6 @@ export default function TemplateRequestPanel({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         request_title: requestTitle.trim(),
-        document_type: documentType.trim() || null,
         sample_file_url: requestImageItems[0]?.src || null,
         request_mode: requestMode,
         page_count: requestImageItems.length,
@@ -373,7 +371,6 @@ export default function TemplateRequestPanel({
 
   const resetAndClose = () => {
     setRequestTitle("");
-    setDocumentType("");
     setUserNote("");
     setRequestMode("image_only");
     setStatus("idle");
@@ -538,17 +535,6 @@ export default function TemplateRequestPanel({
                 value={requestTitle}
                 onChange={(event) => setRequestTitle(event.target.value)}
                 placeholder="เช่น Template ใบกำกับภาษีรูปแบบใหม่"
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
-              />
-            </label>
-
-            <label className="block space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">ประเภทเอกสาร</span>
-              <input
-                type="text"
-                value={documentType}
-                onChange={(event) => setDocumentType(event.target.value)}
-                placeholder="ไม่บังคับ"
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
               />
             </label>

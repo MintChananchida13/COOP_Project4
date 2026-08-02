@@ -10,6 +10,7 @@ interface TemplateFieldBasicFormProps {
   onUpdate: (fieldId: string, patch: Partial<TemplateField>) => void;
   onDelete: (fieldId: string) => void;
   compact?: boolean;
+  onSave?: () => void;
 }
 
 const inputClass =
@@ -21,7 +22,7 @@ const roiTypes = [
   { label: "Image", value: "image" as const, icon: ImageIcon },
 ];
 
-export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, compact = false }: TemplateFieldBasicFormProps) {
+export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, compact = false, onSave }: TemplateFieldBasicFormProps) {
   const [fieldNameDraft, setFieldNameDraft] = useState(field.fieldName);
   const selectedDataType = field.dataType === "string" || !field.dataType ? "text" : field.dataType;
   const selectedRoiType = selectedDataType === "table" || selectedDataType === "image" ? selectedDataType : "text";
@@ -46,6 +47,7 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    onSave?.();
   };
 
   return (

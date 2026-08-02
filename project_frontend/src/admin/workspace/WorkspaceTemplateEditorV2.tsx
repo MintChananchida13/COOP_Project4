@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
 import { SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
@@ -39,6 +39,7 @@ interface WorkspaceTemplateEditorProps {
   onRunTestMode: () => void;
   onBeforeRunTest?: () => Promise<void>;
   testModeLabel?: string;
+  onBackToAdjust?: () => void;
 }
 
 type EditorStep = "extraction_fields" | "verification_anchors";
@@ -284,6 +285,7 @@ export default function WorkspaceTemplateEditorV2({
   onBeforeRunTest,
   onRunTestMode,
   testModeLabel = "Test Mode",
+  onBackToAdjust,
 }: WorkspaceTemplateEditorProps) {
   const [step, setStep] = useState<EditorStep>("extraction_fields");
   const [mode, setMode] = useState<EditorMode>("extraction_fields");
@@ -361,7 +363,6 @@ export default function WorkspaceTemplateEditorV2({
     ? ignoreRegions.find((region) => region.id === selectedRoi.sourceId)
     : null;
   const selectedAnchor = selectedField && isAnchor(selectedField) ? selectedField : null;
-  const selectedExtractionField = selectedField && !isAnchor(selectedField) ? selectedField : null;
   const [anchorNameDraft, setAnchorNameDraft] = useState(selectedAnchor?.fieldName || "");
   const textAnchorsMissingExpected = verificationAnchors.filter(
     (anchor) => anchor.dataType !== "image" && !String(anchor.expectedText || "").trim()
@@ -1031,7 +1032,7 @@ export default function WorkspaceTemplateEditorV2({
         setRois={persistRois}
         selectedId={selectedId}
         setSelectedId={setSelectedRoiId}
-        onBackToAdjust={() => {}}
+        onBackToAdjust={onBackToAdjust || (() => {})}
         deleteROI={(id) => {
           const roi = activeRois.find((item) => item.id === id);
           if (!roi?.sourceId) return;
@@ -1081,19 +1082,21 @@ export default function WorkspaceTemplateEditorV2({
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
             {step === "extraction_fields" ? (
               <>
+                {onBackToAdjust && (
+                  <button
+                    type="button"
+                    onClick={onBackToAdjust}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-slate-700 shadow-sm hover:bg-slate-50"
+                  >
+                    <ArrowLeft size={14} />
+                    กลับไป 2.0 ปรับภาพ
+                  </button>
+                )}
                 <section className="flex min-h-0 flex-1 flex-col space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-500">{panelRois.length}</span>
                   </div>
-                  {selectedExtractionField && (
-                    <TemplateFieldBasicForm
-                      field={selectedExtractionField}
-                      onUpdate={onUpdateField}
-                      onDelete={onDeleteField}
-                      compact
-                    />
-                  )}
                   {mode === "extraction_fields" && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
                       <button
@@ -1161,6 +1164,17 @@ export default function WorkspaceTemplateEditorV2({
                               </div>
                             )}
                           </div>
+                          {isSelected && sourceField && (
+                            <div className="border-t border-indigo-100 p-2">
+                              <TemplateFieldBasicForm
+                                field={sourceField}
+                                onUpdate={onUpdateField}
+                                onDelete={onDeleteField}
+                                compact
+                                onSave={() => setSelectedId(null)}
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}

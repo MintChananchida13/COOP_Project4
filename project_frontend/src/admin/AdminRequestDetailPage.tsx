@@ -63,6 +63,14 @@ const extractionMethodLabel = (value?: string) =>
     (option) => option.value === normalizeExtractionMethod(value)
   )?.label || "อ่านข้อความใน ROI";
 
+const creationTypeLabel = (value: "new_template" | "new_version") =>
+  value === "new_version" ? "Add New Version" : "Create New Template";
+
+const creationTypeNote = (value: "new_template" | "new_version") =>
+  value === "new_version"
+    ? "เพิ่ม Version ให้ Template เดิมจากข้อมูลที่เลือกในคลัง Template"
+    : "สร้าง Template ใหม่และเริ่ม Version 1 จากไฟล์ที่อัปโหลด";
+
 const getPageSourceFileId = (page: TemplateRequestPage) =>
   page.sourceFileId ||
   (page.imageSource === "admin_upload"
@@ -86,11 +94,13 @@ export default function AdminRequestDetailPage({
     DEFAULT_WORKSPACE_IMAGE_METRICS
   );
   const [templateName, setTemplateName] = useState("");
+  const [templateDocumentType, setTemplateDocumentType] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
   const [sharedFieldsText, setSharedFieldsText] = useState("");
   const [creationType, setCreationType] = useState<"new_template" | "new_version">("new_template");
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedBaseTemplateId, setSelectedBaseTemplateId] = useState("");
+  const [selectedExistingTemplateName, setSelectedExistingTemplateName] = useState("");
   const [versionSuggestion, setVersionSuggestion] = useState<Awaited<ReturnType<typeof suggestTemplateRequestBaseVersion>> | null>(null);
   const [isSuggestingVersion, setIsSuggestingVersion] = useState(false);
   const [adminNote, setAdminNote] = useState("");
@@ -126,6 +136,7 @@ export default function AdminRequestDetailPage({
         });
         setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
         setTemplateName(requestDetail.requestTitle || "");
+        setTemplateDocumentType(requestDetail.documentType || requestDetail.requestTitle || "");
         setAdminNote(requestDetail.adminNote || "");
         setTemplates(templateList);
         setLoadStatus("loaded");
@@ -151,7 +162,13 @@ export default function AdminRequestDetailPage({
     if (searchParams.get("creationType") === "new_version") {
       setCreationType("new_version");
     }
-  }, [searchParams]);
+    const baseTemplateId = searchParams.get("baseTemplateId");
+    if (baseTemplateId) {
+      setSelectedBaseTemplateId(baseTemplateId);
+      const selectedTemplate = templates.find((template) => template.id === baseTemplateId);
+      if (selectedTemplate) setSelectedExistingTemplateName(selectedTemplate.name);
+    }
+  }, [searchParams, templates]);
 
   useEffect(() => {
     const panel = previewPanelRef.current;
@@ -218,6 +235,26 @@ export default function AdminRequestDetailPage({
     [sharedFieldsText]
   );
 
+  const templateFolders = useMemo(() => {
+    const groups = new Map<string, Template[]>();
+    templates.forEach((template) => {
+      const folderName = (template.name || template.documentType || "Template").trim() || "Template";
+      groups.set(folderName, [...(groups.get(folderName) || []), template]);
+    });
+    return Array.from(groups.entries())
+      .map(([name, versions]) => ({
+        name,
+        documentType: name,
+        versions: versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [templates]);
+
+  const selectedBaseTemplate = useMemo(
+    () => templates.find((template) => template.id === selectedBaseTemplateId),
+    [selectedBaseTemplateId, templates]
+  );
+
   const versionsForSelectedTemplate = useMemo(() => {
     const selected = templates.find((template) => template.id === selectedBaseTemplateId);
     const groupId = selected?.templateGroupId || selected?.id;
@@ -282,8 +319,16 @@ export default function AdminRequestDetailPage({
     }
 
     const nextTemplateName = templateName.trim();
+    const nextDocumentType =
+      creationType === "new_template"
+        ? templateDocumentType.trim()
+        : selectedBaseTemplate?.documentType || selectedExistingTemplateName.trim();
     if (!nextTemplateName) {
       setActionError("กรุณาระบุชื่อ Template ก่อนสร้าง Template");
+      return;
+    }
+    if (!nextDocumentType) {
+      setActionError(creationType === "new_template" ? "กรุณาระบุประเภทเอกสารก่อนสร้าง Template" : "กรุณาเลือก Template เดิมก่อนสร้าง Version ใหม่");
       return;
     }
     if (creationType === "new_version" && !selectedBaseTemplateId) {
@@ -296,6 +341,7 @@ export default function AdminRequestDetailPage({
     try {
       const updatedRequest = await updateTemplateRequest(request.id, {
         requestTitle: nextTemplateName,
+        documentType: nextDocumentType,
         adminNote,
       });
       const primaryPageIds = new Set(primaryPages.map((page) => page.id));
@@ -315,7 +361,7 @@ export default function AdminRequestDetailPage({
               templateName: nextTemplateName,
               description: templateDescription,
               sharedFields,
-              documentType: request.documentType,
+              documentType: nextDocumentType,
               reuseRoi: Boolean(versionSuggestion?.reuse_roi && versionSuggestion?.suggested_base_version),
             })
           : await convertTemplateRequestToTemplate(request.id);
@@ -402,7 +448,13 @@ export default function AdminRequestDetailPage({
     Math.max(workspacePages.length - 1, 0)
   );
   const currentPageFields = fieldsByPage[safeCurrentPage + 1] || [];
-  const canConvert = loadStatus === "loaded" && Boolean(primaryDocumentGroup?.pages.length);
+  const isCreationTypeLocked = searchParams.has("creationType");
+  const isBaseTemplateLocked = isCreationTypeLocked && creationType === "new_version" && Boolean(selectedBaseTemplateId);
+  const hasRequiredCreationInfo =
+    creationType === "new_template"
+      ? templateName.trim().length > 0 && templateDocumentType.trim().length > 0
+      : templateName.trim().length > 0 && selectedBaseTemplateId.trim().length > 0;
+  const canConvert = loadStatus === "loaded" && Boolean(primaryDocumentGroup?.pages.length) && hasRequiredCreationInfo;
 
   return (
     <section className="space-y-4">
@@ -505,18 +557,6 @@ export default function AdminRequestDetailPage({
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
               />
             </label>
-            <label className="mt-3 block space-y-1.5">
-              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                รายละเอียด
-              </span>
-              <textarea
-                value={templateDescription}
-                onChange={(event) => setTemplateDescription(event.target.value)}
-                rows={3}
-                placeholder="อธิบายเอกสารหรือเงื่อนไขสำคัญของ Template นี้"
-                className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
-              />
-            </label>
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -527,65 +567,123 @@ export default function AdminRequestDetailPage({
               เลือกว่าจะสร้าง Template ใหม่ หรือเพิ่ม Version ให้ Template เดิม
             </p>
 
-            <div className="mt-3 grid gap-2">
-              {[
-                { value: "new_template", title: "Create New Template", note: "สร้าง Template ใหม่และเริ่ม Version 1" },
-                { value: "new_version", title: "Add New Version", note: "เลือก Template เดิม แล้วให้ระบบช่วยหา Version ที่ใกล้ที่สุดเพื่อ reuse ROI" },
-              ].map((option) => (
-                <label
-                  key={option.value}
-                  className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${
-                    creationType === option.value ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50 hover:bg-white"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="creationType"
-                    checked={creationType === option.value}
-                    onChange={() => setCreationType(option.value as "new_template" | "new_version")}
-                    className="mt-1"
-                  />
-                  <span>
-                    <span className="block text-xs font-black text-slate-900">{option.title}</span>
-                    <span className="mt-0.5 block text-[11px] font-semibold leading-5 text-slate-500">{option.note}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
+            {isCreationTypeLocked ? (
+              <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                <div className="text-xs font-black text-indigo-900">{creationTypeLabel(creationType)}</div>
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-indigo-700">
+                  {creationTypeNote(creationType)}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 grid gap-2">
+                {[
+                  { value: "new_template", title: "Create New Template", note: "สร้าง Template ใหม่และเริ่ม Version 1" },
+                  { value: "new_version", title: "Add New Version", note: "เลือก Template เดิม แล้วให้ระบบช่วยหา Version ที่ใกล้ที่สุดเพื่อ reuse ROI" },
+                ].map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${
+                      creationType === option.value ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50 hover:bg-white"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="creationType"
+                      checked={creationType === option.value}
+                      onChange={() => {
+                        const nextCreationType = option.value as "new_template" | "new_version";
+                        setCreationType(nextCreationType);
+                        setActionError("");
+                        setActionStatus("");
+                        if (nextCreationType === "new_template") {
+                          setSelectedExistingTemplateName("");
+                          setSelectedBaseTemplateId("");
+                        } else {
+                          setTemplateDocumentType("");
+                        }
+                      }}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-black text-slate-900">{option.title}</span>
+                      <span className="mt-0.5 block text-[11px] font-semibold leading-5 text-slate-500">{option.note}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
 
             {creationType === "new_template" ? (
-              <label className="mt-3 block space-y-1.5">
-                <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                  Shared Fields
-                </span>
-                <textarea
-                  value={sharedFieldsText}
-                  onChange={(event) => setSharedFieldsText(event.target.value)}
-                  rows={3}
-                  placeholder="เช่น เลขที่เอกสาร, วันที่, ชื่อลูกค้า"
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
-                />
-                <p className="text-[10px] font-semibold text-slate-400">หนึ่งบรรทัดหรือคั่นด้วย comma ได้</p>
-              </label>
-            ) : (
-              <div className="mt-3 space-y-3">
+              <div className="mt-3 space-y-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
                 <label className="block space-y-1.5">
                   <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                    Template เดิม
+                    ประเภทเอกสาร
                   </span>
-                  <select
-                    value={selectedBaseTemplateId}
-                    onChange={(event) => setSelectedBaseTemplateId(event.target.value)}
+                  <input
+                    type="text"
+                    value={templateDocumentType}
+                    onChange={(event) => setTemplateDocumentType(event.target.value)}
+                    placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  >
-                    <option value="">เลือก Template</option>
-                    {templates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name} - Version {template.versionNumber || template.version}
-                      </option>
-                    ))}
-                  </select>
+                  />
+                  <p className="text-[10px] font-semibold text-slate-400">
+                    ใช้เป็นโฟลเดอร์แยกประเภทในคลัง Template
+                  </p>
                 </label>
+
+                <label className="block space-y-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    Shared Fields
+                  </span>
+                  <textarea
+                    value={sharedFieldsText}
+                    onChange={(event) => setSharedFieldsText(event.target.value)}
+                    rows={3}
+                    placeholder="เช่น เลขที่เอกสาร, วันที่, ชื่อลูกค้า"
+                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                  <p className="text-[10px] font-semibold text-slate-400">หนึ่งบรรทัดหรือคั่นด้วย comma ได้</p>
+                </label>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {isBaseTemplateLocked ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                      Template เดิม
+                    </div>
+                    <div className="mt-1 text-xs font-black text-slate-900">
+                      {selectedBaseTemplate?.name || selectedExistingTemplateName || "Template เดิม"}
+                    </div>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                      ใช้ Template ที่เลือกจากคลัง Template เป็นฐานสำหรับ Version ใหม่
+                    </p>
+                  </div>
+                ) : (
+                  <label className="block space-y-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                      ประเภทเอกสาร / Template เดิม
+                    </span>
+                    <select
+                      value={selectedExistingTemplateName}
+                      onChange={(event) => {
+                        const folderName = event.target.value;
+                        const folder = templateFolders.find((item) => item.name === folderName);
+                        setSelectedExistingTemplateName(folderName);
+                        setSelectedBaseTemplateId(folder?.versions[0]?.id || "");
+                        if (folderName) setTemplateName(`${folderName} Version ใหม่`);
+                      }}
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    >
+                      <option value="">เลือก Template เดิม</option>
+                      {templateFolders.map((folder) => (
+                        <option key={folder.name} value={folder.name}>
+                          {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
 
                 {versionsForSelectedTemplate.length > 0 && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">

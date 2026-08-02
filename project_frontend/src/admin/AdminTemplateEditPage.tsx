@@ -789,16 +789,6 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                 );
               })}
             </div>
-
-            {editorStage === "roi" && (
-              <button
-                type="button"
-                onClick={() => setEditorStage("adjust")}
-                className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 hover:bg-slate-50"
-              >
-                กลับไปปรับภาพ
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -851,6 +841,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               }}
               onBeforeRunTest={waitForPendingFieldSaves}
               testModeLabel={selectedTemplate?.status === "active" ? "อัปเดต Template" : "Test Mode"}
+              onBackToAdjust={() => setEditorStage("adjust")}
             />
           )}
         </div>

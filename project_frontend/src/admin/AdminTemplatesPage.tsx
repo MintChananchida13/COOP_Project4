@@ -192,7 +192,7 @@ export default function AdminTemplatesPage() {
 
   const canUploadCreateReference =
     manualCreationType === "new_template"
-      ? newTemplateName.trim().length > 0 && newTemplateType.trim().length > 0
+      ? newTemplateName.trim().length > 0
       : selectedExistingDocumentType.trim().length > 0;
 
   const toggleTemplateFolder = (groupId: string) => {
@@ -340,10 +340,11 @@ export default function AdminTemplatesPage() {
       return;
     }
 
-    const documentType = manualCreationType === "new_template" ? newTemplateType.trim() : selectedExistingDocumentType.trim();
-    const requestTitle = manualCreationType === "new_template" ? newTemplateName.trim() : `${documentType} Version ใหม่`;
+    const selectedBaseTemplate = templates.find((template) => template.name === selectedExistingDocumentType);
+    const documentType = manualCreationType === "new_template" ? newTemplateName.trim() : selectedBaseTemplate?.documentType || selectedExistingDocumentType.trim();
+    const requestTitle = manualCreationType === "new_template" ? newTemplateName.trim() : `${selectedExistingDocumentType.trim()} Version ใหม่`;
     if (!documentType || !requestTitle) {
-      setCreateRequestError(manualCreationType === "new_template" ? "กรุณากรอกชื่อ Template และประเภทเอกสารก่อนอัปโหลด" : "กรุณาเลือกประเภทเอกสารก่อนอัปโหลด");
+      setCreateRequestError(manualCreationType === "new_template" ? "กรุณากรอกชื่อ Template ก่อนอัปโหลด" : "กรุณาเลือก Template เดิมก่อนอัปโหลด");
       return;
     }
 
@@ -383,7 +384,8 @@ export default function AdminTemplatesPage() {
       setNewTemplateName("");
       setSelectedExistingDocumentType("");
       setIsCreateModalOpen(false);
-      router.push(`/admin/requests/${request.id}?creationType=${manualCreationType}`);
+      const baseTemplateParam = manualCreationType === "new_version" && selectedBaseTemplate?.id ? `&baseTemplateId=${encodeURIComponent(selectedBaseTemplate.id)}` : "";
+      router.push(`/admin/requests/${request.id}?creationType=${manualCreationType}${baseTemplateParam}`);
     } catch (error) {
       console.warn("Admin create template request failed.", error);
       setCreateRequestError(error instanceof Error ? error.message : "สร้าง Template Request ไม่สำเร็จ");
@@ -697,9 +699,9 @@ export default function AdminTemplatesPage() {
 
                             <div className="flex flex-wrap gap-2">
                               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-                              <ActionButton href={template.status === "active" ? `/admin/templates/${template.id}/edit` : `/admin/templates/${template.id}/test`}>
-                                {template.status === "active" ? "อัปเดต Template" : "ตรวจสอบก่อนเผยแพร่"}
-                              </ActionButton>
+                              {template.status !== "active" && (
+                                <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+                              )}
                               <label className="min-w-[150px]">
                                 <span className="sr-only">Template status</span>
                                 <select
@@ -832,9 +834,9 @@ export default function AdminTemplatesPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-              <ActionButton href={template.status === "active" ? `/admin/templates/${template.id}/edit` : `/admin/templates/${template.id}/test`}>
-                {template.status === "active" ? "อัปเดต Template" : "ตรวจสอบก่อนเผยแพร่"}
-              </ActionButton>
+              {template.status !== "active" && (
+                <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+              )}
               <label className="min-w-[170px]">
                 <span className="sr-only">Template status</span>
                 <select
@@ -933,16 +935,6 @@ export default function AdminTemplatesPage() {
                       value={newTemplateName}
                       onChange={(event) => setNewTemplateName(event.target.value)}
                       placeholder="เช่น ใบสมัครสมาชิก Version หลัก"
-                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                    />
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อที่ใช้จัดกลุ่มในคลัง Template</span>
-                    <input
-                      type="text"
-                      value={newTemplateType}
-                      onChange={(event) => setNewTemplateType(event.target.value)}
-                      placeholder="เช่น Invoice, ใบสมัคร, ใบรับรอง"
                       className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                     />
                   </label>
