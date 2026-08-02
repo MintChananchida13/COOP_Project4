@@ -17,7 +17,6 @@ import {
   updateImageVerificationCategory,
   ADMIN_API_BASE_URL,
 } from "../adminApi";
-import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
 
 interface WorkspaceTemplateEditorProps {
   templateId: string;
@@ -632,9 +631,21 @@ export default function WorkspaceTemplateEditorV2({
             />
           </label>
         )}
-        <button type="button" onClick={() => onDeleteField(anchor.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-          Delete ROI
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              commitAnchorName();
+              setSelectedId(null);
+            }}
+            className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white"
+          >
+            บันทึก
+          </button>
+          <button type="button" onClick={() => onDeleteField(anchor.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+            Delete ROI
+          </button>
+        </div>
       </section>
     );
   };
@@ -925,11 +936,9 @@ export default function WorkspaceTemplateEditorV2({
               <div className={`mt-3 grid gap-3 ${
                 isTableTestItem(item)
                   ? "lg:grid-cols-[220px_1fr]"
-                  : step === "extraction_fields" && isImageTestItem(item)
-                    ? ""
-                    : "sm:grid-cols-[180px_1fr]"
+                  : "sm:grid-cols-[180px_1fr]"
               }`}>
-                {!(step === "extraction_fields" && isImageTestItem(item)) && renderRoiCropPreview(item)}
+                {renderRoiCropPreview(item)}
                 <div className="min-w-0">
                   {isImageTestItem(item) && renderImageFieldPreview(item)}
                   {isTableTestItem(item) && renderTablePreview(item)}
@@ -1068,17 +1077,9 @@ export default function WorkspaceTemplateEditorV2({
         }}
         rightPanelRenderer={({ currentPageRois: panelRois, setSelectedId: selectRoi }) => (
           <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
             {step === "extraction_fields" ? (
               <>
-                <section className="space-y-2">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
-                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-2">
-                    <button type="button" onClick={() => setMode("extraction_fields")} className={`rounded-lg px-3 py-2 text-[10px] font-black ${mode === "extraction_fields" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}>
-                      Extraction
-                    </button>
-                  </div>
-                </section>
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
@@ -1151,11 +1152,6 @@ export default function WorkspaceTemplateEditorV2({
                               </div>
                             )}
                           </div>
-                          {isSelected && sourceField && (
-                            <div className="border-t border-indigo-100 p-2">
-                              <TemplateFieldBasicForm field={sourceField} onUpdate={onUpdateField} onDelete={onDeleteField} />
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -1184,9 +1180,9 @@ export default function WorkspaceTemplateEditorV2({
                     Draw fixed text or logo regions used only to confirm the template.
                   </p>
                 </section>
-                <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <section className="flex min-h-0 flex-1 flex-col space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page {currentPage + 1} ROI</h3>
-                  <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+                  <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                     {currentPageAnchors.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create a verification region.</p>
                     ) : currentPageAnchors.map((anchor, index) => {

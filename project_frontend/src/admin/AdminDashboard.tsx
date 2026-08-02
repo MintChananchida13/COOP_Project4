@@ -15,6 +15,47 @@ import { fetchAdminDashboard, fetchTemplateRequests, fetchTemplates } from "./ad
 import { AdminDashboardSummary } from "./adminTypes";
 import { EmptyState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
+const buildDashboardFromLists = (nextRequests: AdminTemplateRequest[], nextTemplates: Template[]): AdminDashboardSummary => ({
+  pendingRequests: nextRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
+  draftTemplates: nextTemplates.filter((template) => template.status === "draft").length,
+  activeTemplates: nextTemplates.filter((template) => template.status === "active").length,
+  rejectedRequests: nextRequests.filter((request) => request.status === "rejected").length,
+  templateCount: nextTemplates.length,
+  latestRequests: nextRequests.slice(0, 4),
+  latestTemplates: nextTemplates.slice(0, 4),
+});
+
+const mergeDashboardWithLists = (
+  nextDashboard: AdminDashboardSummary,
+  nextRequests: AdminTemplateRequest[],
+  nextTemplates: Template[]
+): AdminDashboardSummary => {
+  const listDashboard = buildDashboardFromLists(nextRequests, nextTemplates);
+  const shouldTrustListCounts =
+    nextDashboard.templateCount === 0 &&
+    nextDashboard.pendingRequests === 0 &&
+    nextDashboard.draftTemplates === 0 &&
+    nextDashboard.activeTemplates === 0 &&
+    nextDashboard.rejectedRequests === 0 &&
+    (nextRequests.length > 0 || nextTemplates.length > 0);
+  return {
+    pendingRequests: shouldTrustListCounts ? listDashboard.pendingRequests : nextDashboard.pendingRequests,
+    draftTemplates: shouldTrustListCounts ? listDashboard.draftTemplates : nextDashboard.draftTemplates,
+    activeTemplates: shouldTrustListCounts ? listDashboard.activeTemplates : nextDashboard.activeTemplates,
+    rejectedRequests: shouldTrustListCounts ? listDashboard.rejectedRequests : nextDashboard.rejectedRequests,
+    templateCount: shouldTrustListCounts ? listDashboard.templateCount : nextDashboard.templateCount,
+    latestRequests: nextDashboard.latestRequests.length ? nextDashboard.latestRequests : listDashboard.latestRequests,
+    latestTemplates: nextDashboard.latestTemplates.length ? nextDashboard.latestTemplates : listDashboard.latestTemplates,
+  };
+};
+
+const formatDateTime = (value?: string) => {
+  if (!value) return "ไม่พบเวลาอัปเดต";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
+};
+
 export default function AdminDashboard() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -34,7 +75,7 @@ export default function AdminDashboard() {
       try {
         const [nextDashboard, nextRequests, nextTemplates] = await Promise.all([fetchAdminDashboard(), fetchTemplateRequests(), fetchTemplates()]);
         if (cancelled) return;
-        setDashboard(nextDashboard);
+        setDashboard(mergeDashboardWithLists(nextDashboard, nextRequests, nextTemplates));
         setRequests(nextRequests);
         setTemplates(nextTemplates);
       } catch (error) {
@@ -47,15 +88,7 @@ export default function AdminDashboard() {
         if (cancelled) return;
         setRequests(nextRequests);
         setTemplates(nextTemplates);
-        setDashboard({
-          pendingRequests: nextRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
-          draftTemplates: nextTemplates.filter((template) => template.status === "draft").length,
-          activeTemplates: nextTemplates.filter((template) => template.status === "active").length,
-          rejectedRequests: nextRequests.filter((request) => request.status === "rejected").length,
-          templateCount: nextTemplates.length,
-          latestRequests: nextRequests.slice(0, 4),
-          latestTemplates: nextTemplates.slice(0, 4),
-        });
+        setDashboard(buildDashboardFromLists(nextRequests, nextTemplates));
       }
     };
     loadDashboard();
@@ -107,6 +140,31 @@ export default function AdminDashboard() {
         ))}
       </div>
 
+      <div className="grid gap-3 lg:grid-cols-3">
+        <div className={`${cardClassName} p-4`}>
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Template ทั้งหมด</p>
+          <p className="mt-2 text-2xl font-black text-slate-900">{dashboard.templateCount}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">รวมทุกสถานะในคลัง Template</p>
+        </div>
+        <div className={`${cardClassName} p-4`}>
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">คำขอทั้งหมด</p>
+          <p className="mt-2 text-2xl font-black text-slate-900">{requests.length}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">ข้อมูลจากรายการ Template Request จริง</p>
+        </div>
+        <div className={`${cardClassName} p-4`}>
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">อัปเดตล่าสุด</p>
+          <p className="mt-2 text-sm font-black text-slate-900">
+            {formatDateTime(
+              [...requests.map((item) => item.updatedAt), ...templates.map((item) => item.updatedAt)]
+                .filter(Boolean)
+                .sort()
+                .at(-1)
+            )}
+          </p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">ดูจากคำขอและ Template ล่าสุดที่โหลดได้</p>
+        </div>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <DashboardList
           title="คำขอล่าสุด"
@@ -115,7 +173,7 @@ export default function AdminDashboard() {
           items={(dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4)).map((request) => ({
             id: request.id,
             title: request.requestTitle,
-            meta: `${request.pageCount} หน้า ? ${request.documentType || "ยังไม่ระบุประเภท"}`,
+            meta: `${request.pageCount} หน้า · ${request.documentType || "ยังไม่ระบุประเภท"} · ${formatDateTime(request.updatedAt || request.createdAt)}`,
             status: request.status,
             tone: "amber",
           }))}
@@ -129,7 +187,7 @@ export default function AdminDashboard() {
           items={(dashboard.latestTemplates.length ? dashboard.latestTemplates : templates.slice(0, 4)).map((template) => ({
             id: template.id,
             title: template.name,
-            meta: template.documentType || "ยังไม่ระบุประเภท",
+            meta: `${template.documentType || "ยังไม่ระบุประเภท"} · ${template.pageCount} หน้า · ${formatDateTime(template.updatedAt || template.createdAt)}`,
             status: template.status,
             tone: "indigo",
             editHref: `/admin/templates/${template.id}/edit`,

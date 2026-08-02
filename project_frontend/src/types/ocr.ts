@@ -134,6 +134,8 @@ export interface Template {
   imageAnchorWeight: number;
   rejectionReason?: string;
   previewImageUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TemplatePage {

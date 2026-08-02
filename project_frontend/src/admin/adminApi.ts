@@ -119,6 +119,8 @@ interface ApiTemplate {
   text_anchor_weight?: number | null;
   image_anchor_weight?: number | null;
   rejection_reason?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
   pages?: ApiTemplatePage[];
   fields?: ApiTemplateField[];
   ignore_regions?: ApiIgnoreRegion[];
@@ -620,6 +622,8 @@ const mapApiTemplate = (template: ApiTemplate): Template => {
     imageAnchorWeight: typeof template.image_anchor_weight === "number" ? template.image_anchor_weight : 0.15,
     rejectionReason: template.rejection_reason || undefined,
     previewImageUrl: previewPage?.sample_image_url || previewPage?.normalized_image_url || undefined,
+    createdAt: template.created_at || undefined,
+    updatedAt: template.updated_at || undefined,
   };
 };
 

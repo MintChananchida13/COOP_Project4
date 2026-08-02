@@ -166,17 +166,17 @@ export default function AdminTemplatesPage() {
   const templateFolders = useMemo(() => {
     const groups = new Map<string, Template[]>();
     filteredTemplates.forEach((template) => {
-      const documentType = (template.documentType || "ไม่ระบุประเภทเอกสาร").trim() || "ไม่ระบุประเภทเอกสาร";
-      groups.set(documentType, [...(groups.get(documentType) || []), template]);
+      const templateName = (template.name || "Template").trim() || "Template";
+      groups.set(templateName, [...(groups.get(templateName) || []), template]);
     });
-    return Array.from(groups.entries()).map(([documentType, versions]) => {
+    return Array.from(groups.entries()).map(([templateName, versions]) => {
       const sortedVersions = versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
       const latest = sortedVersions[0];
       const activeCount = sortedVersions.filter((template) => template.status === "active").length;
       return {
-        groupId: documentType,
-        name: documentType,
-        documentType,
+        groupId: templateName,
+        name: templateName,
+        documentType: templateName,
         previewImageUrl: latest?.previewImageUrl,
         pageCount: latest?.pageCount || 0,
         activeCount,
@@ -219,7 +219,7 @@ export default function AdminTemplatesPage() {
   const handleRenameFolder = async (folder: { groupId: string; name: string; versions: Template[] }) => {
     const nextName = editingFolderName.trim();
     if (!nextName) {
-      setRenameError("กรุณากรอกชื่อประเภทเอกสาร");
+      setRenameError("กรุณากรอกชื่อ Template");
       return;
     }
     if (nextName === folder.name) {
@@ -236,20 +236,20 @@ export default function AdminTemplatesPage() {
     setStatusError("");
 
     try {
-      await Promise.all(folder.versions.map((template) => updateTemplateApi(template.id, { documentType: nextName })));
+      await Promise.all(folder.versions.map((template) => updateTemplateApi(template.id, { name: nextName })));
       const versionIds = new Set(folder.versions.map((template) => template.id));
-      setTemplates((current) => current.map((template) => (versionIds.has(template.id) ? { ...template, documentType: nextName } : template)));
+      setTemplates((current) => current.map((template) => (versionIds.has(template.id) ? { ...template, name: nextName } : template)));
       setExpandedFolderIds((current) => {
         const next = new Set(current);
         next.delete(folder.groupId);
         next.add(nextName);
         return next;
       });
-      setRenameMessage(`เปลี่ยนชื่อประเภทเอกสารเป็น "${nextName}" เรียบร้อยแล้ว`);
+      setRenameMessage(`เปลี่ยนชื่อ Template เป็น "${nextName}" เรียบร้อยแล้ว`);
       cancelRenameFolder();
     } catch (error) {
       console.warn("Template folder rename failed.", error);
-      setRenameError(error instanceof Error ? error.message : "เปลี่ยนชื่อประเภทเอกสารไม่สำเร็จ");
+      setRenameError(error instanceof Error ? error.message : "เปลี่ยนชื่อ Template ไม่สำเร็จ");
     } finally {
       setRenamingFolderId(null);
     }
@@ -571,7 +571,7 @@ export default function AdminTemplatesPage() {
                     )}
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
-                    {folder.documentType || "No document type"} · {folder.pageCount} หน้า
+                    ชื่อ Template ปัจจุบัน · {folder.pageCount} หน้า
                   </p>
                 </div>
                 <div className="shrink-0 text-slate-400">
@@ -616,7 +616,7 @@ export default function AdminTemplatesPage() {
                     className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
                   >
                     <Pencil size={14} />
-                    เปลี่ยนชื่อประเภทเอกสาร
+                    เปลี่ยนชื่อ Template
                   </button>
                 )}
               </div>
@@ -937,7 +937,7 @@ export default function AdminTemplatesPage() {
                     />
                   </label>
                   <label className="block space-y-1.5">
-                    <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร / โฟลเดอร์</span>
+                    <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อที่ใช้จัดกลุ่มในคลัง Template</span>
                     <input
                       type="text"
                       value={newTemplateType}
@@ -949,13 +949,13 @@ export default function AdminTemplatesPage() {
                 </div>
               ) : (
                 <label className="block space-y-1.5 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">เลือกประเภทเอกสารเดิม</span>
+                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">เลือก Template เดิม</span>
                   <select
                     value={selectedExistingDocumentType}
                     onChange={(event) => setSelectedExistingDocumentType(event.target.value)}
                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   >
-                    <option value="">เลือกโฟลเดอร์ประเภทเอกสาร</option>
+                    <option value="">เลือก Template เดิม</option>
                     {existingDocumentTypes.map((documentType) => (
                       <option key={documentType} value={documentType}>
                         {documentType}
