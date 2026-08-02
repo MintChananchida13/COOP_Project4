@@ -11,8 +11,11 @@ export type AdminStatusFilter = "all" | "draft" | "active" | "nonactive";
 export interface AdminDashboardSummary {
   pendingRequests: number;
   draftTemplates: number;
-  approvedTemplates: number;
-  rejectedTemplates: number;
+  activeTemplates: number;
+  rejectedRequests: number;
+  templateCount: number;
+  latestRequests: AdminTemplateRequest[];
+  latestTemplates: Template[];
 }
 
 export interface AdminDataSnapshot {

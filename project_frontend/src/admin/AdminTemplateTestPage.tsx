@@ -443,31 +443,11 @@ function DraftCandidateCard({
             <span>Text {formatPrepublishScore(candidate.textAnchorScore)}</span>
             <span>Verify {formatPrepublishScore(candidate.verificationScore)}</span>
             <span>Final {formatPrepublishScore(candidate.finalScore)}</span>
-            <span>Align {candidate.alignmentStatus || "N/A"}</span>
           </div>
         </div>
       </button>
       {open && (
         <div className="border-t border-slate-100 p-4">
-          <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-            <DraftSummaryCard label="Template ID" value={candidate.templateId} />
-            <DraftSummaryCard label="Template Status" value={candidate.templateStatus || "N/A"} />
-            <DraftSummaryCard label="Page Count" value={candidate.pageCount ?? "N/A"} />
-            <DraftSummaryCard label="Field Count" value={candidate.fieldCount ?? "N/A"} />
-            <DraftSummaryCard label="Alignment" value={candidate.alignmentStatus || "N/A"} />
-            <DraftSummaryCard label="Verification Image" value={candidate.verificationSourceUsed || "N/A"} />
-            <DraftSummaryCard label="Alignment Reason" value={candidate.alignmentReason || "N/A"} />
-          </div>
-          {candidate.alignmentDetails && candidate.alignmentDetails.length > 0 && (
-            <details className="mt-4 rounded-xl bg-slate-50 p-3 text-xs">
-              <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-500">
-                Alignment Details
-              </summary>
-              <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-white p-3 text-[10px] font-semibold text-slate-600">
-                {JSON.stringify(candidate.alignmentDetails, null, 2)}
-              </pre>
-            </details>
-          )}
           {candidate.verificationDetails && candidate.verificationDetails.length > 0 && (
             <div className="mt-4 rounded-xl bg-slate-50 p-3">
               <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Verification Checklist</h4>
@@ -612,6 +592,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [detectionTestAction, setDetectionTestAction] = useState(false);
   const [detectionTestError, setDetectionTestError] = useState("");
   const [expandedDetectionCandidates, setExpandedDetectionCandidates] = useState<Record<string, boolean>>({});
+  const autoSimulationStartedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -681,11 +662,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
   const publishPrerequisitesMet = Boolean(simulationPassed && detectionTestPassed);
   const overallReady = publishPrerequisitesMet;
-  const ocrPreviewPassed = Boolean(
-    extractionFields.length > 0 &&
-      ocrResults.length > 0 &&
-      ocrResults.every((result) => Boolean(result.passed))
-  );
+  const ocrPreviewPassed = Boolean(extractionFields.length > 0 || verificationAnchors.length > 0);
   const canRunDetectionTest = Boolean(simulationPassed && simulationAction === null && testDocumentFile && !detectionTestAction);
   const canConfirmPublish = publishPrerequisitesMet && simulationAction === null && template?.status !== "active";
   const finalConfidenceThreshold = typeof template?.finalConfidenceThreshold === "number" && Number.isFinite(template.finalConfidenceThreshold)
@@ -830,6 +807,9 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       setTemplate(result.template);
       setSimulationStep(prepublishSimulationSteps.length - 1);
       setStatusMessage("Temporary layout signature simulation completed. Review candidate ranking and readiness before publishing.");
+      if (validationStep === 2) {
+        setValidationStep(3);
+      }
     } catch (error) {
       console.warn("Pre-publish simulation failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
@@ -875,6 +855,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       const result = await confirmTemplatePublish(templateId);
       setTemplate(result.template);
       setPublishConfirmed(true);
+      window.alert("Template published successfully.");
       setStatusMessage("Layout signature generated, image anchors validated with SigLIP, and template published as Active.");
     } catch (error) {
       console.warn("Template publish failed.", error);
@@ -964,6 +945,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     updateMatchingWeightsDraft(recommended);
     await persistMatchingWeights(recommended);
   };
+
+  useEffect(() => {
+    if (validationStep !== 2 || autoSimulationStartedRef.current || simulation || simulationAction !== null || !ocrPreviewPassed) return;
+    autoSimulationStartedRef.current = true;
+    void handleRunPrepublishSimulation();
+  }, [ocrPreviewPassed, simulation, simulationAction, validationStep]);
 
   if (loadStatus === "loading") {
     return <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">Loading draft validation...</section>;
@@ -1067,31 +1054,32 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             </label>
           </div>
         </div>
+        <MatchingWeightsPanel
+          matchingWeights={matchingWeights}
+          effectiveMatchingWeights={effectiveMatchingWeights}
+          textAnchorCount={textAnchors.length}
+          imageAnchorCount={imageAnchors.length}
+          onLayoutChange={updateLayoutWeightDraft}
+          onTextChange={updateTextWeightDraft}
+          onImageChange={updateImageWeightDraft}
+          onWeightBlur={() => persistMatchingWeights()}
+          onUseRecommended={applyRecommendedMatchingWeights}
+        />
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setValidationStep(2)}
+            disabled={!ocrPreviewPassed}
+            className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
+          >
+            ยืนยันและไป Step 2
+          </button>
+        </div>
       </section>
-
-      <MatchingWeightsPanel
-        matchingWeights={matchingWeights}
-        effectiveMatchingWeights={effectiveMatchingWeights}
-        textAnchorCount={textAnchors.length}
-        imageAnchorCount={imageAnchors.length}
-        onLayoutChange={updateLayoutWeightDraft}
-        onTextChange={updateTextWeightDraft}
-        onImageChange={updateImageWeightDraft}
-        onWeightBlur={() => persistMatchingWeights()}
-        onUseRecommended={applyRecommendedMatchingWeights}
-      />
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <DraftSectionHeader title="ROI & OCR Preview" subtitle="ต้อง Preview OCR ให้ผ่านก่อน จึงจะไปขั้น Simulation ได้." />
-          <button
-            type="button"
-            onClick={runPreviewOcr}
-            disabled={isPreviewing || extractionFields.length === 0}
-            className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:bg-slate-300 disabled:text-slate-500"
-          >
-            {isPreviewing ? "Previewing..." : ocrResults.length > 0 ? "Retest OCR" : "Preview OCR Fields"}
-          </button>
+          <DraftSectionHeader title="ROI & OCR Preview" subtitle="แสดงตำแหน่ง ROI และข้อมูล Preview จาก Template ปัจจุบัน โดยไม่รัน OCR ใหม่ในขั้นนี้" />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {safePages.map((page, index) => (
@@ -1180,8 +1168,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             </div>
           </aside>
         </div>
-        {ocrStatus && <p className="mt-3 text-xs font-bold text-slate-600">{ocrStatus}</p>}
-        {(ocrResults.length > 0 || anchorPreviewResults.length > 0) && (
+        {false && ocrStatus && <p className="mt-3 text-xs font-bold text-slate-600">{ocrStatus}</p>}
+        {false && (ocrResults.length > 0 || anchorPreviewResults.length > 0) && (
           <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50/70 p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1283,7 +1271,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         )}
         <div className="mt-4 space-y-4">
           {ocrResults.length === 0 ? (
-            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">No OCR preview results yet.</p>
+            <p className="rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">ขั้นนี้เป็นการตรวจ Preview ตำแหน่ง ROI เท่านั้น ระบบจะไม่รัน OCR ใหม่</p>
           ) : (
             Object.entries(resultsByPage).map(([pageNumber, pageResults]) => (
               <div key={pageNumber} className="rounded-xl border border-slate-200 p-3">
@@ -1323,21 +1311,18 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             title="Layout References Simulation"
             subtitle="สร้างและทดสอบ Layout Signature จาก Main และ Reference ทั้งหมด หลังจาก ROI & OCR Preview ผ่านแล้วเท่านั้น"
           />
-          <button
-            type="button"
-            onClick={handleRunPrepublishSimulation}
-            disabled={simulationAction !== null || !ocrPreviewPassed}
-            className="ui-stable-action rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
-          >
-            {simulationAction === "run" ? "Simulating..." : simulation ? "Run Again" : "Run Simulation"}
-          </button>
+          <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+            simulationAction === "run" ? "bg-indigo-100 text-indigo-700" : simulation ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+          }`}>
+            {simulationAction === "run" ? "Running" : simulation ? "Completed" : "Waiting"}
+          </span>
         </div>
         {!ocrPreviewPassed && (
           <p className="mt-4 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-700">
             ต้อง Preview OCR ใน Step 1 ให้ผ่านก่อนจึงจะเริ่ม Simulation ได้
           </p>
         )}
-        <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
+        {false && <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Simulation Pipeline</h4>
@@ -1376,7 +1361,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             );
           })}
           </div>
-        </div>
+        </div>}
         <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -1433,10 +1418,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                         </div>
                       </div>
                       <div className="mt-2 space-y-1 text-[10px] font-semibold text-slate-500">
-                        <p>Engine: {page.engine || "layout_signature"}</p>
-                        <p>Source: {page.imageSource || (page.templateLayoutReferenceId ? "layout_reference" : "template_page")}</p>
-                        <p>Model: {page.modelName || "N/A"}</p>
-                        <p>Layout boxes: {page.labelCount ?? "N/A"}</p>
                         {page.reason && <p className="text-red-600">Reason: {page.reason}</p>}
                       </div>
                     </div>
@@ -1448,11 +1429,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         </div>
         {simulation?.temporaryEmbedding && (
           <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-              <DraftOverviewMetric label="Status" value={simulation.temporaryEmbedding.status} tone="emerald" />
-              <DraftOverviewMetric label="Model" value={simulation.temporaryEmbedding.modelName || "N/A"} />
-              <DraftOverviewMetric label="Engine" value={simulation.temporaryEmbedding.engine} tone="indigo" />
-              <DraftOverviewMetric label="Dimension" value={simulation.temporaryEmbedding.embeddingDimension} />
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               <DraftOverviewMetric label="Generated" value={simulation.temporaryEmbedding.generatedAt || "N/A"} />
             </div>
           </div>
@@ -1702,7 +1679,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                   The draft template must rank first and pass the new document test before publishing.
                 </p>
               )}
-              {publishConfirmed && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-xs font-black text-emerald-700">Template published successfully.</p>}
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
               <button

@@ -38,6 +38,7 @@ interface WorkspaceTemplateEditorProps {
   onGenerateEmbedding: () => void;
   onRunTestMode: () => void;
   onBeforeRunTest?: () => Promise<void>;
+  testModeLabel?: string;
 }
 
 type EditorStep = "extraction_fields" | "verification_anchors";
@@ -282,6 +283,7 @@ export default function WorkspaceTemplateEditorV2({
   onDeleteIgnoreRegion,
   onBeforeRunTest,
   onRunTestMode,
+  testModeLabel = "Test Mode",
 }: WorkspaceTemplateEditorProps) {
   const [step, setStep] = useState<EditorStep>("extraction_fields");
   const [mode, setMode] = useState<EditorMode>("extraction_fields");
@@ -358,12 +360,8 @@ export default function WorkspaceTemplateEditorV2({
   const selectedIgnoreRegion = selectedRoi?.workspaceKind === "ignore_regions"
     ? ignoreRegions.find((region) => region.id === selectedRoi.sourceId)
     : null;
-  const selectedAnchor = selectedField && isAnchor(selectedField)
-    ? selectedField
-    : currentPageAnchors[0] || verificationAnchors[0] || null;
-  const selectedExtractionField = selectedField && !isAnchor(selectedField)
-    ? selectedField
-    : currentPageExtractionFields[0] || extractionFields[0] || null;
+  const selectedAnchor = selectedField && isAnchor(selectedField) ? selectedField : null;
+  const selectedExtractionField = selectedField && !isAnchor(selectedField) ? selectedField : null;
   const [anchorNameDraft, setAnchorNameDraft] = useState(selectedAnchor?.fieldName || "");
   const textAnchorsMissingExpected = verificationAnchors.filter(
     (anchor) => anchor.dataType !== "image" && !String(anchor.expectedText || "").trim()
@@ -528,6 +526,117 @@ export default function WorkspaceTemplateEditorV2({
     } else {
       onUpdateField(anchor.id, { dataType: "text", extractionMethod: "ocr_text" });
     }
+  };
+
+  const renderAnchorSettings = (anchor: TemplateField) => {
+    const method = anchorMethod(anchor);
+    return (
+      <section className="space-y-3 border-t border-amber-100 bg-amber-50/60 p-3">
+        <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">ROI Settings</h3>
+        <label className="space-y-1 block">
+          <span className="text-[9px] font-black uppercase text-slate-400">Name</span>
+          <input
+            className={inputClass}
+            value={anchorNameDraft}
+            onChange={(event) => setAnchorNameDraft(event.target.value)}
+            onBlur={commitAnchorName}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.currentTarget.blur();
+              }
+            }}
+          />
+        </label>
+        <label className="space-y-1 block">
+          <span className="text-[9px] font-black uppercase text-slate-400">Verification Method</span>
+          <select className={inputClass} value={method} onChange={(event) => updateAnchorMethod(anchor, event.target.value)}>
+            <option value="ocr_text">OCR Text</option>
+            <option value="image_feature">Image</option>
+          </select>
+        </label>
+        {method === "image_feature" && (() => {
+          const selectedCategories = fieldImageCategories(anchor.imageCategory);
+          const invalidCategories = selectedCategories.filter(
+            (value) => !activeImageCategories.some((category) => category.value === value)
+          );
+          return (
+            <div className="space-y-2 rounded-xl border border-amber-100 bg-amber-50/40 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
+                <button
+                  type="button"
+                  className="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-amber-800"
+                  onClick={() => setCategoryManagerOpen(true)}
+                >
+                  จัดการประเภทภาพ
+                </button>
+              </div>
+              {selectedCategories.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedCategories.map((value) => {
+                    const category = activeImageCategories.find((option) => option.value === value);
+                    return (
+                      <span key={value} className="rounded-full bg-amber-600 px-2 py-0.5 text-[9px] font-black text-white">
+                        {category?.label || value}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-amber-100 bg-white p-2">
+                {activeImageCategories.length === 0 ? (
+                  <p className="text-[10px] font-semibold text-slate-500">ยังไม่มีประเภทภาพที่เปิดใช้งาน</p>
+                ) : (
+                  activeImageCategories.map((option) => {
+                    const checked = selectedCategories.includes(option.value);
+                    const nextCategories = checked
+                      ? selectedCategories.filter((value) => value !== option.value)
+                      : [...selectedCategories, option.value];
+                    return (
+                      <label key={option.value} className="flex items-start gap-2 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-amber-50">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => onUpdateField(anchor.id, { imageCategory: nextCategories })}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block text-slate-800">{option.label}</span>
+                          <span className="block font-semibold text-slate-400">{option.value}</span>
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+              <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
+                เลือกได้มากกว่า 1 ประเภท ถ้าตรวจพบตรงกับประเภทใดประเภทหนึ่ง จะถือว่าผ่าน
+              </p>
+              {invalidCategories.length > 0 && (
+                <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
+                  ประเภทภาพนี้ไม่พบหรือถูกปิดใช้งาน: {invalidCategories.join(", ")}
+                </p>
+              )}
+              {categoryError && <p className="text-[10px] font-semibold text-red-600">{categoryError}</p>}
+            </div>
+          );
+        })()}
+        {method === "ocr_text" && (
+          <label className="space-y-1 block">
+            <span className="text-[9px] font-black uppercase text-slate-400">Expected Text</span>
+            <input
+              required
+              className={`${inputClass} ${!String(anchor.expectedText || "").trim() ? "border-red-300 bg-red-50/50 focus:border-red-500" : ""}`}
+              value={anchor.expectedText || ""}
+              onChange={(event) => onUpdateField(anchor.id, { expectedText: event.target.value })}
+            />
+          </label>
+        )}
+        <button type="button" onClick={() => onDeleteField(anchor.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+          Delete ROI
+        </button>
+      </section>
+    );
   };
 
   const moveExtractionFieldOrder = (fieldId: string, direction: -1 | 1) => {
@@ -760,25 +869,17 @@ export default function WorkspaceTemplateEditorV2({
     );
   };
 
-  const renderImageFieldPreview = (item: TemplateStepTestItem) => (
-    <div className="rounded-lg border border-slate-100 bg-white p-2">
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div>
-          <div className="text-[9px] font-black uppercase text-slate-400">Image Type</div>
-          <div className="mt-1 text-sm font-black text-slate-800">{item.imageCategoryLabel || item.imageCategory || "Image ROI"}</div>
-        </div>
-        <div>
-          <div className="text-[9px] font-black uppercase text-slate-400">Preview Status</div>
-          <div className="mt-1 text-sm font-black text-slate-800">{item.passed ? "Crop พร้อมใช้งาน" : item.failureReason || "ยังไม่พร้อม"}</div>
+  const renderImageFieldPreview = (item: TemplateStepTestItem) => {
+    if (step === "extraction_fields") return null;
+    return (
+      <div className="rounded-lg border border-slate-100 bg-white p-2">
+        <div className="text-[9px] font-black uppercase text-slate-400">Predicted</div>
+        <div className="mt-1 rounded-lg bg-sky-50 px-2 py-1.5 text-sm font-black text-sky-700">
+          {item.predictedImageCategoryLabel || item.actualText || "-"}
         </div>
       </div>
-      {item.predictedImageCategoryLabel && (
-        <div className="mt-2 rounded-lg bg-sky-50 px-2 py-1.5 text-[10px] font-bold text-sky-700">
-          Predicted: {item.predictedImageCategoryLabel}
-        </div>
-      )}
-    </div>
-  );
+    );
+  };
 
   const renderTextVerificationPreview = (item: TemplateStepTestItem) => (
     <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
@@ -821,8 +922,14 @@ export default function WorkspaceTemplateEditorV2({
                   {item.passed ? "PASS" : "FAIL"}
                 </span>
               </div>
-              <div className={`mt-3 grid gap-3 ${isTableTestItem(item) ? "lg:grid-cols-[220px_1fr]" : "sm:grid-cols-[180px_1fr]"}`}>
-                {renderRoiCropPreview(item)}
+              <div className={`mt-3 grid gap-3 ${
+                isTableTestItem(item)
+                  ? "lg:grid-cols-[220px_1fr]"
+                  : step === "extraction_fields" && isImageTestItem(item)
+                    ? ""
+                    : "sm:grid-cols-[180px_1fr]"
+              }`}>
+                {!(step === "extraction_fields" && isImageTestItem(item)) && renderRoiCropPreview(item)}
                 <div className="min-w-0">
                   {isImageTestItem(item) && renderImageFieldPreview(item)}
                   {isTableTestItem(item) && renderTablePreview(item)}
@@ -852,7 +959,7 @@ export default function WorkspaceTemplateEditorV2({
                     Score {getVerificationItemScore(item).toFixed(0)}
                   </span>
                 )}
-                {item.rawPairScore !== null && item.rawPairScore !== undefined && (
+                {item.anchorType !== "image" && item.rawPairScore !== null && item.rawPairScore !== undefined && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
                     Pair {item.rawPairScore.toFixed(2)}
                   </span>
@@ -862,7 +969,7 @@ export default function WorkspaceTemplateEditorV2({
                     Relative {item.relativePercentage.toFixed(1)}%
                   </span>
                 )}
-                {item.imageCategoryLabel && (
+                {item.anchorType !== "image" && item.imageCategoryLabel && (
                   <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600">
                     Expected {item.imageCategoryLabel}
                   </span>
@@ -1010,38 +1117,43 @@ export default function WorkspaceTemplateEditorV2({
                       const sourceField = currentPageExtractionFields.find((field) => field.id === (roi as AdminRoi).sourceId);
                       const isSelected = selectedId === roi.id;
                       return (
-                        <div
-                          key={roi.id}
-                          className={`flex items-center gap-1.5 rounded-lg border bg-white px-2 py-2 text-[11px] font-bold ${
-                            isSelected ? "border-indigo-300 text-indigo-800 shadow-sm" : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          <button type="button" onClick={() => selectRoi(roi.id)} className="min-w-0 flex-1 truncate text-left">
-                            <span className="mr-1 text-slate-400">{index + 1}.</span>
-                            {roi.fieldName}
-                          </button>
-                          {mode === "extraction_fields" && sourceField && (
-                            <div className="flex shrink-0 gap-1">
-                              <button
-                                type="button"
-                                onClick={() => moveExtractionFieldOrder(sourceField.id, -1)}
-                                disabled={index === 0}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                title="Move field up"
-                                aria-label="Move field up"
-                              >
-                                <ChevronUp size={14} strokeWidth={2.25} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => moveExtractionFieldOrder(sourceField.id, 1)}
-                                disabled={index === panelRois.length - 1}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                title="Move field down"
-                                aria-label="Move field down"
-                              >
-                                <ChevronDown size={14} strokeWidth={2.25} />
-                              </button>
+                        <div key={roi.id} className={`rounded-lg border bg-white ${isSelected ? "border-indigo-300 shadow-sm" : "border-slate-200 hover:bg-slate-50"}`}>
+                          <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] font-bold">
+                            <button type="button" onClick={() => selectRoi(roi.id)} className={`min-w-0 flex-1 truncate text-left ${isSelected ? "text-indigo-800" : "text-slate-600"}`}>
+                              <span className="mr-1 text-slate-400">{index + 1}.</span>
+                              {sourceField?.displayLabel || sourceField?.fieldName || roi.fieldName}
+                            </button>
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-black uppercase text-slate-500">
+                              {sourceField?.dataType || roi.type || "text"}
+                            </span>
+                            {mode === "extraction_fields" && sourceField && (
+                              <div className="flex shrink-0 gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => moveExtractionFieldOrder(sourceField.id, -1)}
+                                  disabled={index === 0}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                  title="Move field up"
+                                  aria-label="Move field up"
+                                >
+                                  <ChevronUp size={14} strokeWidth={2.25} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveExtractionFieldOrder(sourceField.id, 1)}
+                                  disabled={index === panelRois.length - 1}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                  title="Move field down"
+                                  aria-label="Move field down"
+                                >
+                                  <ChevronDown size={14} strokeWidth={2.25} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {isSelected && sourceField && (
+                            <div className="border-t border-indigo-100 p-2">
+                              <TemplateFieldBasicForm field={sourceField} onUpdate={onUpdateField} onDelete={onDeleteField} />
                             </div>
                           )}
                         </div>
@@ -1049,9 +1161,6 @@ export default function WorkspaceTemplateEditorV2({
                     })}
                   </div>
                 </section>
-                {mode === "extraction_fields" && selectedExtractionField && (
-                  <TemplateFieldBasicForm field={selectedExtractionField} onUpdate={onUpdateField} onDelete={onDeleteField} />
-                )}
               </>
             ) : (
               <>
@@ -1085,141 +1194,58 @@ export default function WorkspaceTemplateEditorV2({
                       return (
                         <div
                           key={anchor.id}
-                          className={`flex items-center gap-1.5 rounded-lg border bg-white px-2 py-2 text-[11px] font-bold ${
+                          className={`overflow-hidden rounded-lg border bg-white text-[11px] font-bold ${
                             isSelected ? "border-amber-500 bg-amber-100 text-amber-900" : "border-slate-200 text-slate-600 hover:bg-slate-50"
                           }`}
                         >
-                          <button type="button" onClick={() => selectField(anchor)} className="min-w-0 flex-1 text-left">
-                            <div className="truncate">{anchor.displayLabel || anchor.fieldName}</div>
-                            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-wide text-amber-700">
-                              <span>{anchorMethod(anchor) === "image_feature" ? "Image" : "OCR Text"}</span>
-                              {anchorMethod(anchor) === "ocr_text" && !String(anchor.expectedText || "").trim() && (
-                                <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">Expected Required</span>
-                              )}
+                          <div className="flex items-center gap-1.5 px-2 py-2">
+                            <button type="button" onClick={() => selectField(anchor)} className="min-w-0 flex-1 text-left">
+                              <div className="truncate">{anchor.displayLabel || anchor.fieldName}</div>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-wide text-amber-700">
+                                <span>{anchorMethod(anchor) === "image_feature" ? "Image" : "OCR Text"}</span>
+                                {anchorMethod(anchor) === "image_feature" && fieldImageCategories(anchor.imageCategory).map((value) => {
+                                  const category = activeImageCategories.find((option) => option.value === value);
+                                  return (
+                                    <span key={value} className="rounded bg-amber-100 px-1 py-0.5 text-amber-800">
+                                      {category?.label || value}
+                                    </span>
+                                  );
+                                })}
+                                {anchorMethod(anchor) === "ocr_text" && !String(anchor.expectedText || "").trim() && (
+                                  <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">Expected Required</span>
+                                )}
+                              </div>
+                            </button>
+                            <div className="flex shrink-0 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => moveAnchorOrder(anchor.id, -1)}
+                                disabled={index === 0}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                title="Move anchor up"
+                                aria-label="Move anchor up"
+                              >
+                                <ChevronUp size={14} strokeWidth={2.25} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveAnchorOrder(anchor.id, 1)}
+                                disabled={index === currentPageAnchors.length - 1}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
+                                title="Move anchor down"
+                                aria-label="Move anchor down"
+                              >
+                                <ChevronDown size={14} strokeWidth={2.25} />
+                              </button>
                             </div>
-                          </button>
-                          <div className="flex shrink-0 gap-1">
-                            <button
-                              type="button"
-                              onClick={() => moveAnchorOrder(anchor.id, -1)}
-                              disabled={index === 0}
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                              title="Move anchor up"
-                              aria-label="Move anchor up"
-                            >
-                              <ChevronUp size={14} strokeWidth={2.25} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => moveAnchorOrder(anchor.id, 1)}
-                              disabled={index === currentPageAnchors.length - 1}
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                              title="Move anchor down"
-                              aria-label="Move anchor down"
-                            >
-                              <ChevronDown size={14} strokeWidth={2.25} />
-                            </button>
                           </div>
+                          {isSelected && renderAnchorSettings(anchor)}
                         </div>
                       );
                     })}
                   </div>
                 </section>
-                {selectedAnchor ? (
-                  <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">ROI Settings</h3>
-                    <label className="space-y-1 block">
-                      <span className="text-[9px] font-black uppercase text-slate-400">Name</span>
-                      <input
-                        className={inputClass}
-                        value={anchorNameDraft}
-                        onChange={(event) => setAnchorNameDraft(event.target.value)}
-                        onBlur={commitAnchorName}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.currentTarget.blur();
-                          }
-                        }}
-                      />
-                    </label>
-                    <label className="space-y-1 block">
-                      <span className="text-[9px] font-black uppercase text-slate-400">Verification Method</span>
-                      <select className={inputClass} value={anchorMethod(selectedAnchor)} onChange={(event) => updateAnchorMethod(selectedAnchor, event.target.value)}>
-                        <option value="ocr_text">OCR Text</option>
-                        <option value="image_feature">Image</option>
-                      </select>
-                    </label>
-                    {anchorMethod(selectedAnchor) === "image_feature" && (() => {
-                      const selectedCategories = fieldImageCategories(selectedAnchor.imageCategory);
-                      const invalidCategories = selectedCategories.filter(
-                        (value) => !activeImageCategories.some((category) => category.value === value)
-                      );
-                      return (
-                        <div className="space-y-2 rounded-xl border border-amber-100 bg-amber-50/40 p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[9px] font-black uppercase text-slate-400">ประเภทภาพ</span>
-                            <button
-                              type="button"
-                              className="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-amber-800"
-                              onClick={() => setCategoryManagerOpen(true)}
-                            >
-                              จัดการประเภทภาพ
-                            </button>
-                          </div>
-                          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-amber-100 bg-white p-2">
-                            {activeImageCategories.length === 0 ? (
-                              <p className="text-[10px] font-semibold text-slate-500">ยังไม่มีประเภทภาพที่เปิดใช้งาน</p>
-                            ) : (
-                              activeImageCategories.map((option) => {
-                                const checked = selectedCategories.includes(option.value);
-                                const nextCategories = checked
-                                  ? selectedCategories.filter((value) => value !== option.value)
-                                  : [...selectedCategories, option.value];
-                                return (
-                                  <label key={option.value} className="flex items-start gap-2 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-amber-50">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() => onUpdateField(selectedAnchor.id, { imageCategory: nextCategories })}
-                                      className="mt-0.5"
-                                    />
-                                    <span>
-                                      <span className="block text-slate-800">{option.label}</span>
-                                      <span className="block font-semibold text-slate-400">{option.value}</span>
-                                    </span>
-                                  </label>
-                                );
-                              })
-                            )}
-                          </div>
-                          <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
-                            เลือกได้มากกว่า 1 ประเภท ถ้าตรวจพบตรงกับประเภทใดประเภทหนึ่ง จะถือว่าผ่าน
-                          </p>
-                          {invalidCategories.length > 0 && (
-                            <p className="rounded-lg bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
-                              ประเภทภาพนี้ไม่พบหรือถูกปิดใช้งาน: {invalidCategories.join(", ")}
-                            </p>
-                          )}
-                          {categoryError && <p className="text-[10px] font-semibold text-red-600">{categoryError}</p>}
-                        </div>
-                      );
-                    })()}
-                    {anchorMethod(selectedAnchor) === "ocr_text" && (
-                      <label className="space-y-1 block">
-                        <span className="text-[9px] font-black uppercase text-slate-400">Expected Text</span>
-                        <input
-                          required
-                          className={`${inputClass} ${!String(selectedAnchor.expectedText || "").trim() ? "border-red-300 bg-red-50/50 focus:border-red-500" : ""}`}
-                          value={selectedAnchor.expectedText || ""}
-                          onChange={(event) => onUpdateField(selectedAnchor.id, { expectedText: event.target.value })}
-                        />
-                      </label>
-                    )}
-                    <button type="button" onClick={() => onDeleteField(selectedAnchor.id)} className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-                      Delete ROI
-                    </button>
-                  </section>
-                ) : (
+                {!selectedAnchor && (
                   <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">Draw or select a verification ROI first.</p>
                 )}
               </>
@@ -1324,7 +1350,7 @@ export default function WorkspaceTemplateEditorV2({
               disabled={!verificationAnchorsReady || !verificationTestPassed}
               className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
-              Test Mode
+              {testModeLabel}
             </button>
           </div>
         )}

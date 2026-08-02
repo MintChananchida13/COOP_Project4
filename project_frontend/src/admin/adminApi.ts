@@ -851,6 +851,27 @@ export const fetchTemplateRequests = async () => {
   return (apiRequests || []).map(mapApiRequest);
 };
 
+export const fetchAdminDashboard = async () => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/dashboard`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Admin dashboard load failed with ${response.status}`);
+  }
+
+  const json = await response.json();
+  const data = json?.data || {};
+  const latestRequests = data.latest_requests as ApiTemplateRequest[] | undefined;
+  const latestTemplates = data.latest_templates as ApiTemplate[] | undefined;
+  return {
+    pendingRequests: typeof data.pending_request_count === "number" ? data.pending_request_count : 0,
+    draftTemplates: typeof data.draft_template_count === "number" ? data.draft_template_count : 0,
+    activeTemplates: typeof data.active_template_count === "number" ? data.active_template_count : 0,
+    rejectedRequests: typeof data.rejected_request_count === "number" ? data.rejected_request_count : 0,
+    templateCount: typeof data.template_count === "number" ? data.template_count : 0,
+    latestRequests: (latestRequests || []).map(mapApiRequest),
+    latestTemplates: (latestTemplates || []).map(mapApiTemplate),
+  };
+};
+
 export const createTemplateRequest = async (payload: {
   requestTitle: string;
   documentType?: string;

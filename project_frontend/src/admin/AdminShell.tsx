@@ -12,7 +12,6 @@ const navItems = [
   { href: "/admin/requests", label: "คำขอ Template" },
   { href: "/admin/templates", label: "คลัง Template" },
   { href: "/admin/detection-lab", label: "ทดสอบการค้นหา", badge: "DEV" },
-  { href: "/", label: "หน้า OCR" },
 ];
 
 export default function AdminShell({ children }: { children: ReactNode }) {
@@ -83,4 +82,3 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     </main>
   );
 }
-

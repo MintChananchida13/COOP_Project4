@@ -112,10 +112,15 @@ export default function AdminTemplatesPage() {
   const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
   const [renameMessage, setRenameMessage] = useState("");
   const [renameError, setRenameError] = useState("");
+  const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplateType, setNewTemplateType] = useState("");
+  const [selectedExistingDocumentType, setSelectedExistingDocumentType] = useState("");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [manualCreationType, setManualCreationType] = useState<"new_template" | "new_version">("new_template");
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState("");
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [isCreatingRequest, setIsCreatingRequest] = useState(false);
   const [createRequestError, setCreateRequestError] = useState("");
 
@@ -161,17 +166,17 @@ export default function AdminTemplatesPage() {
   const templateFolders = useMemo(() => {
     const groups = new Map<string, Template[]>();
     filteredTemplates.forEach((template) => {
-      const groupId = template.templateGroupId || template.id;
-      groups.set(groupId, [...(groups.get(groupId) || []), template]);
+      const documentType = (template.documentType || "ไม่ระบุประเภทเอกสาร").trim() || "ไม่ระบุประเภทเอกสาร";
+      groups.set(documentType, [...(groups.get(documentType) || []), template]);
     });
-    return Array.from(groups.entries()).map(([groupId, versions]) => {
+    return Array.from(groups.entries()).map(([documentType, versions]) => {
       const sortedVersions = versions.sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
       const latest = sortedVersions[0];
       const activeCount = sortedVersions.filter((template) => template.status === "active").length;
       return {
-        groupId,
-        name: latest?.name || "Template",
-        documentType: latest?.documentType,
+        groupId: documentType,
+        name: documentType,
+        documentType,
         previewImageUrl: latest?.previewImageUrl,
         pageCount: latest?.pageCount || 0,
         activeCount,
@@ -180,6 +185,16 @@ export default function AdminTemplatesPage() {
     });
   }, [filteredTemplates]);
 
+  const existingDocumentTypes = useMemo(
+    () => templateFolders.map((folder) => folder.documentType).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+    [templateFolders]
+  );
+
+  const canUploadCreateReference =
+    manualCreationType === "new_template"
+      ? newTemplateName.trim().length > 0 && newTemplateType.trim().length > 0
+      : selectedExistingDocumentType.trim().length > 0;
+
   const toggleTemplateFolder = (groupId: string) => {
     setExpandedFolderIds((current) => {
       const next = new Set(current);
@@ -187,6 +202,57 @@ export default function AdminTemplatesPage() {
       else next.add(groupId);
       return next;
     });
+  };
+
+  const startRenameFolder = (folder: { groupId: string; name: string }) => {
+    setEditingFolderId(folder.groupId);
+    setEditingFolderName(folder.name);
+    setRenameMessage("");
+    setRenameError("");
+  };
+
+  const cancelRenameFolder = () => {
+    setEditingFolderId(null);
+    setEditingFolderName("");
+  };
+
+  const handleRenameFolder = async (folder: { groupId: string; name: string; versions: Template[] }) => {
+    const nextName = editingFolderName.trim();
+    if (!nextName) {
+      setRenameError("กรุณากรอกชื่อประเภทเอกสาร");
+      return;
+    }
+    if (nextName === folder.name) {
+      cancelRenameFolder();
+      return;
+    }
+
+    setRenamingFolderId(folder.groupId);
+    setRenameMessage("");
+    setRenameError("");
+    setDeleteMessage("");
+    setDeleteError("");
+    setStatusMessage("");
+    setStatusError("");
+
+    try {
+      await Promise.all(folder.versions.map((template) => updateTemplateApi(template.id, { documentType: nextName })));
+      const versionIds = new Set(folder.versions.map((template) => template.id));
+      setTemplates((current) => current.map((template) => (versionIds.has(template.id) ? { ...template, documentType: nextName } : template)));
+      setExpandedFolderIds((current) => {
+        const next = new Set(current);
+        next.delete(folder.groupId);
+        next.add(nextName);
+        return next;
+      });
+      setRenameMessage(`เปลี่ยนชื่อประเภทเอกสารเป็น "${nextName}" เรียบร้อยแล้ว`);
+      cancelRenameFolder();
+    } catch (error) {
+      console.warn("Template folder rename failed.", error);
+      setRenameError(error instanceof Error ? error.message : "เปลี่ยนชื่อประเภทเอกสารไม่สำเร็จ");
+    } finally {
+      setRenamingFolderId(null);
+    }
   };
 
   const handleChangeTemplateStatus = async (template: Template, nextStatus: TemplateStatus) => {
@@ -274,6 +340,13 @@ export default function AdminTemplatesPage() {
       return;
     }
 
+    const documentType = manualCreationType === "new_template" ? newTemplateType.trim() : selectedExistingDocumentType.trim();
+    const requestTitle = manualCreationType === "new_template" ? newTemplateName.trim() : `${documentType} Version ใหม่`;
+    if (!documentType || !requestTitle) {
+      setCreateRequestError(manualCreationType === "new_template" ? "กรุณากรอกชื่อ Template และประเภทเอกสารก่อนอัปโหลด" : "กรุณาเลือกประเภทเอกสารก่อนอัปโหลด");
+      return;
+    }
+
     const acceptedFiles = Array.from(files).filter((file) => file.type.startsWith("image/") || isPdfFile(file));
     if (acceptedFiles.length === 0) {
       setCreateRequestError("กรุณาเลือกไฟล์รูปภาพหรือ PDF");
@@ -288,11 +361,9 @@ export default function AdminTemplatesPage() {
     setStatusError("");
 
     try {
-      const firstFile = acceptedFiles[0];
-      const requestTitle = firstFile.name.replace(/\.[^.]+$/, "") || "Template ใหม่";
       const request = await createTemplateRequest({
         requestTitle,
-        documentType: newTemplateType.trim() || "เอกสารทั่วไป",
+        documentType,
         requestMode: "image_only",
         pageCount: 1,
         userNote: "สร้างโดยผู้ดูแลระบบจากหน้า Template",
@@ -309,6 +380,8 @@ export default function AdminTemplatesPage() {
       }
 
       setNewTemplateType("");
+      setNewTemplateName("");
+      setSelectedExistingDocumentType("");
       setIsCreateModalOpen(false);
       router.push(`/admin/requests/${request.id}?creationType=${manualCreationType}`);
     } catch (error) {
@@ -506,6 +579,48 @@ export default function AdminTemplatesPage() {
                 </div>
               </button>
 
+              <div className="flex justify-end border-t border-slate-100 px-4 py-2">
+                {editingFolderId === folder.groupId ? (
+                  <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
+                    <input
+                      type="text"
+                      value={editingFolderName}
+                      onChange={(event) => setEditingFolderName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void handleRenameFolder(folder);
+                        }
+                        if (event.key === "Escape") cancelRenameFolder();
+                      }}
+                      disabled={renamingFolderId === folder.groupId}
+                      autoFocus
+                      className="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => void handleRenameFolder(folder)} disabled={renamingFolderId === folder.groupId} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-black text-white disabled:bg-slate-300">
+                        {renamingFolderId === folder.groupId ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                        บันทึก
+                      </button>
+                      <button type="button" onClick={cancelRenameFolder} disabled={renamingFolderId === folder.groupId} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600">
+                        <X size={14} />
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startRenameFolder(folder)}
+                    disabled={loadStatus !== "loaded" || renamingFolderId === folder.groupId}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                  >
+                    <Pencil size={14} />
+                    เปลี่ยนชื่อประเภทเอกสาร
+                  </button>
+                )}
+              </div>
+
               {isExpanded && (
                 <div className="border-t border-slate-100 bg-slate-50 p-3">
                   <div className="grid gap-3 lg:grid-cols-2">
@@ -567,7 +682,7 @@ export default function AdminTemplatesPage() {
                                   type="button"
                                   onClick={() => startRenameTemplate(template)}
                                   disabled={loadStatus !== "loaded" || deletingTemplateId === template.id || statusUpdatingTemplateId === template.id || renamingTemplateId === template.id}
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:bg-slate-100 disabled:text-slate-300"
+                                  className="hidden"
                                   title="เปลี่ยนชื่อ Template"
                                   aria-label={`เปลี่ยนชื่อ ${template.name}`}
                                 >
@@ -582,7 +697,9 @@ export default function AdminTemplatesPage() {
 
                             <div className="flex flex-wrap gap-2">
                               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-                              <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+                              <ActionButton href={template.status === "active" ? `/admin/templates/${template.id}/edit` : `/admin/templates/${template.id}/test`}>
+                                {template.status === "active" ? "อัปเดต Template" : "ตรวจสอบก่อนเผยแพร่"}
+                              </ActionButton>
                               <label className="min-w-[150px]">
                                 <span className="sr-only">Template status</span>
                                 <select
@@ -715,7 +832,9 @@ export default function AdminTemplatesPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <ActionButton href={`/admin/templates/${template.id}/edit`} tone="primary">แก้ไข</ActionButton>
-              <ActionButton href={`/admin/templates/${template.id}/test`}>ตรวจสอบก่อนเผยแพร่</ActionButton>
+              <ActionButton href={template.status === "active" ? `/admin/templates/${template.id}/edit` : `/admin/templates/${template.id}/test`}>
+                {template.status === "active" ? "อัปเดต Template" : "ตรวจสอบก่อนเผยแพร่"}
+              </ActionButton>
               <label className="min-w-[170px]">
                 <span className="sr-only">Template status</span>
                 <select
@@ -805,19 +924,50 @@ export default function AdminTemplatesPage() {
                 </label>
               ))}
 
-              <label className="block space-y-1.5">
-                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร</span>
-                <input
-                  type="text"
-                  value={newTemplateType}
-                  onChange={(event) => setNewTemplateType(event.target.value)}
-                  placeholder="เช่น Invoice, ใบสมัคร, ใบรับรอง"
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </label>
+              {manualCreationType === "new_template" ? (
+                <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อ Template</span>
+                    <input
+                      type="text"
+                      value={newTemplateName}
+                      onChange={(event) => setNewTemplateName(event.target.value)}
+                      placeholder="เช่น ใบสมัครสมาชิก Version หลัก"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร / โฟลเดอร์</span>
+                    <input
+                      type="text"
+                      value={newTemplateType}
+                      onChange={(event) => setNewTemplateType(event.target.value)}
+                      placeholder="เช่น Invoice, ใบสมัคร, ใบรับรอง"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <label className="block space-y-1.5 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">เลือกประเภทเอกสารเดิม</span>
+                  <select
+                    value={selectedExistingDocumentType}
+                    onChange={(event) => setSelectedExistingDocumentType(event.target.value)}
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="">เลือกโฟลเดอร์ประเภทเอกสาร</option>
+                    {existingDocumentTypes.map((documentType) => (
+                      <option key={documentType} value={documentType}>
+                        {documentType}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               {createRequestError && <InlineState tone="danger" message={createRequestError} />}
 
+              {canUploadCreateReference ? (
               <label
                 className={`flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 text-center transition-colors ${
                   isCreatingRequest || loadStatus !== "loaded"
@@ -840,6 +990,11 @@ export default function AdminTemplatesPage() {
                   className="sr-only"
                 />
               </label>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs font-bold text-slate-500">
+                  กรอกข้อมูลให้ครบก่อนอัปโหลดไฟล์อ้างอิง
+                </div>
+              )}
             </div>
           </div>
         </div>

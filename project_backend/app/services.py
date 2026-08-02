@@ -2547,7 +2547,54 @@ class TemplateRequestService:
 
 class AdminTemplateService:
     def dashboard(self) -> Dict[str, Any]:
-        return {"template_count": 0, "pending_request_count": 0, "status": "stubbed"}
+        with _connect() as conn:
+            template_status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM templates
+                GROUP BY status
+                """
+            ).fetchall()
+            request_status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM template_requests
+                GROUP BY status
+                """
+            ).fetchall()
+            latest_request_rows = conn.execute(
+                """
+                SELECT *
+                FROM template_requests
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 4
+                """
+            ).fetchall()
+            latest_template_rows = conn.execute(
+                """
+                SELECT *
+                FROM templates
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 4
+                """
+            ).fetchall()
+
+        template_counts = {row["status"]: row["count"] for row in template_status_rows}
+        request_counts = {row["status"]: row["count"] for row in request_status_rows}
+        pending_request_count = sum(request_counts.get(status, 0) for status in ("submitted", "in_review"))
+        rejected_request_count = request_counts.get("rejected", 0)
+        return {
+            "template_count": sum(template_counts.values()),
+            "pending_request_count": pending_request_count,
+            "draft_template_count": template_counts.get("draft", 0),
+            "active_template_count": template_counts.get("active", 0),
+            "rejected_request_count": rejected_request_count,
+            "template_status_counts": template_counts,
+            "request_status_counts": request_counts,
+            "latest_requests": [_request_row_to_api(row) for row in latest_request_rows],
+            "latest_templates": [_template_row_to_api(row) for row in latest_template_rows],
+            "status": "live",
+        }
 
     def create_template(self, payload: TemplateCreate) -> Dict[str, Any]:
         template_id = _stub_id("tpl")

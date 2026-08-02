@@ -833,9 +833,22 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onAddIgnoreRegion={handleAddIgnoreRegion}
               onUpdateIgnoreRegion={handleUpdateIgnoreRegion}
               onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
-              onGenerateEmbedding={() => router.push(`/admin/templates/${templateId}/test`)}
-              onRunTestMode={() => router.push(`/admin/templates/${templateId}/test`)}
+              onGenerateEmbedding={() => {
+                if (selectedTemplate?.status === "active") {
+                  setSaved("อัปเดต Template เรียบร้อยแล้ว");
+                  return;
+                }
+                router.push(`/admin/templates/${templateId}/test`);
+              }}
+              onRunTestMode={() => {
+                if (selectedTemplate?.status === "active") {
+                  setSaved("อัปเดต Template เรียบร้อยแล้ว");
+                  return;
+                }
+                router.push(`/admin/templates/${templateId}/test`);
+              }}
               onBeforeRunTest={waitForPendingFieldSaves}
+              testModeLabel={selectedTemplate?.status === "active" ? "อัปเดต Template" : "Test Mode"}
             />
           )}
         </div>

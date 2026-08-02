@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   BadgeCheck,
@@ -11,26 +11,51 @@ import {
   FilePenLine,
 } from "lucide-react";
 import { AdminTemplateRequest, Template } from "../types/ocr";
-import { fetchTemplateRequests, fetchTemplates } from "./adminApi";
+import { fetchAdminDashboard, fetchTemplateRequests, fetchTemplates } from "./adminApi";
+import { AdminDashboardSummary } from "./adminTypes";
 import { EmptyState, PageHeader, StatusBadge, cardClassName } from "../shared/ui";
 
 export default function AdminDashboard() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [dashboard, setDashboard] = useState<AdminDashboardSummary>({
+    pendingRequests: 0,
+    draftTemplates: 0,
+    activeTemplates: 0,
+    rejectedRequests: 0,
+    templateCount: 0,
+    latestRequests: [],
+    latestTemplates: [],
+  });
 
   useEffect(() => {
     let cancelled = false;
     const loadDashboard = async () => {
       try {
-        const [nextRequests, nextTemplates] = await Promise.all([fetchTemplateRequests(), fetchTemplates()]);
+        const [nextDashboard, nextRequests, nextTemplates] = await Promise.all([fetchAdminDashboard(), fetchTemplateRequests(), fetchTemplates()]);
         if (cancelled) return;
+        setDashboard(nextDashboard);
         setRequests(nextRequests);
         setTemplates(nextTemplates);
       } catch (error) {
         console.warn("Admin dashboard load failed.", error);
         if (cancelled) return;
-        setRequests([]);
-        setTemplates([]);
+        const [nextRequests, nextTemplates] = await Promise.all([
+          fetchTemplateRequests().catch(() => []),
+          fetchTemplates().catch(() => []),
+        ]);
+        if (cancelled) return;
+        setRequests(nextRequests);
+        setTemplates(nextTemplates);
+        setDashboard({
+          pendingRequests: nextRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
+          draftTemplates: nextTemplates.filter((template) => template.status === "draft").length,
+          activeTemplates: nextTemplates.filter((template) => template.status === "active").length,
+          rejectedRequests: nextRequests.filter((request) => request.status === "rejected").length,
+          templateCount: nextTemplates.length,
+          latestRequests: nextRequests.slice(0, 4),
+          latestTemplates: nextTemplates.slice(0, 4),
+        });
       }
     };
     loadDashboard();
@@ -38,16 +63,6 @@ export default function AdminDashboard() {
       cancelled = true;
     };
   }, []);
-
-  const dashboard = useMemo(
-    () => ({
-      pendingRequests: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
-      draftTemplates: templates.filter((template) => template.status === "draft").length,
-      activeTemplates: templates.filter((template) => template.status === "active").length,
-      rejectedRequests: requests.filter((request) => request.status === "rejected").length,
-    }),
-    [requests, templates]
-  );
 
   const stats = [
     ["รอตรวจ", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
@@ -97,7 +112,7 @@ export default function AdminDashboard() {
           title="คำขอล่าสุด"
           subtitle="คำขอสร้าง Template ที่เพิ่งส่งเข้ามา"
           href="/admin/requests"
-          items={requests.slice(0, 4).map((request) => ({
+          items={(dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4)).map((request) => ({
             id: request.id,
             title: request.requestTitle,
             meta: `${request.pageCount} หน้า ? ${request.documentType || "ยังไม่ระบุประเภท"}`,
@@ -111,7 +126,7 @@ export default function AdminDashboard() {
           title="Template ล่าสุด"
           subtitle="Template ที่มีการอัปเดตล่าสุด"
           href="/admin/templates"
-          items={templates.slice(0, 4).map((template) => ({
+          items={(dashboard.latestTemplates.length ? dashboard.latestTemplates : templates.slice(0, 4)).map((template) => ({
             id: template.id,
             title: template.name,
             meta: template.documentType || "ยังไม่ระบุประเภท",

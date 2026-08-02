@@ -574,6 +574,23 @@ export default function AdminDetectionLabPage() {
         </div>
       </div>
 
+      <div className="grid gap-3 md:grid-cols-4">
+        {[
+          ["1", "อัปโหลดเอกสาร", "ใช้ไฟล์ภาพหรือ PDF เหมือนฝั่งผู้ใช้"],
+          ["2", "ค้นหา Template", "เรียก detect-dev และเทียบเฉพาะ Template ที่พร้อมใช้งาน"],
+          ["3", "จับคู่รายหน้า", "PDF หลายหน้าจะเทียบตามหน้าที่ระบบเลือกได้"],
+          ["4", "ใช้ ROI เดิม", "แสดง ROI/Extraction จาก Template ที่ match"],
+        ].map(([step, title, note]) => (
+          <div key={step} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-black text-white">{step}</span>
+              <h3 className="text-xs font-black text-slate-900">{title}</h3>
+            </div>
+            <p className="mt-2 text-[11px] font-semibold leading-5 text-slate-500">{note}</p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">เอกสารสำหรับทดสอบ</h3>
@@ -615,7 +632,7 @@ export default function AdminDetectionLabPage() {
 
         <section className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ผลการค้นหา Template</h3>
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ผลการค้นหา Template ตามกระบวนการผู้ใช้</h3>
             {!result ? (
               <p className="mt-3 rounded-xl bg-slate-50 p-4 text-xs font-semibold text-slate-500">กดเริ่มค้นหาเพื่อดู Template ที่ใกล้เคียงที่สุด</p>
             ) : (
@@ -705,7 +722,7 @@ export default function AdminDetectionLabPage() {
 
               <div className="mt-3">
                 <div>
-                  <section className="mb-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  {false && <section className="mb-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                       <div>
                         <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Image Processing Sequence</h3>
@@ -729,7 +746,7 @@ export default function AdminDetectionLabPage() {
                         />
                       ))}
                     </div>
-                  </section>
+                  </section>}
 
                   {roiPreviewImageUrl && (
                     <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
@@ -771,7 +788,7 @@ export default function AdminDetectionLabPage() {
                       {currentPage.bestCandidate ? `, final score ${formatScore(currentPage.bestCandidate.finalScore ?? currentPage.bestCandidate.score)}` : ""}
                     </div>
                   )}
-                  <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                  {false && <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
                     <summary className="cursor-pointer text-[10px] font-black uppercase tracking-wider text-slate-600">
                       Alignment Debug
                     </summary>
@@ -875,7 +892,7 @@ export default function AdminDetectionLabPage() {
                         )}
                       </div>
                     )}
-                  </details>
+                  </details>}
                 </div>
 
                 <div className="hidden">
