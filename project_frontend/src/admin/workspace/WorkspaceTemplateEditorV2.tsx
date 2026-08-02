@@ -17,6 +17,7 @@ import {
   updateImageVerificationCategory,
   ADMIN_API_BASE_URL,
 } from "../adminApi";
+import TemplateFieldBasicForm from "./TemplateFieldBasicForm";
 
 interface WorkspaceTemplateEditorProps {
   templateId: string;
@@ -944,11 +945,11 @@ export default function WorkspaceTemplateEditorV2({
                   {isTableTestItem(item) && renderTablePreview(item)}
                   {item.anchorType === "text" && renderTextVerificationPreview(item)}
                   {!isTableTestItem(item) && !isImageTestItem(item) && item.anchorType !== "text" && (item.ocrText || item.actualText || item.expectedText) && (
-                    <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
+                    <div className="min-w-0 rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
                       <div className="text-[9px] font-black uppercase text-slate-400">Text Result</div>
-                      <div className="mt-2 space-y-1">
-                        {item.expectedText && <p>Expected: {item.expectedText}</p>}
-                        {(item.ocrText || item.actualText) && <p>Result: {item.ocrText || item.actualText}</p>}
+                      <div className="mt-2 max-h-44 min-w-0 space-y-1 overflow-y-auto rounded bg-slate-50 p-2 text-[11px] leading-5 text-slate-700">
+                        {item.expectedText && <p className="whitespace-pre-wrap break-words">Expected: {item.expectedText}</p>}
+                        {(item.ocrText || item.actualText) && <p className="whitespace-pre-wrap break-words">Result: {item.ocrText || item.actualText}</p>}
                       </div>
                     </div>
                   )}
@@ -1080,11 +1081,19 @@ export default function WorkspaceTemplateEditorV2({
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
             {step === "extraction_fields" ? (
               <>
-                <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <section className="flex min-h-0 flex-1 flex-col space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">ROI ทุกหน้า</h3>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-slate-500">{panelRois.length}</span>
                   </div>
+                  {selectedExtractionField && (
+                    <TemplateFieldBasicForm
+                      field={selectedExtractionField}
+                      onUpdate={onUpdateField}
+                      onDelete={onDeleteField}
+                      compact
+                    />
+                  )}
                   {mode === "extraction_fields" && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-white p-2.5">
                       <button
@@ -1111,7 +1120,7 @@ export default function WorkspaceTemplateEditorV2({
                       )}
                     </div>
                   )}
-                  <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
+                  <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                     {panelRois.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">No ROI on this page.</p>
                     ) : panelRois.map((roi, index) => {

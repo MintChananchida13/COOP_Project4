@@ -9,6 +9,7 @@ interface TemplateFieldBasicFormProps {
   field: TemplateField;
   onUpdate: (fieldId: string, patch: Partial<TemplateField>) => void;
   onDelete: (fieldId: string) => void;
+  compact?: boolean;
 }
 
 const inputClass =
@@ -20,7 +21,7 @@ const roiTypes = [
   { label: "Image", value: "image" as const, icon: ImageIcon },
 ];
 
-export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: TemplateFieldBasicFormProps) {
+export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, compact = false }: TemplateFieldBasicFormProps) {
   const [fieldNameDraft, setFieldNameDraft] = useState(field.fieldName);
   const selectedDataType = field.dataType === "string" || !field.dataType ? "text" : field.dataType;
   const selectedRoiType = selectedDataType === "table" || selectedDataType === "image" ? selectedDataType : "text";
@@ -48,8 +49,8 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: Te
   };
 
   return (
-    <section className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3">
-      <h3 className="text-xs font-black uppercase tracking-wider text-indigo-800">Template Field</h3>
+    <section className={compact ? "space-y-2 rounded-lg border border-indigo-100 bg-white p-2" : "space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3"}>
+      <h3 className="text-xs font-black uppercase tracking-wider text-indigo-800">{compact ? "Field ที่เลือก" : "Template Field"}</h3>
 
       <label className="space-y-1 block">
         <span className="text-[9px] font-black uppercase text-slate-400">Field Name</span>
@@ -87,11 +88,11 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete }: Te
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className={compact ? "grid grid-cols-1 gap-2" : "grid grid-cols-2 gap-2"}>
         <button type="button" onClick={handleSave} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white">
           Save Field
         </button>
-        <button type="button" onClick={() => onDelete(field.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+        <button type="button" onClick={() => onDelete(field.id)} className={`${compact ? "hidden" : ""} rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700`}>
           Delete Field
         </button>
       </div>

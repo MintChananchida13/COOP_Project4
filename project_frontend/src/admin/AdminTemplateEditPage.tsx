@@ -835,14 +835,16 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onDeleteIgnoreRegion={handleDeleteIgnoreRegion}
               onGenerateEmbedding={() => {
                 if (selectedTemplate?.status === "active") {
-                  setSaved("อัปเดต Template เรียบร้อยแล้ว");
+                  window.alert("อัปเดต Template เรียบร้อยแล้ว");
+                  router.push("/admin/templates");
                   return;
                 }
                 router.push(`/admin/templates/${templateId}/test`);
               }}
               onRunTestMode={() => {
                 if (selectedTemplate?.status === "active") {
-                  setSaved("อัปเดต Template เรียบร้อยแล้ว");
+                  window.alert("อัปเดต Template เรียบร้อยแล้ว");
+                  router.push("/admin/templates");
                   return;
                 }
                 router.push(`/admin/templates/${templateId}/test`);
