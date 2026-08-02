@@ -120,6 +120,12 @@ export interface Template {
   category?: string;
   status: TemplateStatus;
   version: number;
+  templateGroupId?: string;
+  versionNumber?: number;
+  baseTemplateId?: string;
+  description?: string;
+  sharedFields?: string[];
+  creationType?: 'new_template' | 'new_version' | string;
   pageCount: number;
   similarityThreshold: number;
   finalConfidenceThreshold: number;

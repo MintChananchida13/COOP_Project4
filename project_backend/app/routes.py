@@ -26,6 +26,7 @@ from .schemas import (
     TemplateRequestUpdate,
     TemplateTestRequest,
     TemplateUpdate,
+    TemplateVersionCreate,
 )
 from .detection_service import detect_template_dev
 from .services import (
@@ -357,6 +358,18 @@ def admin_set_template_request_canonical_image(request_id: str, image_id: str) -
 @router.post("/admin/template-requests/{request_id}/convert-to-template", response_model=ApiResponse)
 def admin_convert_request_to_template(request_id: str) -> ApiResponse:
     return ok(admin_templates.convert_request_to_template(request_id))
+
+
+@router.post("/admin/template-requests/{request_id}/suggest-base-version", response_model=ApiResponse)
+def admin_suggest_template_request_base_version(request_id: str, payload: TemplateVersionCreate) -> ApiResponse:
+    if not payload.base_template_id:
+        raise HTTPException(status_code=400, detail="base_template_id is required")
+    return ok(admin_templates.suggest_base_version_for_request(request_id, payload.base_template_id, payload.similarity_threshold))
+
+
+@router.post("/admin/template-requests/{request_id}/convert-to-version", response_model=ApiResponse)
+def admin_convert_request_to_template_version(request_id: str, payload: TemplateVersionCreate) -> ApiResponse:
+    return ok(admin_templates.create_version_from_request(request_id, payload))
 
 
 @router.post("/admin/template-requests/{request_id}/reject", response_model=ApiResponse)

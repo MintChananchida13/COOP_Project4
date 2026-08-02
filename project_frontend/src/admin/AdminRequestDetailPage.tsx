@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../shared/workspace/BaseWorkspace";
 import PageNavigator from "../shared/workspace/PageNavigator";
@@ -19,13 +19,17 @@ import {
 } from "../shared/workspace/extractionMethods";
 import { AdminTemplateRequest, TemplateRequestPage } from "../types/ocr";
 import {
+  convertTemplateRequestToVersion,
   convertTemplateRequestToTemplate,
   deleteTemplateRequest,
   fetchTemplateRequest,
   fetchTemplateRequestPages,
+  fetchTemplates,
+  suggestTemplateRequestBaseVersion,
   updateTemplateRequest,
   updateTemplateRequestImage,
 } from "./adminApi";
+import { Template } from "../types/ocr";
 
 const toWorkspaceRoi = (
   field: AdminTemplateRequest["requestedFields"][number],
@@ -74,6 +78,7 @@ export default function AdminRequestDetailPage({
   requestId: string;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [request, setRequest] = useState<AdminTemplateRequest | null>(null);
   const [pages, setPages] = useState<TemplateRequestPage[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
@@ -81,6 +86,13 @@ export default function AdminRequestDetailPage({
     DEFAULT_WORKSPACE_IMAGE_METRICS
   );
   const [templateName, setTemplateName] = useState("");
+  const [templateDescription, setTemplateDescription] = useState("");
+  const [sharedFieldsText, setSharedFieldsText] = useState("");
+  const [creationType, setCreationType] = useState<"new_template" | "new_version">("new_template");
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedBaseTemplateId, setSelectedBaseTemplateId] = useState("");
+  const [versionSuggestion, setVersionSuggestion] = useState<Awaited<ReturnType<typeof suggestTemplateRequestBaseVersion>> | null>(null);
+  const [isSuggestingVersion, setIsSuggestingVersion] = useState(false);
   const [adminNote, setAdminNote] = useState("");
   const [loadStatus, setLoadStatus] = useState<
     "loading" | "loaded" | "error"
@@ -104,6 +116,7 @@ export default function AdminRequestDetailPage({
           fetchTemplateRequest(requestId),
           fetchTemplateRequestPages(requestId),
         ]);
+        const templateList = await fetchTemplates();
 
         if (cancelled) return;
 
@@ -114,6 +127,7 @@ export default function AdminRequestDetailPage({
         setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
         setTemplateName(requestDetail.requestTitle || "");
         setAdminNote(requestDetail.adminNote || "");
+        setTemplates(templateList);
         setLoadStatus("loaded");
       } catch (error) {
         console.warn("Admin request detail load failed.", error);
@@ -132,6 +146,12 @@ export default function AdminRequestDetailPage({
       cancelled = true;
     };
   }, [requestId]);
+
+  useEffect(() => {
+    if (searchParams.get("creationType") === "new_version") {
+      setCreationType("new_version");
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const panel = previewPanelRef.current;
@@ -193,6 +213,45 @@ export default function AdminRequestDetailPage({
 
   const primaryDocumentGroup = documentGroups[0];
 
+  const sharedFields = useMemo(
+    () => sharedFieldsText.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean),
+    [sharedFieldsText]
+  );
+
+  const versionsForSelectedTemplate = useMemo(() => {
+    const selected = templates.find((template) => template.id === selectedBaseTemplateId);
+    const groupId = selected?.templateGroupId || selected?.id;
+    return templates
+      .filter((template) => (template.templateGroupId || template.id) === groupId)
+      .sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
+  }, [selectedBaseTemplateId, templates]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (creationType !== "new_version" || !selectedBaseTemplateId || loadStatus !== "loaded") {
+      setVersionSuggestion(null);
+      return;
+    }
+
+    setIsSuggestingVersion(true);
+    setVersionSuggestion(null);
+    suggestTemplateRequestBaseVersion(requestId, selectedBaseTemplateId)
+      .then((result) => {
+        if (!cancelled) setVersionSuggestion(result);
+      })
+      .catch((error) => {
+        console.warn("Base version suggestion failed.", error);
+        if (!cancelled) setVersionSuggestion(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsSuggestingVersion(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [creationType, loadStatus, requestId, selectedBaseTemplateId]);
+
   const workspacePages: WorkspacePage[] = useMemo(() => {
     const sourcePages = primaryDocumentGroup?.pages || [];
 
@@ -227,6 +286,10 @@ export default function AdminRequestDetailPage({
       setActionError("กรุณาระบุชื่อ Template ก่อนสร้าง Template");
       return;
     }
+    if (creationType === "new_version" && !selectedBaseTemplateId) {
+      setActionError("กรุณาเลือก Template เดิมก่อนสร้าง Version ใหม่");
+      return;
+    }
 
     setIsConverting(true);
 
@@ -245,7 +308,17 @@ export default function AdminRequestDetailPage({
           })
         )
       );
-      const result = await convertTemplateRequestToTemplate(request.id);
+      const result =
+        creationType === "new_version"
+          ? await convertTemplateRequestToVersion(request.id, {
+              baseTemplateId: versionSuggestion?.suggested_base_version?.template_id || selectedBaseTemplateId,
+              templateName: nextTemplateName,
+              description: templateDescription,
+              sharedFields,
+              documentType: request.documentType,
+              reuseRoi: Boolean(versionSuggestion?.reuse_roi && versionSuggestion?.suggested_base_version),
+            })
+          : await convertTemplateRequestToTemplate(request.id);
 
       setRequest({
         ...updatedRequest,
@@ -255,7 +328,7 @@ export default function AdminRequestDetailPage({
         pages,
       });
 
-      setActionStatus("สร้าง Template ฉบับร่างเรียบร้อยแล้ว");
+      setActionStatus(creationType === "new_version" ? "สร้าง Template Version ฉบับร่างเรียบร้อยแล้ว" : "สร้าง Template ฉบับร่างเรียบร้อยแล้ว");
       router.push(`/admin/templates/${result.templateId}/edit`);
     } catch (error) {
       console.warn("Template request conversion failed.", error);
@@ -432,6 +505,119 @@ export default function AdminRequestDetailPage({
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
               />
             </label>
+            <label className="mt-3 block space-y-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                รายละเอียด
+              </span>
+              <textarea
+                value={templateDescription}
+                onChange={(event) => setTemplateDescription(event.target.value)}
+                rows={3}
+                placeholder="อธิบายเอกสารหรือเงื่อนไขสำคัญของ Template นี้"
+                className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+              />
+            </label>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+              Creation Type
+            </h3>
+            <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-500">
+              เลือกว่าจะสร้าง Template ใหม่ หรือเพิ่ม Version ให้ Template เดิม
+            </p>
+
+            <div className="mt-3 grid gap-2">
+              {[
+                { value: "new_template", title: "Create New Template", note: "สร้าง Template ใหม่และเริ่ม Version 1" },
+                { value: "new_version", title: "Add New Version", note: "เลือก Template เดิม แล้วให้ระบบช่วยหา Version ที่ใกล้ที่สุดเพื่อ reuse ROI" },
+              ].map((option) => (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${
+                    creationType === option.value ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50 hover:bg-white"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="creationType"
+                    checked={creationType === option.value}
+                    onChange={() => setCreationType(option.value as "new_template" | "new_version")}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block text-xs font-black text-slate-900">{option.title}</span>
+                    <span className="mt-0.5 block text-[11px] font-semibold leading-5 text-slate-500">{option.note}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            {creationType === "new_template" ? (
+              <label className="mt-3 block space-y-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                  Shared Fields
+                </span>
+                <textarea
+                  value={sharedFieldsText}
+                  onChange={(event) => setSharedFieldsText(event.target.value)}
+                  rows={3}
+                  placeholder="เช่น เลขที่เอกสาร, วันที่, ชื่อลูกค้า"
+                  className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
+                />
+                <p className="text-[10px] font-semibold text-slate-400">หนึ่งบรรทัดหรือคั่นด้วย comma ได้</p>
+              </label>
+            ) : (
+              <div className="mt-3 space-y-3">
+                <label className="block space-y-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    Template เดิม
+                  </span>
+                  <select
+                    value={selectedBaseTemplateId}
+                    onChange={(event) => setSelectedBaseTemplateId(event.target.value)}
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="">เลือก Template</option>
+                    {templates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} - Version {template.versionNumber || template.version}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {versionsForSelectedTemplate.length > 0 && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">Current Published Versions</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {versionsForSelectedTemplate.map((template) => (
+                        <span key={template.id} className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-slate-600">
+                          V{template.versionNumber || template.version} {template.status}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+                  {isSuggestingVersion ? (
+                    "กำลังวิเคราะห์ Layout และหา Version ที่ใกล้ที่สุด..."
+                  ) : versionSuggestion?.reuse_roi && versionSuggestion.suggested_base_version ? (
+                    <div className="space-y-1">
+                      <div className="font-black text-emerald-700">Suggested Base Version</div>
+                      <div>Reuse ROI: ใช่</div>
+                      <div>Similarity Score: {Math.round(versionSuggestion.suggested_base_version.similarity_score * 100)}%</div>
+                      <div>Base Template ID: {versionSuggestion.suggested_base_version.template_id}</div>
+                    </div>
+                  ) : selectedBaseTemplateId ? (
+                    <div className="font-bold text-amber-700">No suitable Version found - ระบบจะสร้าง Version ใหม่โดยไม่ clone ROI</div>
+                  ) : (
+                    "เลือก Template เดิมเพื่อเริ่มเปรียบเทียบ Layout"
+                  )}
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -604,7 +790,11 @@ export default function AdminRequestDetailPage({
                 disabled={isConverting || !canConvert}
                 className="ui-stable-action-lg rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
               >
-                {isConverting ? "กำลังสร้าง Template..." : "สร้าง Template จากไฟล์ต้นทาง"}
+                {isConverting
+                  ? "กำลังสร้าง Template..."
+                  : creationType === "new_version"
+                    ? "สร้าง Template Version"
+                    : "Create Version 1"}
               </button>
 
               <button

@@ -106,6 +106,12 @@ interface ApiTemplate {
   category?: string | null;
   status: string;
   version: number;
+  template_group_id?: string | null;
+  version_number?: number | null;
+  base_template_id?: string | null;
+  description?: string | null;
+  shared_fields?: string[] | null;
+  creation_type?: string | null;
   page_count: number;
   similarity_threshold: number;
   final_confidence_threshold: number;
@@ -600,6 +606,12 @@ const mapApiTemplate = (template: ApiTemplate): Template => {
     category: template.category || undefined,
     status: mapTemplateStatus(template.status),
     version: template.version,
+    templateGroupId: template.template_group_id || undefined,
+    versionNumber: template.version_number || template.version,
+    baseTemplateId: template.base_template_id || undefined,
+    description: template.description || undefined,
+    sharedFields: Array.isArray(template.shared_fields) ? template.shared_fields : [],
+    creationType: template.creation_type || undefined,
     pageCount: template.page_count,
     similarityThreshold: template.similarity_threshold,
     finalConfidenceThreshold: template.final_confidence_threshold,
@@ -1752,6 +1764,93 @@ export const convertTemplateRequestToTemplate = async (requestId: string) => {
     templateId,
     status: result.status,
     createdRecords: result.created_records,
+  };
+};
+
+export const suggestTemplateRequestBaseVersion = async (
+  requestId: string,
+  baseTemplateId: string,
+  similarityThreshold = 0.72
+) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/suggest-base-version`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base_template_id: baseTemplateId,
+      similarity_threshold: similarityThreshold,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || `Base version suggestion failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Base version suggestion failed with ${response.status}`);
+  }
+  return json?.data as {
+    request_id: string;
+    template_group_id: string;
+    versions: ApiTemplate[];
+    suggested_base_version?: {
+      template_id: string;
+      template_page_id?: string | null;
+      page_number: number;
+      request_page_id: string;
+      request_page_number: number;
+      similarity_score: number;
+    } | null;
+    reuse_roi: boolean;
+    similarity_threshold: number;
+    message: string;
+  };
+};
+
+export const convertTemplateRequestToVersion = async (
+  requestId: string,
+  payload: {
+    baseTemplateId: string;
+    templateName?: string;
+    description?: string;
+    sharedFields?: string[];
+    documentType?: string;
+    similarityThreshold?: number;
+    reuseRoi?: boolean;
+  }
+) => {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-version`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base_template_id: payload.baseTemplateId,
+      template_name: payload.templateName,
+      description: payload.description,
+      shared_fields: payload.sharedFields || [],
+      document_type: payload.documentType,
+      similarity_threshold: payload.similarityThreshold ?? 0.72,
+      reuse_roi: payload.reuseRoi ?? true,
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = json?.detail || json?.error?.message || `Template version creation failed with ${response.status}`;
+    throw new Error(typeof detail === "string" ? detail : `Template version creation failed with ${response.status}`);
+  }
+  const result = json?.data as ConvertTemplateResponse & {
+    base_template_id?: string;
+    template_group_id?: string;
+    version_number?: number;
+    reuse_roi?: boolean;
+  };
+  const templateId = result?.template_id || result?.converted_template_id;
+  if (!templateId) {
+    throw new Error("Template version creation did not return a template id");
+  }
+  return {
+    templateId,
+    status: result.status,
+    createdRecords: result.created_records,
+    baseTemplateId: result.base_template_id,
+    templateGroupId: result.template_group_id,
+    versionNumber: result.version_number,
+    reuseRoi: Boolean(result.reuse_roi),
   };
 };
 

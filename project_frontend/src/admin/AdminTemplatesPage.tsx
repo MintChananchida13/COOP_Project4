@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, FileImage, Loader2, Pencil, UploadCloud, X } from "lucide-react";
+import { Check, FileImage, Loader2, Pencil, Plus, UploadCloud, X } from "lucide-react";
 import { Template, TemplateStatus } from "../types/ocr";
 import { addTemplateRequestImage, createTemplateRequest, deleteTemplateApi, fetchTemplates, updateTemplateApi, updateTemplateStatus } from "./adminApi";
 import { AdminStatusFilter } from "./adminTypes";
@@ -113,6 +113,8 @@ export default function AdminTemplatesPage() {
   const [renameMessage, setRenameMessage] = useState("");
   const [renameError, setRenameError] = useState("");
   const [newTemplateType, setNewTemplateType] = useState("");
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [manualCreationType, setManualCreationType] = useState<"new_template" | "new_version">("new_template");
   const [isCreatingRequest, setIsCreatingRequest] = useState(false);
   const [createRequestError, setCreateRequestError] = useState("");
 
@@ -275,7 +277,8 @@ export default function AdminTemplatesPage() {
       }
 
       setNewTemplateType("");
-      router.push(`/admin/requests/${request.id}`);
+      setIsCreateModalOpen(false);
+      router.push(`/admin/requests/${request.id}?creationType=${manualCreationType}`);
     } catch (error) {
       console.warn("Admin create template request failed.", error);
       setCreateRequestError(error instanceof Error ? error.message : "สร้าง Template Request ไม่สำเร็จ");
@@ -311,13 +314,31 @@ export default function AdminTemplatesPage() {
 
   return (
     <section className="space-y-4">
+      <div className={`${cardClassName} flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between`}>
+        <div>
+          <h2 className="text-base font-black text-slate-900">สร้าง Template หรือ Version ใหม่</h2>
+          <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+            เลือกประเภทการสร้างก่อนอัปโหลดไฟล์ ระบบจะใช้ flow เดียวกับ Template Request
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsCreateModalOpen(true)}
+          disabled={loadStatus !== "loaded"}
+          className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-xs font-black text-white shadow-sm hover:bg-indigo-700 disabled:bg-slate-300"
+        >
+          <Plus size={16} />
+          Create
+        </button>
+      </div>
+
       <PageHeader
         eyebrow="คลัง Template"
         title="รายการ Template เอกสาร"
         description="จัดการ Template ฉบับร่าง Template ที่ใช้งานจริง และ Template ที่ยังไม่พร้อมใช้งาน การลบข้อมูลจะมีผลกับฐานข้อมูลจริงเท่านั้น"
       />
 
-      <div className={`${cardClassName} overflow-hidden p-0`}>
+      <div className="hidden">
         <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-3 p-5">
             <div>
@@ -557,6 +578,89 @@ export default function AdminTemplatesPage() {
         )}
       </div>
       </div>
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-5">
+              <div>
+                <h2 className="text-base font-black text-slate-900">Select Creation Type</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  เลือกวิธีสร้างก่อนอัปโหลดไฟล์อ้างอิง
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 p-5">
+              {[
+                { value: "new_template", title: "Create New Template", note: "สร้าง Template ใหม่ แล้วสร้าง Version 1" },
+                { value: "new_version", title: "Add New Version", note: "เพิ่ม Version ให้ Template เดิมและให้ระบบช่วย reuse ROI ถ้า Layout ใกล้เคียง" },
+              ].map((option) => (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer gap-3 rounded-xl border p-3 ${
+                    manualCreationType === option.value ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="manualCreationType"
+                    checked={manualCreationType === option.value}
+                    onChange={() => setManualCreationType(option.value as "new_template" | "new_version")}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block text-xs font-black text-slate-900">{option.title}</span>
+                    <span className="mt-0.5 block text-[11px] font-semibold leading-5 text-slate-500">{option.note}</span>
+                  </span>
+                </label>
+              ))}
+
+              <label className="block space-y-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ประเภทเอกสาร</span>
+                <input
+                  type="text"
+                  value={newTemplateType}
+                  onChange={(event) => setNewTemplateType(event.target.value)}
+                  placeholder="เช่น Invoice, ใบสมัคร, ใบรับรอง"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+
+              {createRequestError && <InlineState tone="danger" message={createRequestError} />}
+
+              <label
+                className={`flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 text-center transition-colors ${
+                  isCreatingRequest || loadStatus !== "loaded"
+                    ? "cursor-not-allowed border-slate-200 bg-white text-slate-400"
+                    : "border-indigo-200 bg-indigo-50 text-indigo-700 hover:border-indigo-400"
+                }`}
+              >
+                {isCreatingRequest ? <Loader2 size={28} className="animate-spin" /> : <UploadCloud size={32} />}
+                <span className="mt-3 text-sm font-black">{isCreatingRequest ? "กำลังเตรียม Template Request..." : "Upload Reference Image"}</span>
+                <span className="mt-1 text-xs font-semibold text-slate-500">รองรับ PNG, JPG, WebP และ PDF หลายหน้า</span>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf"
+                  disabled={isCreatingRequest || loadStatus !== "loaded"}
+                  onChange={(event) => {
+                    handleCreateTemplateRequest(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

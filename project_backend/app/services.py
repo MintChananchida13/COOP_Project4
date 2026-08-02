@@ -50,6 +50,7 @@ from .schemas import (
     TemplateRequestUpdate,
     TemplateTestRequest,
     TemplateUpdate,
+    TemplateVersionCreate,
 )
 
 
@@ -86,6 +87,7 @@ def _connect() -> Any:
     _ensure_template_layout_references_table(conn)
     _ensure_requested_field_metadata_columns(conn)
     _ensure_template_matching_weight_columns(conn)
+    _ensure_template_version_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
     ensure_image_verification_categories_table(conn)
@@ -188,6 +190,28 @@ def _ensure_template_matching_weight_columns(conn: Any) -> None:
         conn.execute("ALTER TABLE templates ADD COLUMN text_anchor_weight REAL DEFAULT 0.35")
     if columns and "image_anchor_weight" not in columns:
         conn.execute("ALTER TABLE templates ADD COLUMN image_anchor_weight REAL DEFAULT 0.15")
+    conn.commit()
+
+
+def _ensure_template_version_columns(conn: Any) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(templates)").fetchall()
+    }
+    if columns and "template_group_id" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN template_group_id TEXT")
+    if columns and "version_number" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN version_number INTEGER DEFAULT 1")
+    if columns and "base_template_id" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN base_template_id TEXT")
+    if columns and "description" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN description TEXT")
+    if columns and "shared_fields_json" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN shared_fields_json TEXT")
+    if columns and "creation_type" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN creation_type TEXT DEFAULT 'new_template'")
+    conn.execute("UPDATE templates SET template_group_id = id WHERE template_group_id IS NULL OR template_group_id = ''")
+    conn.execute("UPDATE templates SET version_number = version WHERE version_number IS NULL")
     conn.commit()
 
 
@@ -297,6 +321,11 @@ def _field_row_to_api(row: Any) -> Dict[str, Any]:
 
 def _template_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
+    shared_fields = []
+    try:
+        shared_fields = json.loads(item.get("shared_fields_json") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        shared_fields = []
     return {
         "id": item["id"],
         "name": item["name"],
@@ -304,6 +333,12 @@ def _template_row_to_api(row: Any) -> Dict[str, Any]:
         "category": item["category"],
         "status": item["status"],
         "version": item["version"],
+        "template_group_id": item.get("template_group_id") or item["id"],
+        "version_number": item.get("version_number") or item["version"],
+        "base_template_id": item.get("base_template_id"),
+        "description": item.get("description"),
+        "shared_fields": shared_fields if isinstance(shared_fields, list) else [],
+        "creation_type": item.get("creation_type") or "new_template",
         "page_count": item["page_count"],
         "similarity_threshold": item["similarity_threshold"],
         "final_confidence_threshold": item["final_confidence_threshold"],
@@ -2521,11 +2556,12 @@ class AdminTemplateService:
                 """
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
+                    template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
                     similarity_threshold, final_confidence_threshold,
                     layout_weight, text_anchor_weight, image_anchor_weight, created_by,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -2533,6 +2569,9 @@ class AdminTemplateService:
                     payload.document_type,
                     payload.category,
                     payload.page_count,
+                    template_id,
+                    payload.description,
+                    json.dumps(payload.shared_fields or [], ensure_ascii=False),
                     payload.similarity_threshold,
                     payload.final_confidence_threshold,
                     payload.layout_weight,
@@ -3490,6 +3529,7 @@ class AdminTemplateService:
             "name": "name",
             "document_type": "document_type",
             "category": "category",
+            "description": "description",
             "status": "status",
             "page_count": "page_count",
             "similarity_threshold": "similarity_threshold",
@@ -3500,6 +3540,8 @@ class AdminTemplateService:
             "rejection_reason": "rejection_reason",
         }
         updates = [(column_map[key], value) for key, value in patch.items() if key in column_map]
+        if "shared_fields" in patch:
+            updates.append(("shared_fields_json", json.dumps(patch["shared_fields"] or [], ensure_ascii=False)))
         if updates:
             set_clause = ", ".join(f"{column} = ?" for column, _ in updates)
             values = [value for _, value in updates]
@@ -3847,6 +3889,331 @@ class AdminTemplateService:
     def start_review(self, request_id: str) -> Dict[str, Any]:
         return {"id": request_id, "status": "in_review", "updated_at": _now()}
 
+    def suggest_base_version_for_request(
+        self,
+        request_id: str,
+        template_id: str,
+        similarity_threshold: float = 0.72,
+    ) -> Dict[str, Any]:
+        with _connect() as conn:
+            selected_template = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if selected_template is None:
+                raise HTTPException(status_code=404, detail="Template not found")
+            selected_template = _row_to_dict(selected_template)
+            group_id = selected_template.get("template_group_id") or selected_template["id"]
+            version_rows = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                """
+                SELECT * FROM templates
+                WHERE template_group_id = ? OR id = ?
+                ORDER BY version_number DESC, version DESC, created_at DESC
+                """,
+                (group_id, group_id),
+                ).fetchall()
+            ]
+            request_pages = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                  AND review_status IN ('approved', 'pending')
+                  AND sample_image_url IS NOT NULL
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+                ).fetchall()
+            ]
+            reference_rows = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                """
+                SELECT * FROM template_layout_references
+                WHERE template_id IN (
+                    SELECT id FROM templates WHERE template_group_id = ? OR id = ?
+                )
+                  AND layout_signature_json IS NOT NULL
+                ORDER BY template_id ASC, is_canonical DESC, page_number ASC
+                """,
+                (group_id, group_id),
+                ).fetchall()
+            ]
+
+        query_signatures = []
+        for page in request_pages:
+            signature = _generate_layout_signature_for_source(page["sample_image_url"])
+            if signature:
+                query_signatures.append({"page": page, "signature": signature})
+
+        best: Optional[Dict[str, Any]] = None
+        for query in query_signatures:
+            for reference in reference_rows:
+                reference_signature = signature_from_json(reference["layout_signature_json"])
+                if not reference_signature:
+                    continue
+                comparison = compare_layout_signatures(query["signature"], reference_signature)
+                score = float(comparison.get("score") or comparison.get("similarity") or 0.0)
+                candidate = {
+                    "template_id": reference["template_id"],
+                    "template_page_id": reference.get("template_page_id"),
+                    "page_number": reference["page_number"],
+                    "request_page_id": query["page"]["id"],
+                    "request_page_number": query["page"]["page_number"],
+                    "similarity_score": round(score, 4),
+                    "comparison": comparison,
+                }
+                if best is None or candidate["similarity_score"] > best["similarity_score"]:
+                    best = candidate
+
+        versions = [_template_row_to_api(row) for row in version_rows]
+        suggested = best if best and best["similarity_score"] >= similarity_threshold else None
+        return {
+            "request_id": request_id,
+            "template_group_id": group_id,
+            "versions": versions,
+            "suggested_base_version": suggested,
+            "reuse_roi": bool(suggested),
+            "similarity_threshold": similarity_threshold,
+            "message": "Suggested base version found." if suggested else "No suitable Version found.",
+        }
+
+    def create_version_from_request(self, request_id: str, payload: TemplateVersionCreate) -> Dict[str, Any]:
+        if not payload.base_template_id:
+            raise HTTPException(status_code=400, detail="base_template_id is required for a new Template Version.")
+
+        with _connect() as conn:
+            base_template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (payload.base_template_id,)).fetchone()
+            if base_template_row is None:
+                raise HTTPException(status_code=404, detail="Base template version not found")
+            base_template_row = _row_to_dict(base_template_row)
+            request_row = conn.execute("SELECT * FROM template_requests WHERE id = ?", (request_id,)).fetchone()
+            if request_row is None:
+                raise HTTPException(status_code=404, detail="Template request not found")
+            request_row = _row_to_dict(request_row)
+            request_pages = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+                ).fetchall()
+            ]
+            approved_pages = [page for page in request_pages if page["review_status"] == "approved"]
+            if not approved_pages:
+                approved_pages = [page for page in request_pages if page["sample_image_url"]]
+            if not approved_pages:
+                raise HTTPException(status_code=409, detail="Upload at least one reference image before creating a version.")
+
+            group_id = base_template_row.get("template_group_id") or base_template_row["id"]
+            max_version_row = conn.execute(
+                """
+                SELECT MAX(COALESCE(version_number, version, 1)) AS max_version
+                FROM templates
+                WHERE template_group_id = ? OR id = ?
+                """,
+                (group_id, group_id),
+            ).fetchone()
+            next_version = int(max_version_row["max_version"] or 1) + 1
+            template_id = _stub_id("tpl")
+            shared_fields = payload.shared_fields
+            if not shared_fields:
+                try:
+                    shared_fields = json.loads(base_template_row.get("shared_fields_json") or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    shared_fields = []
+
+            conn.execute(
+                """
+                INSERT INTO templates (
+                    id, name, document_type, category, status, version, page_count,
+                    template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
+                    similarity_threshold, final_confidence_threshold,
+                    layout_weight, text_anchor_weight, image_anchor_weight, created_by,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, 'new_version', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    template_id,
+                    payload.template_name or base_template_row["name"],
+                    payload.document_type or request_row["document_type"] or base_template_row["document_type"],
+                    base_template_row["category"],
+                    next_version,
+                    len(approved_pages),
+                    group_id,
+                    next_version,
+                    payload.base_template_id,
+                    payload.description if payload.description is not None else base_template_row.get("description"),
+                    json.dumps(shared_fields or [], ensure_ascii=False),
+                    base_template_row["similarity_threshold"],
+                    base_template_row["final_confidence_threshold"],
+                    base_template_row.get("layout_weight", 0.50),
+                    base_template_row.get("text_anchor_weight", 0.35),
+                    base_template_row.get("image_anchor_weight", 0.15),
+                    request_row["requested_by"],
+                ),
+            )
+
+            base_pages = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                "SELECT * FROM template_pages WHERE template_id = ? ORDER BY page_number ASC",
+                (payload.base_template_id,),
+                ).fetchall()
+            ]
+            base_fields = [
+                _row_to_dict(row)
+                for row in conn.execute(
+                "SELECT * FROM template_fields WHERE template_id = ? ORDER BY page_number ASC, sort_order ASC, created_at ASC",
+                (payload.base_template_id,),
+                ).fetchall()
+            ]
+            page_id_by_base_page: Dict[str, str] = {}
+            page_id_by_number: Dict[int, str] = {}
+
+            for page_index, source_page in enumerate(approved_pages, start=1):
+                base_page = next((page for page in base_pages if int(page["page_number"]) == page_index), None)
+                page_id = _stub_id("tpl_page")
+                signature = _generate_layout_signature_for_source(source_page["sample_image_url"])
+                signature_json = signature_to_json(signature) if signature else None
+                conn.execute(
+                    """
+                    INSERT INTO template_pages (
+                        id, template_id, page_number, page_name, sample_image_url,
+                        normalized_image_url, layout_signature_json,
+                        similarity_threshold, final_confidence_threshold,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        page_id,
+                        template_id,
+                        page_index,
+                        f"Page {page_index}",
+                        source_page["sample_image_url"],
+                        source_page["sample_image_url"],
+                        signature_json,
+                        base_page["similarity_threshold"] if base_page else base_template_row["similarity_threshold"],
+                        base_page["final_confidence_threshold"] if base_page else base_template_row["final_confidence_threshold"],
+                    ),
+                )
+                if base_page:
+                    page_id_by_base_page[base_page["id"]] = page_id
+                page_id_by_number[page_index] = page_id
+                conn.execute(
+                    """
+                    INSERT INTO template_layout_references (
+                        id, template_id, template_page_id, page_number, image_url,
+                        image_source, review_status, is_canonical, layout_signature_json,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        _stub_id("tpl_ref"),
+                        template_id,
+                        page_id,
+                        page_index,
+                        source_page["sample_image_url"],
+                        source_page.get("image_source", "admin_upload"),
+                        1 if page_index == 1 else 0,
+                        signature_json,
+                    ),
+                )
+
+            cloned_field_count = 0
+            for field in (base_fields if payload.reuse_roi else []):
+                target_page_id = page_id_by_base_page.get(field["template_page_id"]) or page_id_by_number.get(int(field["page_number"]))
+                if not target_page_id:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO template_fields (
+                        id, template_id, template_page_id, page_number,
+                        field_name, display_label,
+                        roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                        data_type, user_selectable, default_selected,
+                        use_for_verification, expected_text, match_type,
+                        required_for_verification, extraction_method,
+                        anchor_text, regex_pattern, roi_padding, sort_order,
+                        verification_weight, image_category,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    """,
+                    (
+                        _stub_id("tpl_field"),
+                        template_id,
+                        target_page_id,
+                        field["page_number"],
+                        field["field_name"],
+                        field["display_label"],
+                        field["roi_x_ratio"],
+                        field["roi_y_ratio"],
+                        field["roi_width_ratio"],
+                        field["roi_height_ratio"],
+                        _normalize_data_type(field.get("data_type")),
+                        field["user_selectable"],
+                        field["default_selected"],
+                        field["use_for_verification"],
+                        field["expected_text"],
+                        field["match_type"],
+                        field["required_for_verification"],
+                        _normalize_extraction_method(field.get("extraction_method")),
+                        field["anchor_text"],
+                        field["regex_pattern"],
+                        field["roi_padding"],
+                        field["sort_order"],
+                        field.get("verification_weight", 1.0),
+                        field.get("image_category"),
+                    ),
+                )
+                cloned_field_count += 1
+
+            conn.execute(
+                """
+                UPDATE template_requests
+                SET status = 'converted_to_template',
+                    converted_template_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id, request_id),
+            )
+            conn.commit()
+
+        return {
+            "template_request_id": request_id,
+            "converted_template_id": template_id,
+            "template_id": template_id,
+            "base_template_id": payload.base_template_id,
+            "template_group_id": group_id,
+            "version_number": next_version,
+            "reuse_roi": cloned_field_count > 0,
+            "status": "version_created",
+            "created_records": {
+                "templates": 1,
+                "template_pages": len(approved_pages),
+                "template_fields": cloned_field_count,
+                "template_layout_references": len(approved_pages),
+            },
+        }
+
     def convert_request_to_template(self, request_id: str) -> Dict[str, Any]:
         template_id = _stub_id("tpl")
         created_template_page_ids: Dict[int, str] = {}
@@ -3920,16 +4287,20 @@ class AdminTemplateService:
                 """
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
+                    template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
                     similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, NULL, 'draft', 1, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, NULL, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
                     request_row["request_title"],
                     request_row["document_type"],
                     len(template_pages_source),
+                    template_id,
+                    _row_to_dict(request_row).get("admin_note"),
+                    json.dumps([], ensure_ascii=False),
                 ),
             )
 

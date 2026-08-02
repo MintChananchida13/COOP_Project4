@@ -115,6 +115,8 @@ class TemplateCreate(BaseModel):
     name: str
     document_type: Optional[str] = None
     category: Optional[str] = None
+    description: Optional[str] = None
+    shared_fields: List[str] = Field(default_factory=list)
     page_count: int = Field(default=1, ge=1)
     similarity_threshold: float = Field(default=0.75, ge=0, le=1)
     final_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
@@ -128,6 +130,8 @@ class TemplateUpdate(BaseModel):
     name: Optional[str] = None
     document_type: Optional[str] = None
     category: Optional[str] = None
+    description: Optional[str] = None
+    shared_fields: Optional[List[str]] = None
     status: Optional[str] = None
     page_count: Optional[int] = Field(default=None, ge=1)
     similarity_threshold: Optional[float] = Field(default=None, ge=0, le=1)
@@ -136,6 +140,17 @@ class TemplateUpdate(BaseModel):
     text_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
     image_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
     rejection_reason: Optional[str] = None
+
+
+class TemplateVersionCreate(BaseModel):
+    request_id: Optional[str] = None
+    base_template_id: Optional[str] = None
+    template_name: Optional[str] = None
+    description: Optional[str] = None
+    shared_fields: List[str] = Field(default_factory=list)
+    document_type: Optional[str] = None
+    similarity_threshold: float = Field(default=0.72, ge=0, le=1)
+    reuse_roi: bool = True
 
 
 class TemplatePageCreate(BaseModel):
