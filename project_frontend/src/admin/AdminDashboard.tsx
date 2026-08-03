@@ -53,6 +53,7 @@ const formatDateTime = (value?: string) => {
 export default function AdminDashboard() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [dashboard, setDashboard] = useState<AdminDashboardSummary>({
     pendingRequests: 0,
     draftTemplates: 0,
@@ -66,23 +67,44 @@ export default function AdminDashboard() {
   useEffect(() => {
     let cancelled = false;
     const loadDashboard = async () => {
+      setLoadStatus("loading");
       try {
-        const [nextDashboard, nextRequests, nextTemplates] = await Promise.all([fetchAdminDashboard(), fetchTemplateRequests(), fetchTemplates()]);
+        const [dashboardResult, requestsResult, templatesResult] = await Promise.allSettled([
+          fetchAdminDashboard(),
+          fetchTemplateRequests(),
+          fetchTemplates(),
+        ]);
         if (cancelled) return;
-        setDashboard(mergeDashboardWithLists(nextDashboard, nextRequests, nextTemplates));
+
+        const nextRequests = requestsResult.status === "fulfilled" ? requestsResult.value : [];
+        const nextTemplates = templatesResult.status === "fulfilled" ? templatesResult.value : [];
+        const listDashboard = buildDashboardFromLists(nextRequests, nextTemplates);
+        const nextDashboard = dashboardResult.status === "fulfilled"
+          ? mergeDashboardWithLists(dashboardResult.value, nextRequests, nextTemplates)
+          : listDashboard;
+
         setRequests(nextRequests);
         setTemplates(nextTemplates);
+        setDashboard(nextDashboard);
+        setLoadStatus(requestsResult.status === "fulfilled" || templatesResult.status === "fulfilled" ? "loaded" : "error");
+
+        if (dashboardResult.status === "rejected") console.warn("Admin dashboard summary load failed.", dashboardResult.reason);
+        if (requestsResult.status === "rejected") console.warn("Template request list load failed.", requestsResult.reason);
+        if (templatesResult.status === "rejected") console.warn("Template list load failed.", templatesResult.reason);
       } catch (error) {
         console.warn("Admin dashboard load failed.", error);
         if (cancelled) return;
-        const [nextRequests, nextTemplates] = await Promise.all([
+        const [nextRequests, nextTemplates] = await Promise.allSettled([
           fetchTemplateRequests().catch(() => []),
           fetchTemplates().catch(() => []),
         ]);
         if (cancelled) return;
-        setRequests(nextRequests);
-        setTemplates(nextTemplates);
-        setDashboard(buildDashboardFromLists(nextRequests, nextTemplates));
+        const safeRequests = nextRequests.status === "fulfilled" ? nextRequests.value : [];
+        const safeTemplates = nextTemplates.status === "fulfilled" ? nextTemplates.value : [];
+        setRequests(safeRequests);
+        setTemplates(safeTemplates);
+        setDashboard(buildDashboardFromLists(safeRequests, safeTemplates));
+        setLoadStatus(safeRequests.length > 0 || safeTemplates.length > 0 ? "loaded" : "error");
       }
     };
     loadDashboard();
@@ -132,6 +154,17 @@ export default function AdminDashboard() {
           </div>
         ))}
       </div>
+
+      {loadStatus === "loading" && (
+        <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500 shadow-sm">
+          กำลังโหลดข้อมูลล่าสุดจาก Backend...
+        </div>
+      )}
+      {loadStatus === "error" && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-700 shadow-sm">
+          โหลดข้อมูล Dashboard ไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ Backend แล้วลองใหม่
+        </div>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <DashboardList

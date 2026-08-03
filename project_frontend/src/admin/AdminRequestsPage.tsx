@@ -112,15 +112,15 @@ export default function AdminRequestsPage() {
         </div>
       )}
 
-      {requests.length === 0 ? (
+      {loadStatus === "loaded" && requests.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
           ยังไม่มีคำขอสร้าง Template
         </div>
-      ) : filteredRequests.length === 0 ? (
+      ) : loadStatus === "loaded" && filteredRequests.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
           ไม่พบคำขอในสถานะนี้
         </div>
-      ) : (
+      ) : loadStatus === "loaded" ? (
         <div className="grid gap-3">
           {filteredRequests.map((request) => (
             <article
@@ -168,7 +168,7 @@ export default function AdminRequestsPage() {
             </article>
           ))}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
