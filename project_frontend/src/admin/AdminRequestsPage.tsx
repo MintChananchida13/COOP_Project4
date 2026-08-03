@@ -6,7 +6,7 @@ import { AdminTemplateRequest } from "../types/ocr";
 import { EmptyState, InlineState, LoadingState, StatusBadge, cardClassName } from "../shared/ui";
 import { fetchTemplateRequests } from "./adminApi";
 
-type RequestFilter = "pending" | "converted" | "rejected" | "all";
+type RequestFilter = "pending" | "rejected";
 type LoadStatus = "loading" | "loaded" | "error";
 
 const formatDate = (value?: string) => {
@@ -17,16 +17,14 @@ const formatDate = (value?: string) => {
 };
 
 const filterOptions: { value: RequestFilter; label: string }[] = [
-  { value: "all", label: "ทั้งหมด" },
   { value: "pending", label: "รอตรวจสอบ" },
-  { value: "converted", label: "สร้าง Template แล้ว" },
   { value: "rejected", label: "ปฏิเสธ" },
 ];
 
 export default function AdminRequestsPage() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
-  const [filter, setFilter] = useState<RequestFilter>("all");
+  const [filter, setFilter] = useState<RequestFilter>("pending");
 
   useEffect(() => {
     let cancelled = false;
@@ -54,14 +52,11 @@ export default function AdminRequestsPage() {
   }, []);
 
   const counts: Record<RequestFilter, number> = {
-    all: requests.length,
     pending: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
-    converted: requests.filter((request) => request.status === "converted").length,
     rejected: requests.filter((request) => request.status === "rejected").length,
   };
 
   const filteredRequests = requests.filter((request) => {
-    if (filter === "all") return true;
     if (filter === "pending") return request.status === "submitted" || request.status === "in_review";
     return request.status === filter;
   });
@@ -77,7 +72,7 @@ export default function AdminRequestsPage() {
             </p>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2">
             {filterOptions.map((option) => (
               <button
                 key={option.value}
@@ -111,7 +106,7 @@ export default function AdminRequestsPage() {
       )}
 
       {loadStatus === "loaded" && requests.length > 0 && filteredRequests.length === 0 && (
-        <EmptyState title="ไม่พบคำขอในสถานะนี้" message="ลองเปลี่ยนตัวกรองเป็นทั้งหมดเพื่อดูรายการคำขอที่มีอยู่" />
+        <EmptyState title="ไม่พบคำขอในสถานะนี้" message="ลองเปลี่ยนตัวกรองด้านบนเพื่อดูรายการคำขอที่มีอยู่" />
       )}
 
       {loadStatus === "loaded" && filteredRequests.length > 0 && (

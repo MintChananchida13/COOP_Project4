@@ -1,7 +1,7 @@
 ﻿"use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, Loader2, ScanSearch } from "lucide-react";
-import { SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, GripVertical, Loader2, ScanSearch } from "lucide-react";
+import { DragEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../../shared/workspace/roiGeometry";
@@ -300,6 +300,7 @@ export default function WorkspaceTemplateEditorV2({
   const [autoDetectStatus, setAutoDetectStatus] = useState("");
   const [autoDetectError, setAutoDetectError] = useState("");
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [draggingFieldId, setDraggingFieldId] = useState<string | null>(null);
   const [imageCategories, setImageCategories] = useState<ImageVerificationCategory[]>([]);
   const [categoryError, setCategoryError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -368,12 +369,20 @@ export default function WorkspaceTemplateEditorV2({
   const textAnchorsMissingExpected = verificationAnchors.filter(
     (anchor) => anchor.dataType !== "image" && !String(anchor.expectedText || "").trim()
   );
-  const verificationAnchorsReady = verificationAnchors.length > 0 && textAnchorsMissingExpected.length === 0;
+  const imageAnchorsMissingCategory = verificationAnchors.filter(
+    (anchor) => anchor.dataType === "image" && fieldImageCategories(anchor.imageCategory).length === 0
+  );
+  const verificationAnchorsReady =
+    verificationAnchors.length > 0 &&
+    textAnchorsMissingExpected.length === 0 &&
+    imageAnchorsMissingCategory.length === 0;
   const verificationBlockedMessage =
     verificationAnchors.length === 0
       ? "ต้องสร้าง Verification Anchor อย่างน้อย 1 รายการก่อนเข้าสู่ Test Mode"
       : textAnchorsMissingExpected.length > 0
         ? `กรุณากรอก Expected Text ให้ครบ (${textAnchorsMissingExpected.length} รายการ)`
+        : imageAnchorsMissingCategory.length > 0
+          ? `กรุณาเลือกประเภทภาพให้ Anchor รูปภาพให้ครบ (${imageAnchorsMissingCategory.length} รายการ)`
         : "";
   const extractionTestSignature = useMemo(
     () =>
@@ -427,8 +436,9 @@ export default function WorkspaceTemplateEditorV2({
     onUpdateField(selectedAnchor.id, { fieldName: anchorNameDraft, displayLabel: anchorNameDraft });
   };
 
-  const selectField = (field: TemplateField) => {
-    setSelectedId(stableNumericId(`${isAnchor(field) ? "anchor" : "field"}:${field.id}`));
+  const selectField = (field: TemplateField, toggle = true) => {
+    const nextId = stableNumericId(`${isAnchor(field) ? "anchor" : "field"}:${field.id}`);
+    setSelectedId((previous) => (toggle && previous === nextId ? null : nextId));
     if (field.pageNumber - 1 !== currentPage) onPageChange(field.pageNumber - 1);
   };
 
@@ -646,28 +656,31 @@ export default function WorkspaceTemplateEditorV2({
     );
   };
 
-  const moveExtractionFieldOrder = (fieldId: string, direction: -1 | 1) => {
-    const currentIndex = currentPageExtractionFields.findIndex((field) => field.id === fieldId);
-    const nextIndex = currentIndex + direction;
-    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentPageExtractionFields.length) return;
+  const reorderFieldsByDrag = (items: TemplateField[], draggedFieldId: string, targetFieldId: string) => {
+    if (draggedFieldId === targetFieldId) return;
+    const fromIndex = items.findIndex((field) => field.id === draggedFieldId);
+    const toIndex = items.findIndex((field) => field.id === targetFieldId);
+    if (fromIndex < 0 || toIndex < 0) return;
 
-    const nextOrder = [...currentPageExtractionFields];
-    const [field] = nextOrder.splice(currentIndex, 1);
-    nextOrder.splice(nextIndex, 0, field);
+    const nextOrder = [...items];
+    const [draggedField] = nextOrder.splice(fromIndex, 1);
+    nextOrder.splice(toIndex, 0, draggedField);
     onReorderFields(nextOrder.map((item) => item.id));
-    selectField(field);
+    selectField(draggedField, false);
   };
 
-  const moveAnchorOrder = (anchorId: string, direction: -1 | 1) => {
-    const currentIndex = currentPageAnchors.findIndex((anchor) => anchor.id === anchorId);
-    const nextIndex = currentIndex + direction;
-    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentPageAnchors.length) return;
+  const handleFieldDragStart = (event: DragEvent<HTMLDivElement>, fieldId: string) => {
+    setDraggingFieldId(fieldId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", fieldId);
+  };
 
-    const nextOrder = [...currentPageAnchors];
-    const [anchor] = nextOrder.splice(currentIndex, 1);
-    nextOrder.splice(nextIndex, 0, anchor);
-    onReorderFields(nextOrder.map((item) => item.id));
-    selectField(anchor);
+  const handleFieldDrop = (event: DragEvent<HTMLDivElement>, targetField: TemplateField, items: TemplateField[]) => {
+    event.preventDefault();
+    const draggedFieldId = event.dataTransfer.getData("text/plain") || draggingFieldId;
+    setDraggingFieldId(null);
+    if (!draggedFieldId) return;
+    reorderFieldsByDrag(items, draggedFieldId, targetField.id);
   };
 
   const saveCategoryDraft = async (value: string) => {
@@ -1095,7 +1108,7 @@ export default function WorkspaceTemplateEditorV2({
               : amber ? "bg-white border-amber-200 text-amber-700 font-bold" : "bg-white border-indigo-200 text-indigo-700 font-bold"
           }`;
         }}
-        rightPanelRenderer={({ currentPageRois: panelRois, setSelectedId: selectRoi }) => (
+        rightPanelRenderer={({ currentPageRois: panelRois }) => (
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
             {step === "extraction_fields" ? (
@@ -1148,39 +1161,36 @@ export default function WorkspaceTemplateEditorV2({
                       const sourceField = currentPageExtractionFields.find((field) => field.id === (roi as AdminRoi).sourceId);
                       const isSelected = selectedId === roi.id;
                       return (
-                        <div key={roi.id} className={`rounded-lg border bg-white ${isSelected ? "border-indigo-300 shadow-sm" : "border-slate-200 hover:bg-slate-50"}`}>
+                        <div
+                          key={roi.id}
+                          draggable={Boolean(sourceField)}
+                          onDragStart={(event) => sourceField && handleFieldDragStart(event, sourceField.id)}
+                          onDragOver={(event) => {
+                            if (sourceField && draggingFieldId && draggingFieldId !== sourceField.id) event.preventDefault();
+                          }}
+                          onDrop={(event) => sourceField && handleFieldDrop(event, sourceField, currentPageExtractionFields)}
+                          onDragEnd={() => setDraggingFieldId(null)}
+                          className={`rounded-lg border bg-white ${
+                            draggingFieldId === sourceField?.id
+                              ? "border-indigo-400 opacity-60"
+                              : isSelected
+                                ? "border-indigo-300 shadow-sm"
+                                : "border-slate-200 hover:bg-slate-50"
+                          }`}
+                        >
                           <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] font-bold">
-                            <button type="button" onClick={() => selectRoi(roi.id)} className={`min-w-0 flex-1 truncate text-left ${isSelected ? "text-indigo-800" : "text-slate-600"}`}>
+                            {sourceField && (
+                              <span className="inline-flex h-7 w-6 shrink-0 cursor-grab items-center justify-center rounded-md text-slate-400 active:cursor-grabbing" title="ลากเพื่อจัดลำดับ">
+                                <GripVertical size={14} />
+                              </span>
+                            )}
+                            <button type="button" onClick={() => setSelectedId(isSelected ? null : roi.id)} className={`min-w-0 flex-1 truncate text-left ${isSelected ? "text-indigo-800" : "text-slate-600"}`}>
                               <span className="mr-1 text-slate-400">{index + 1}.</span>
                               {sourceField?.displayLabel || sourceField?.fieldName || roi.fieldName}
                             </button>
                             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-black uppercase text-slate-500">
                               {sourceField?.dataType || roi.type || "text"}
                             </span>
-                            {mode === "extraction_fields" && sourceField && (
-                              <div className="flex shrink-0 gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => moveExtractionFieldOrder(sourceField.id, -1)}
-                                  disabled={index === 0}
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                  title="Move field up"
-                                  aria-label="Move field up"
-                                >
-                                  <ChevronUp size={14} strokeWidth={2.25} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => moveExtractionFieldOrder(sourceField.id, 1)}
-                                  disabled={index === panelRois.length - 1}
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                  title="Move field down"
-                                  aria-label="Move field down"
-                                >
-                                  <ChevronDown size={14} strokeWidth={2.25} />
-                                </button>
-                              </div>
-                            )}
                           </div>
                           {isSelected && sourceField && (
                             <div className="border-t border-indigo-100 p-2">
@@ -1226,16 +1236,30 @@ export default function WorkspaceTemplateEditorV2({
                   <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                     {currentPageAnchors.length === 0 ? (
                       <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create a verification region.</p>
-                    ) : currentPageAnchors.map((anchor, index) => {
+                    ) : currentPageAnchors.map((anchor) => {
                       const isSelected = selectedAnchor?.id === anchor.id;
                       return (
                         <div
                           key={anchor.id}
+                          draggable
+                          onDragStart={(event) => handleFieldDragStart(event, anchor.id)}
+                          onDragOver={(event) => {
+                            if (draggingFieldId && draggingFieldId !== anchor.id) event.preventDefault();
+                          }}
+                          onDrop={(event) => handleFieldDrop(event, anchor, currentPageAnchors)}
+                          onDragEnd={() => setDraggingFieldId(null)}
                           className={`overflow-hidden rounded-lg border bg-white text-[11px] font-bold ${
-                            isSelected ? "border-amber-500 bg-amber-100 text-amber-900" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                            draggingFieldId === anchor.id
+                              ? "border-amber-400 opacity-60"
+                              : isSelected
+                                ? "border-amber-500 bg-amber-100 text-amber-900"
+                                : "border-slate-200 text-slate-600 hover:bg-slate-50"
                           }`}
                         >
                           <div className="flex items-center gap-1.5 px-2 py-2">
+                            <span className="inline-flex h-7 w-6 shrink-0 cursor-grab items-center justify-center rounded-md text-slate-400 active:cursor-grabbing" title="ลากเพื่อจัดลำดับ">
+                              <GripVertical size={14} />
+                            </span>
                             <button type="button" onClick={() => selectField(anchor)} className="min-w-0 flex-1 text-left">
                               <div className="truncate">{anchor.displayLabel || anchor.fieldName}</div>
                               <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-wide text-amber-700">
@@ -1248,33 +1272,14 @@ export default function WorkspaceTemplateEditorV2({
                                     </span>
                                   );
                                 })}
+                                {anchorMethod(anchor) === "image_feature" && fieldImageCategories(anchor.imageCategory).length === 0 && (
+                                  <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">ต้องเลือกประเภทภาพ</span>
+                                )}
                                 {anchorMethod(anchor) === "ocr_text" && !String(anchor.expectedText || "").trim() && (
                                   <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">Expected Required</span>
                                 )}
                               </div>
                             </button>
-                            <div className="flex shrink-0 gap-1">
-                              <button
-                                type="button"
-                                onClick={() => moveAnchorOrder(anchor.id, -1)}
-                                disabled={index === 0}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                title="Move anchor up"
-                                aria-label="Move anchor up"
-                              >
-                                <ChevronUp size={14} strokeWidth={2.25} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => moveAnchorOrder(anchor.id, 1)}
-                                disabled={index === currentPageAnchors.length - 1}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none"
-                                title="Move anchor down"
-                                aria-label="Move anchor down"
-                              >
-                                <ChevronDown size={14} strokeWidth={2.25} />
-                              </button>
-                            </div>
                           </div>
                           {isSelected && renderAnchorSettings(anchor)}
                         </div>

@@ -238,6 +238,26 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const currentTemplatePage = selectedTemplatePages[safeCurrentPage];
   const extractionFieldCount = selectedTemplateFields.filter((field) => !field.useForVerification).length;
   const verificationAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification).length;
+  const processSteps = [
+    {
+      id: "adjust",
+      label: "2.0 ปรับภาพ",
+      description: "ตรวจภาพและครอปเอกสาร",
+      status: editorStage === "roi" ? "done" : "active",
+    },
+    {
+      id: "roi",
+      label: "2.1 Workspace ROI",
+      description: "วาด ROI และทดสอบ OCR",
+      status: editorStage === "roi" ? "active" : "next",
+    },
+    {
+      id: "verification",
+      label: "2.2 Verification Anchors",
+      description: "ตั้งจุดยืนยัน Template",
+      status: editorStage === "roi" && verificationAnchorCount > 0 ? "active" : "next",
+    },
+  ] as const;
 
   const setSaved = (message: string) => setSaveStatus(message);
   const setLocalOnly = (message: string) => setSaveStatus(`${message} Backend unavailable; kept local edit.`);
@@ -721,62 +741,44 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
 
   return (
     <section className="space-y-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">Template Info</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">
-              Define page-aware ROI fields from the submitted template images.
-            </p>
-          </div>
-        </div>
-
-        {saveStatus && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{saveStatus}</p>}
-
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <label className="space-y-1">
-            <span className="text-[10px] font-black uppercase text-slate-400">Template name</span>
-            <input
-              value={selectedTemplate.name}
-              onChange={(event) => setSelectedTemplate({ ...selectedTemplate, name: event.target.value })}
-              onBlur={() => persistTemplatePatch({ name: selectedTemplate.name })}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
-            />
-          </label>
-
-          <div className="flex flex-wrap gap-2">
-            <span className="rounded-full bg-slate-100 px-3 py-2 text-[11px] font-black text-slate-600">
-              Status: {selectedTemplate.status}
-            </span>
-            <span className="rounded-full bg-sky-50 px-3 py-2 text-[11px] font-black text-sky-700">
-              Pages: {selectedTemplatePages.length}
-            </span>
-            <span className="rounded-full bg-indigo-50 px-3 py-2 text-[11px] font-black text-indigo-700">
-              Fields: {extractionFieldCount}
-            </span>
-            <span className="rounded-full bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-700">
-              Anchors: {verificationAnchorCount}
-            </span>
-          </div>
-        </div>
-      </div>
+      {saveStatus && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{saveStatus}</p>}
 
       {selectedTemplatePages.length > 0 && (
-        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">กระบวนการเตรียม Template</h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">
+                ทำตามลำดับจากปรับภาพ วาด ROI ทดสอบ OCR แล้วตั้ง Verification Anchors ก่อนเข้าสู่ Test Mode
+              </p>
+            </div>
             <div className="flex flex-wrap gap-2">
-              {[
-                { id: "adjust", label: "2.0 ปรับภาพ", description: "ตรวจภาพและครอปเอกสาร" },
-                { id: "roi", label: "2.1 Workspace ROI", description: "ลากกรอบและกำหนดข้อมูล" },
-              ].map((item) => {
-                const isActive = editorStage === item.id;
-                const isDone = item.id === "adjust" && editorStage === "roi";
+              <span className="rounded-full bg-sky-50 px-3 py-2 text-[11px] font-black text-sky-700">
+                Pages: {selectedTemplatePages.length}
+              </span>
+              <span className="rounded-full bg-indigo-50 px-3 py-2 text-[11px] font-black text-indigo-700">
+                ROI: {extractionFieldCount}
+              </span>
+              <span className="rounded-full bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-700">
+                Anchors: {verificationAnchorCount}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2 md:grid-cols-3">
+            {processSteps.map((item, index) => {
+                const isActive = item.status === "active";
+                const isDone = item.status === "done";
                 return (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setEditorStage(item.id as AdminEditorStage)}
-                    className={`min-h-[56px] rounded-xl border px-4 py-2 text-left transition-colors ${
+                    onClick={() => {
+                      if (item.id === "adjust") setEditorStage("adjust");
+                      if (item.id === "roi") setEditorStage("roi");
+                    }}
+                    disabled={item.id === "verification"}
+                    className={`min-h-[74px] rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-default ${
                       isActive
                         ? "border-indigo-300 bg-indigo-50 text-indigo-800"
                         : isDone
@@ -784,12 +786,16 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                           : "border-slate-200 bg-slate-50 text-slate-600"
                     }`}
                   >
+                    <span className={`mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-black ${
+                      isDone ? "bg-emerald-600 text-white" : isActive ? "bg-indigo-600 text-white" : "bg-white text-slate-400"
+                    }`}>
+                      {index + 1}
+                    </span>
                     <span className="block text-xs font-black">{item.label}</span>
                     <span className="block text-[11px] font-semibold opacity-75">{item.description}</span>
                   </button>
                 );
-              })}
-            </div>
+            })}
           </div>
         </div>
       )}

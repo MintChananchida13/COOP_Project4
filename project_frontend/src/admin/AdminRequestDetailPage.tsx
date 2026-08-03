@@ -276,14 +276,6 @@ export default function AdminRequestDetailPage({
     }
   }, [creationType, selectedBaseTemplate, templateName]);
 
-  const versionsForSelectedTemplate = useMemo(() => {
-    const selected = templates.find((template) => template.id === selectedBaseTemplateId);
-    const groupId = selected?.templateGroupId || selected?.id;
-    return templates
-      .filter((template) => (template.templateGroupId || template.id) === groupId)
-      .sort((a, b) => (b.versionNumber || b.version) - (a.versionNumber || a.version));
-  }, [selectedBaseTemplateId, templates]);
-
   useEffect(() => {
     let cancelled = false;
     if (creationType !== "new_version" || !selectedBaseTemplateId || loadStatus !== "loaded") {
@@ -319,6 +311,11 @@ export default function AdminRequestDetailPage({
       label: `หน้า ${page.pageNumber}`,
     }));
   }, [primaryDocumentGroup]);
+
+  const isAdminUploadedRequest = useMemo(() => {
+    const sourcePages = pages.length > 0 ? pages : request?.pages || [];
+    return sourcePages.length > 0 && sourcePages.every((page) => page.imageSource === "admin_upload");
+  }, [pages, request?.pages]);
 
   const handleConvert = async () => {
     if (!request) return;
@@ -565,29 +562,37 @@ export default function AdminRequestDetailPage({
 
         <aside className="flex flex-col xl:col-span-4 xl:h-[calc(100vh-180px)] xl:min-h-[720px]">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <section className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
-            <div>
-              <h3 className="text-xs font-black uppercase tracking-wider text-indigo-900">
-                Template Info
-              </h3>
-              <p className="mt-1 text-[11px] font-semibold leading-relaxed text-indigo-700">
-                ตั้งชื่อ Template ที่จะสร้างจากไฟล์ต้นทางนี้ ชื่อนี้จะถูกใช้ในคลัง Template และตอนค้นหาเอกสารของผู้ใช้
-              </p>
-            </div>
+          {creationType === "new_version" && (
+            <section className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-wider text-indigo-900">
+                  ชื่อต่อท้าย Version
+                </h3>
+                <p className="mt-1 text-[11px] font-semibold leading-relaxed text-indigo-700">
+                  ต้องตั้งชื่อทุกครั้ง ชื่อเต็มจะขึ้นต้นด้วยชื่อ Template เดิมและต่อด้วยข้อความที่กรอก
+                </p>
+              </div>
 
-            <label className="mt-3 block space-y-1.5">
-              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                ชื่อ Template
-              </span>
-              <input
-                type="text"
-                value={templateName}
-                onChange={(event) => setTemplateName(event.target.value)}
-                placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 outline-none transition-colors focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
-              />
-            </label>
-          </section>
+              <label className="mt-3 block space-y-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                  ชื่อ Version ใหม่
+                </span>
+                <div className="rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
+                  <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-black leading-5 text-slate-500 break-words">
+                    {(selectedBaseTemplateName || "Template เดิม").trim()} -
+                  </div>
+                  <input
+                    type="text"
+                    value={versionNameSuffix}
+                    onChange={(event) => setVersionNameSuffix(event.target.value)}
+                    placeholder="เช่น ปรับฟอร์ม 2026"
+                    className="h-11 w-full px-3 text-sm font-bold text-slate-900 outline-none"
+                    required
+                  />
+                </div>
+              </label>
+            </section>
+          )}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
@@ -717,40 +722,6 @@ export default function AdminRequestDetailPage({
                   </label>
                 )}
 
-                <label className="block space-y-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                    ชื่อต่อท้าย Version
-                  </span>
-                  <div className="flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
-                    <span className="flex max-w-[45%] shrink-0 items-center truncate border-r border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-500">
-                      {(selectedBaseTemplateName || "Template เดิม").trim()} -
-                    </span>
-                    <input
-                      type="text"
-                      value={versionNameSuffix}
-                      onChange={(event) => setVersionNameSuffix(event.target.value)}
-                      placeholder="เช่น ปรับฟอร์ม 2026"
-                      className="h-11 min-w-0 flex-1 px-3 text-xs font-bold text-slate-800 outline-none"
-                    />
-                  </div>
-                  <p className="text-[10px] font-semibold text-slate-400">
-                    ชื่อ Version ใหม่จะขึ้นต้นด้วยชื่อ Template เดิมเสมอ
-                  </p>
-                </label>
-
-                {versionsForSelectedTemplate.length > 0 && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">Current Published Versions</div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {versionsForSelectedTemplate.map((template) => (
-                        <span key={template.id} className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-slate-600">
-                          V{template.versionNumber || template.version} {template.status}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
                   {isSuggestingVersion ? (
                     "กำลังวิเคราะห์ Layout และหา Version ที่ใกล้ที่สุด..."
@@ -761,8 +732,6 @@ export default function AdminRequestDetailPage({
                       <div>Similarity Score: {Math.round(versionSuggestion.suggested_base_version.similarity_score * 100)}%</div>
                       <div>Base Template ID: {versionSuggestion.suggested_base_version.template_id}</div>
                     </div>
-                  ) : selectedBaseTemplateId ? (
-                    <div className="font-bold text-amber-700">No suitable Version found - ระบบจะสร้าง Version ใหม่โดยไม่ clone ROI</div>
                   ) : (
                     "เลือก Template เดิมเพื่อเริ่มเปรียบเทียบ Layout"
                   )}
@@ -770,6 +739,32 @@ export default function AdminRequestDetailPage({
               </div>
             )}
           </section>
+
+          {!isAdminUploadedRequest && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  การดำเนินการ
+                </h3>
+                <p className="mt-1 text-[11px] font-semibold text-slate-400">
+                  ตรวจไฟล์และ ROI ก่อนสร้าง Template
+                </p>
+              </div>
+
+              <label className="block space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  หมายเหตุผู้ดูแล
+                </span>
+                <textarea
+                  value={adminNote}
+                  onChange={(event) => setAdminNote(event.target.value)}
+                  rows={3}
+                  placeholder="หมายเหตุหรือข้อมูลเพิ่มเติมสำหรับการสร้าง Template"
+                  className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
+                />
+              </label>
+            </section>
+          )}
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-start justify-between gap-3">
@@ -833,6 +828,7 @@ export default function AdminRequestDetailPage({
             )}
           </section>
 
+          {!isAdminUploadedRequest && (
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-3 flex h-10 items-center justify-between">
               <div>
@@ -894,33 +890,10 @@ export default function AdminRequestDetailPage({
               )}
             </div>
           </section>
+          )}
           </div>
 
           <section className="shrink-0 rounded-b-xl border border-t-0 border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex h-10 items-center justify-between">
-              <div>
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  การดำเนินการ
-                </h3>
-                <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                  ตรวจไฟล์และ ROI ก่อนสร้าง Template
-                </p>
-              </div>
-            </div>
-
-            <label className="block space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                หมายเหตุผู้ดูแล
-              </span>
-
-              <textarea
-                value={adminNote}
-                onChange={(event) => setAdminNote(event.target.value)}
-                rows={4}
-                placeholder="หมายเหตุหรือข้อมูลเพิ่มเติมสำหรับการสร้าง Template"
-                className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
-              />
-            </label>
 
             {actionStatus && (
               <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">

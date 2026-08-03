@@ -1,13 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, BadgeCheck, CircleX, FileClock, FilePenLine, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowUpRight, BadgeCheck, CircleX, FileClock, FilePenLine } from "lucide-react";
 import { AdminTemplateRequest, Template } from "../types/ocr";
-import { EmptyState, InlineState, LoadingState, StatusBadge } from "../shared/ui";
+import { EmptyState, StatusBadge } from "../shared/ui";
 import { fetchTemplateRequests, fetchTemplates } from "./adminApi";
+import { AdminDashboardSummary } from "./adminTypes";
 
-type LoadStatus = "loading" | "loaded" | "error";
+const buildDashboardFromLists = (nextRequests: AdminTemplateRequest[], nextTemplates: Template[]): AdminDashboardSummary => ({
+  pendingRequests: nextRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
+  draftTemplates: nextTemplates.filter((template) => template.status === "draft").length,
+  activeTemplates: nextTemplates.filter((template) => template.status === "active").length,
+  rejectedRequests: nextRequests.filter((request) => request.status === "rejected").length,
+  templateCount: nextTemplates.length,
+  latestRequests: nextRequests.slice(0, 4),
+  latestTemplates: nextTemplates.slice(0, 4),
+});
 
 const formatDateTime = (value?: string) => {
   if (!value) return "ไม่พบเวลาอัปเดต";
@@ -19,125 +28,123 @@ const formatDateTime = (value?: string) => {
 export default function AdminDashboard() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
+  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
+  const [dashboard, setDashboard] = useState<AdminDashboardSummary>({
+    pendingRequests: 0,
+    draftTemplates: 0,
+    activeTemplates: 0,
+    rejectedRequests: 0,
+    templateCount: 0,
+    latestRequests: [],
+    latestTemplates: [],
+  });
 
   useEffect(() => {
     let cancelled = false;
-
-    const loadDashboardLists = async () => {
+    const loadDashboard = async () => {
       setLoadStatus("loading");
       try {
-        const [persistedRequests, persistedTemplates] = await Promise.all([fetchTemplateRequests(), fetchTemplates()]);
+        const [nextRequests, nextTemplates] = await Promise.all([
+          fetchTemplateRequests(),
+          fetchTemplates(),
+        ]);
         if (cancelled) return;
-        setRequests(persistedRequests);
-        setTemplates(persistedTemplates);
+
+        setRequests(nextRequests);
+        setTemplates(nextTemplates);
+        setDashboard(buildDashboardFromLists(nextRequests, nextTemplates));
         setLoadStatus("loaded");
       } catch (error) {
-        console.warn("Admin dashboard lists load failed.", error);
+        console.warn("Admin dashboard load failed.", error);
         if (cancelled) return;
         setRequests([]);
         setTemplates([]);
+        setDashboard(buildDashboardFromLists([], []));
         setLoadStatus("error");
       }
     };
-
-    loadDashboardLists();
-
+    loadDashboard();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const summary = useMemo(
-    () => ({
-      pendingRequests: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
-      publishedTemplates: templates.filter((template) => template.status === "active").length,
-      draftVersions: templates.filter((template) => template.status === "draft").length,
-      rejectedRequests: requests.filter((request) => request.status === "rejected").length,
-      recentRequests: requests.slice(0, 4),
-      recentTemplates: templates.slice(0, 4),
-    }),
-    [requests, templates]
-  );
-
   const stats = [
-    ["Pending Requests", summary.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
-    ["Published Templates", summary.publishedTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
-    ["Draft Versions", summary.draftVersions, FilePenLine, "bg-sky-50 text-sky-600"],
-    ["Rejected Requests", summary.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
+    ["Pending Requests", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
+    ["Published Templates", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
+    ["Draft Versions", dashboard.draftTemplates, FilePenLine, "bg-sky-50 text-sky-600"],
+    ["Rejected Requests", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
   ] as const;
+
+  const recentRequests = dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4);
+  const recentTemplates = dashboard.latestTemplates.length ? dashboard.latestTemplates : templates.slice(0, 4);
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-xl font-black tracking-tight text-slate-950">Admin Dashboard</h1>
           <p className="mt-1 text-sm font-semibold text-slate-500">ภาพรวมคำขอและ Template ล่าสุดของระบบ OCR</p>
         </div>
-        <Link
-          href="/admin/templates"
-          className="inline-flex w-fit items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-slate-800"
-        >
-          <Plus size={14} />
-          Create
-        </Link>
       </div>
 
-      {loadStatus === "loading" && <LoadingState message="กำลังโหลดข้อมูลจาก Backend..." />}
-      {loadStatus === "error" && (
-        <InlineState tone="warning" message="โหลดข้อมูล Dashboard จาก Backend ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่" />
-      )}
-
-      {loadStatus === "loaded" && (
-        <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {stats.map(([label, value, Icon, tone]) => (
-              <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-500">{label}</p>
-                    <p className="mt-1 text-2xl font-black tracking-tight text-slate-950">{value}</p>
-                  </div>
-                  <div className={`rounded-lg p-2 ${tone}`}>
-                    <Icon size={16} />
-                  </div>
-                </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.map(([label, value, Icon, tone]) => (
+          <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold text-slate-500">{label}</p>
+                <p className="mt-1 text-2xl font-black tracking-tight text-slate-950">{value}</p>
               </div>
-            ))}
+              <div className={`rounded-lg p-2 ${tone}`}>
+                <Icon size={16} />
+              </div>
+            </div>
           </div>
+        ))}
+      </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <DashboardList
-              title="Recent Template Requests"
-              subtitle="คำขอสร้าง Template ที่อัปเดตล่าสุด"
-              href="/admin/requests"
-              items={summary.recentRequests.map((request) => ({
-                id: request.id,
-                title: request.requestTitle,
-                meta: `${request.pageCount} หน้า · ${request.documentType || "ไม่ระบุประเภท"} · ${formatDateTime(request.updatedAt || request.createdAt)}`,
-                status: request.status,
-                tone: "warning",
-              }))}
-              emptyText="ยังไม่มีคำขอ Template"
-            />
-
-            <DashboardList
-              title="Recent Templates"
-              subtitle="Template ที่อัปเดตล่าสุด"
-              href="/admin/templates"
-              items={summary.recentTemplates.map((template) => ({
-                id: template.id,
-                title: template.name,
-                meta: `${template.documentType || "ไม่ระบุประเภท"} · ${template.pageCount} หน้า · ${formatDateTime(template.updatedAt || template.createdAt)}`,
-                status: template.status,
-                tone: "primary",
-                editHref: `/admin/templates/${template.id}/edit`,
-              }))}
-              emptyText="ยังไม่มี Template"
-            />
-          </div>
-        </>
+      {loadStatus === "loading" && (
+        <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500 shadow-sm">
+          กำลังโหลดข้อมูลล่าสุดจาก Backend...
+        </div>
       )}
+      {loadStatus === "error" && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-700 shadow-sm">
+          โหลดข้อมูล Dashboard ไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ Backend แล้วลองใหม่
+        </div>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <DashboardList
+          title="Recent Template Requests"
+          subtitle="คำขอสร้าง Template ที่อัปเดตล่าสุด"
+          href="/admin/requests"
+          items={recentRequests.map((request) => ({
+            id: request.id,
+            title: request.requestTitle,
+            meta: `${request.pageCount} หน้า · ${request.documentType || "ไม่ระบุประเภท"} · ${formatDateTime(request.updatedAt || request.createdAt)}`,
+            status: request.status,
+            tone: "amber",
+          }))}
+          emptyText="ยังไม่มีคำขอ"
+        />
+
+        <DashboardList
+          title="Recent Templates"
+          subtitle="Template ที่อัปเดตล่าสุด"
+          href="/admin/templates"
+          items={recentTemplates.map((template) => ({
+            id: template.id,
+            title: template.name,
+            meta: `${template.documentType || "ไม่ระบุประเภท"} · ${template.pageCount} หน้า · ${formatDateTime(template.updatedAt || template.createdAt)}`,
+            status: template.status,
+            tone: "indigo",
+            editHref: `/admin/templates/${template.id}/edit`,
+          }))}
+          emptyText="ยังไม่มี Template"
+        />
+      </div>
     </section>
   );
 }
@@ -157,7 +164,7 @@ function DashboardList({
     title: string;
     meta: string;
     status: string;
-    tone: "primary" | "warning";
+    tone: "amber" | "indigo";
     editHref?: string;
   }[];
   emptyText: string;
@@ -186,7 +193,7 @@ function DashboardList({
                 <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{item.meta}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <StatusBadge status={item.status} tone={item.tone} />
+                <StatusBadge status={item.status} tone={item.tone === "amber" ? "warning" : "primary"} />
                 {item.editHref && (
                   <Link href={item.editHref} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">
                     แก้ไข
