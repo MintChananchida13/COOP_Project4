@@ -14,14 +14,6 @@ export const ADMIN_API_BASE_URL =
 let templateRequestListCache: AdminTemplateRequest[] | null = null;
 let templateListCache: Template[] | null = null;
 
-const ADMIN_LIST_FETCH_TIMEOUT_MS = 20000;
-
-const fetchAdminListEndpoint = (url: string, init?: RequestInit) => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), ADMIN_LIST_FETCH_TIMEOUT_MS);
-  return fetch(url, { ...init, signal: controller.signal }).finally(() => window.clearTimeout(timeoutId));
-};
-
 const cloneTemplateRequests = (requests: AdminTemplateRequest[]) =>
   requests.map((request) => ({
     ...request,
@@ -916,7 +908,7 @@ export const fetchTemplateRequests = async () => {
     return cloneTemplateRequests(templateRequestListCache);
   }
 
-  const response = await fetchAdminListEndpoint(`${ADMIN_API_BASE_URL}/template-requests`);
+  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`);
   if (!response.ok) {
     throw new Error(`Template request load failed with ${response.status}`);
   }
@@ -929,7 +921,7 @@ export const fetchTemplateRequests = async () => {
 };
 
 export const fetchAdminDashboard = async () => {
-  const response = await fetchAdminListEndpoint(`${ADMIN_API_BASE_URL}/admin/dashboard`, { cache: "no-store" });
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/dashboard`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Admin dashboard load failed with ${response.status}`);
   }
@@ -1200,7 +1192,7 @@ export const fetchTemplates = async () => {
     return cloneTemplates(templateListCache);
   }
 
-  const response = await fetchAdminListEndpoint(`${ADMIN_API_BASE_URL}/admin/templates`);
+  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates`);
   if (!response.ok) {
     throw new Error(`Template list failed with ${response.status}`);
   }
