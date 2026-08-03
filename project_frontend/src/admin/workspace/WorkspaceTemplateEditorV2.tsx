@@ -537,9 +537,9 @@ export default function WorkspaceTemplateEditorV2({
     const method = anchorMethod(anchor);
     return (
       <section className="space-y-3 border-t border-amber-100 bg-amber-50/60 p-3">
-        <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">ROI Settings</h3>
+        <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">การตั้งค่า ROI</h3>
         <label className="space-y-1 block">
-          <span className="text-[9px] font-black uppercase text-slate-400">Name</span>
+          <span className="text-[9px] font-black uppercase text-slate-400">ชื่อ field</span>
           <input
             className={inputClass}
             value={anchorNameDraft}
@@ -883,10 +883,10 @@ export default function WorkspaceTemplateEditorV2({
     const currentSrc = item.currentCropPreviewDataUrl || item.currentCropPreviewUrl || previewSrc;
     const previewItems = referenceSrc
       ? [
-          { label: "Reference ROI", src: referenceSrc },
-          { label: "Current ROI", src: currentSrc },
+          { label: "ROI ต้นฉบับ", src: referenceSrc },
+          { label: "ROI ปัจจุบัน", src: currentSrc },
         ]
-      : [{ label: "ROI Preview", src: currentSrc }];
+      : [{ label: "ROI ที่ตรวจจับได้", src: currentSrc }];
     return (
       <div className="rounded-lg border border-slate-100 bg-white p-2">
         <div className="flex items-center justify-between gap-2">
@@ -917,7 +917,7 @@ export default function WorkspaceTemplateEditorV2({
     if (step === "extraction_fields") return null;
     return (
       <div className="rounded-lg border border-slate-100 bg-white p-2">
-        <div className="text-[9px] font-black uppercase text-slate-400">Predicted</div>
+        <div className="text-[9px] font-black uppercase text-slate-400">ผลลัพธ์รูปภาพ</div>
         <div className="mt-1 rounded-lg bg-sky-50 px-2 py-1.5 text-sm font-black text-sky-700">
           {item.predictedImageCategoryLabel || item.actualText || "-"}
         </div>
@@ -928,18 +928,18 @@ export default function WorkspaceTemplateEditorV2({
   const renderTextVerificationPreview = (item: TemplateStepTestItem) => (
     <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[9px] font-black uppercase text-slate-400">Text Verification</div>
+        <div className="text-[9px] font-black uppercase text-slate-400">การตรวจสอบข้อความ</div>
         <span className={`rounded px-1.5 py-0.5 text-[8px] font-black uppercase ${item.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
           {item.passed ? "Matched" : "Not Matched"}
         </span>
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <div>
-          <div className="text-[9px] font-black uppercase text-slate-400">Expected Text</div>
+          <div className="text-[9px] font-black uppercase text-slate-400">ค่าที่กำหนด</div>
           <div className="mt-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700">{item.expectedText || "-"}</div>
         </div>
         <div>
-          <div className="text-[9px] font-black uppercase text-slate-400">OCR Result</div>
+          <div className="text-[9px] font-black uppercase text-slate-400">ค่าที่ตรวจพบ</div>
           <div className="mt-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700">{item.ocrText || item.actualText || "-"}</div>
         </div>
       </div>
@@ -978,7 +978,7 @@ export default function WorkspaceTemplateEditorV2({
                   {item.anchorType === "text" && renderTextVerificationPreview(item)}
                   {!isTableTestItem(item) && !isImageTestItem(item) && item.anchorType !== "text" && (item.ocrText || item.actualText || item.expectedText) && (
                     <div className="min-w-0 rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
-                      <div className="text-[9px] font-black uppercase text-slate-400">Text Result</div>
+                      <div className="text-[9px] font-black uppercase text-slate-400">ข้อความที่อ่านได้</div>
                       <div className="mt-2 max-h-44 min-w-0 space-y-1 overflow-y-auto rounded bg-slate-50 p-2 text-[11px] leading-5 text-slate-700">
                         {item.expectedText && <p className="whitespace-pre-wrap break-words">Expected: {item.expectedText}</p>}
                         {(item.ocrText || item.actualText) && <p className="whitespace-pre-wrap break-words">Result: {item.ocrText || item.actualText}</p>}
@@ -1038,21 +1038,6 @@ export default function WorkspaceTemplateEditorV2({
   return (
     <>
     <div className="mx-auto max-w-7xl space-y-4 pb-20">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
-              {step === "verification_anchors" ? "2.2 Verification Anchors" : "2.1 Workspace ROI"}
-            </h2>
-            <p className="mt-1 text-xs font-semibold text-slate-500">
-              {step === "verification_anchors"
-                ? "Anchors confirm the template only. They are never returned as extraction results."
-                : "Extraction fields are the data returned to the end user."}
-            </p>
-          </div>
-        </div>
-      </section>
-
       <WorkspaceCustomEditor
         previewUrl={selectedPage?.src || ""}
         image={selectedPage?.src || null}
@@ -1301,12 +1286,12 @@ export default function WorkspaceTemplateEditorV2({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
-              {step === "verification_anchors" ? "Verification Test Result" : "Extraction Test Result"}
+              {step === "verification_anchors" ? "ผลลัพธ์การทดสอบ Verification" : "ผลลัพธ์การทดสอบ Extraction"}
             </h3>
             <p className="mt-1 text-[11px] font-semibold text-slate-500">
               {step === "verification_anchors"
-                ? "Run OCR/image-anchor checks only for the verification anchors in this template."
-                : "Run OCR only on the extraction ROI fields to confirm each ROI can read usable data."}
+                ? "ทดสอบ OCR และ Image Anchor สำหรับ Verification ROI ที่กำหนดไว้ใน Template"
+                : "ทดสอบ OCR สำหรับ Extraction ROI เพื่อยืนยันว่าแต่ละ ROI อ่านข้อมูลได้"}
             </p>
           </div>
           <div className="flex gap-2">
@@ -1375,7 +1360,7 @@ export default function WorkspaceTemplateEditorV2({
               disabled={!extractionTestPassed}
               className="rounded-xl bg-amber-600 px-5 py-2.5 text-xs font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
             >
-              Next: Verification Anchors
+              Next : Verification Anchors
             </button>
           </div>
         )}

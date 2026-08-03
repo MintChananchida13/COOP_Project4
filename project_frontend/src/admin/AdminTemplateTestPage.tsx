@@ -570,6 +570,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [showPublishSuccessDialog, setShowPublishSuccessDialog] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [validationStep, setValidationStep] = useState(1);
+  const [stepOneConfirmed, setStepOneConfirmed] = useState(false);
   const [testDocumentFile, setTestDocumentFile] = useState<File | null>(null);
   const [testDocumentPreviewUrl, setTestDocumentPreviewUrl] = useState<string | null>(null);
   const [detectionTest, setDetectionTest] = useState<PrepublishDetectionTestResult | null>(null);
@@ -588,6 +589,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         setTemplate(bundle.template);
         setPages(bundle.pages);
         setFields(bundle.fields);
+        setStepOneConfirmed(false);
         setLoadStatus("loaded");
       } catch (error) {
         console.warn("Template pre-publish load failed.", error);
@@ -595,6 +597,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         setTemplate(null);
         setPages([]);
         setFields([]);
+        setStepOneConfirmed(false);
         setLoadStatus("error");
       }
     };
@@ -668,7 +671,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const effectiveMatchingWeights = matchingWeights;
   const validationSteps = [
     { step: 1, label: "ตรวจสอบ ROI และ OCR", enabled: true, done: ocrPreviewPassed },
-    { step: 2, label: "สร้างข้อมูลอ้างอิง Template", enabled: ocrPreviewPassed, done: simulationPassed },
+    { step: 2, label: "สร้างข้อมูลอ้างอิง Template", enabled: stepOneConfirmed, done: simulationPassed },
     { step: 3, label: "ทดสอบเอกสารใหม่", enabled: simulationPassed, done: Boolean(detectionTest) },
     { step: 4, label: "ตรวจสอบก่อนเผยแพร่", enabled: Boolean(detectionTest), done: overallReady },
   ];
@@ -931,10 +934,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   };
 
   useEffect(() => {
-    if (validationStep !== 2 || autoSimulationStartedRef.current || simulation || simulationAction !== null || !ocrPreviewPassed) return;
+    if (validationStep !== 2 || autoSimulationStartedRef.current || simulation || simulationAction !== null || !ocrPreviewPassed || !stepOneConfirmed) return;
     autoSimulationStartedRef.current = true;
     void handleRunPrepublishSimulation();
-  }, [ocrPreviewPassed, simulation, simulationAction, validationStep]);
+  }, [ocrPreviewPassed, simulation, simulationAction, stepOneConfirmed, validationStep]);
 
   if (loadStatus === "loading") {
     return <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">Loading draft validation...</section>;
@@ -1014,7 +1017,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Decision Settings</h4>
+              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">การตั้งค่าการตัดสินใจ</h4>
               <p className="mt-1 text-[11px] font-semibold text-slate-500">
                 ใช้เป็นเกณฑ์ตัดสิน Final Score ในขั้น New Document Test และตอน Publish
               </p>
@@ -1052,11 +1055,14 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 flex justify-end">
           <button
             type="button"
-            onClick={() => setValidationStep(2)}
+            onClick={() => {
+              setStepOneConfirmed(true);
+              setValidationStep(2);
+            }}
             disabled={!ocrPreviewPassed}
             className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
           >
-            ยืนยันและไป Step 2
+            ยืนยัน
           </button>
         </div>
       </section>

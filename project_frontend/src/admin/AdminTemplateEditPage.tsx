@@ -770,15 +770,10 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                 const isActive = item.status === "active";
                 const isDone = item.status === "done";
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => {
-                      if (item.id === "adjust") setEditorStage("adjust");
-                      if (item.id === "roi") setEditorStage("roi");
-                    }}
-                    disabled={item.id === "verification"}
-                    className={`min-h-[74px] rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-default ${
+                    aria-current={isActive ? "step" : undefined}
+                    className={`min-h-[74px] rounded-xl border px-4 py-3 text-left ${
                       isActive
                         ? "border-indigo-300 bg-indigo-50 text-indigo-800"
                         : isDone
@@ -793,7 +788,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                     </span>
                     <span className="block text-xs font-black">{item.label}</span>
                     <span className="block text-[11px] font-semibold opacity-75">{item.description}</span>
-                  </button>
+                  </div>
                 );
             })}
           </div>
