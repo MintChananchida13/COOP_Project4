@@ -277,7 +277,7 @@ function MatchingWeightsPanel({
     <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Matching Weights</h4>
+          <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">กำหนดค่าน้ำหนัก</h4>
           <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-500">
             กำหนดน้ำหนัก Layout แล้วระบบจะคำนวณส่วนที่เหลือให้ Text/Image Anchors อัตโนมัติ
           </p>
@@ -319,7 +319,7 @@ function MatchingWeightsPanel({
           />
         </div>
         <p className="mt-2 text-[10px] font-semibold text-slate-500">
-          Layout can be 30-50% in 5% steps. Remaining is {remaining}%.
+          กำหนดน้ำหนัก Layout ได้ระหว่าง 30–50% โดยปรับครั้งละ 5% ส่วนที่เหลือจะถูกแบ่งให้ Text และ Image Anchors {remaining}%.
         </p>
       </div>
 
@@ -353,7 +353,7 @@ function MatchingWeightsPanel({
             <span className="text-sm font-black text-slate-800">%</span>
           </div>
           <span className="mt-1 block text-[10px] font-semibold text-slate-500">
-            {!hasText ? "No Text Anchor" : textImageLocked ? "Moving Text updates Image automatically" : "Uses all Remaining"}
+            {!hasText ? "ไม่มี Text Anchor" : textImageLocked ? "เมื่อปรับ Text ระบบจะปรับ Image อัตโนมัติ" : "ใช้ค่าน้ำหนักที่เหลือทั้งหมด"}
           </span>
         </label>
 
@@ -386,15 +386,15 @@ function MatchingWeightsPanel({
             <span className="text-sm font-black text-slate-800">%</span>
           </div>
           <span className="mt-1 block text-[10px] font-semibold text-slate-500">
-            {!hasImage ? "No Image Anchor" : textImageLocked ? "Moving Image updates Text automatically" : "Uses all Remaining"}
+            {!hasImage ? "ไม่มี Image Anchor" : textImageLocked ? "เมื่อปรับ Image ระบบจะปรับ Text อัตโนมัติ" : "ใช้ค่าน้ำหนักที่เหลือทั้งหมด"}
           </span>
         </label>
       </div>
 
       <div className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-800">
-        Effective Matching Weights: Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} / Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} / Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
+        ค่าน้ำหนักปัจจุบัน : Layout {formatWeightPercent(effectiveMatchingWeights.layoutWeight)} / Text {formatWeightPercent(effectiveMatchingWeights.textAnchorWeight)} / Image {formatWeightPercent(effectiveMatchingWeights.imageAnchorWeight)}
         {!hasAnyAnchor && <span className="block text-[10px] text-indigo-600">No Text/Image Anchor. Layout is 100%.</span>}
-        {hasText && hasImage && <span className="block text-[10px] text-indigo-600">Text + Image always equals Remaining. Each side must be at least 20%.</span>}
+        {hasText && hasImage && <span className="block text-[10px] text-indigo-600">Text และ Image รวมกันต้องเท่ากับค่าน้ำหนักที่เหลือ และแต่ละส่วนต้องไม่น้อยกว่า 20%</span>}
       </div>
     </div>
   );
@@ -434,15 +434,15 @@ function DraftCandidateCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-black text-slate-900">#{candidate.rank}</span>
             <span className="text-xs font-black text-slate-900">{candidate.templateName || candidate.templateId}</span>
-            {candidate.isCurrentDraft && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">Current Draft</span>}
+            {candidate.isCurrentDraft && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">Draft ปัจจุบัน</span>}
             <DraftStatusPill passed={candidate.finalPassed} label={candidate.decision || (candidate.finalPassed ? "PASS" : "REVIEW")} />
           </div>
           <div className="mt-2 grid gap-2 text-[10px] font-bold text-slate-500 sm:grid-cols-3 xl:grid-cols-6">
             <span>Layout {formatPrepublishScore(candidate.globalScore)}</span>
             <span>Image {formatPrepublishScore(candidate.imageAnchorScore)}</span>
             <span>Text {formatPrepublishScore(candidate.textAnchorScore)}</span>
-            <span>Verify {formatPrepublishScore(candidate.verificationScore)}</span>
-            <span>Final {formatPrepublishScore(candidate.finalScore)}</span>
+            <span>Verification {formatPrepublishScore(candidate.verificationScore)}</span>
+            <span>คะแนนรวม {formatPrepublishScore(candidate.finalScore)}</span>
           </div>
         </div>
       </button>
@@ -456,13 +456,13 @@ function DraftCandidateCard({
                   <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500">
                     <tr>
                       <th className="px-3 py-2 text-left">Anchor</th>
-                      <th className="px-3 py-2 text-left">Type</th>
-                      <th className="px-3 py-2 text-left">Required</th>
-                      <th className="px-3 py-2 text-left">Score</th>
-                      <th className="px-3 py-2 text-left">Result</th>
-                      <th className="px-3 py-2 text-left">Reason</th>
-                      <th className="px-3 py-2 text-left">Expected</th>
-                      <th className="px-3 py-2 text-left">Actual</th>
+                      <th className="px-3 py-2 text-left">ประเภท</th>
+                      <th className="px-3 py-2 text-left">จำเป็น</th>
+                      <th className="px-3 py-2 text-left">คะแนน</th>
+                      <th className="px-3 py-2 text-left">ผลการตรวจสอบ</th>
+                      <th className="px-3 py-2 text-left">เหตุผล</th>
+                      <th className="px-3 py-2 text-left">ค่าที่กำหนด</th>
+                      <th className="px-3 py-2 text-left">ค่าที่ตรวจพบ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -523,14 +523,14 @@ function DraftCandidateCard({
                     </div>
                     {(readPrepublishValue(detail, ["expected_text"]) || readPrepublishValue(detail, ["actual_text", "ocr_text"])) && (
                       <div className="mt-2 grid gap-2 text-[10px] md:grid-cols-2">
-                        <p className="rounded bg-slate-50 p-2">Expected: {String(readPrepublishValue(detail, ["expected_text"]) || "N/A")}</p>
-                        <p className="rounded bg-slate-50 p-2">Actual: {String(readPrepublishValue(detail, ["actual_text", "ocr_text"]) || "N/A")}</p>
+                        <p className="rounded bg-slate-50 p-2">ค่าที่กำหนด: {String(readPrepublishValue(detail, ["expected_text"]) || "N/A")}</p>
+                        <p className="rounded bg-slate-50 p-2">ค่าที่ตรวจพบ: {String(readPrepublishValue(detail, ["actual_text", "ocr_text"]) || "N/A")}</p>
                       </div>
                     )}
                     {readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]) && (
                       <div className="mt-3">
                         <div className="rounded border border-slate-100 bg-slate-50 p-2">
-                          <div className="text-[9px] font-black uppercase text-slate-400">Test ROI</div>
+                          <div className="text-[9px] font-black uppercase text-slate-400">ทดสอบ ROI</div>
                           <img
                             src={String(readPrepublishValue(detail, ["current_crop_preview_data_url", "current_crop_preview_url"]))}
                             alt=""
@@ -667,10 +667,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   }, [imageAnchors.length, template?.imageAnchorWeight, template?.layoutWeight, template?.textAnchorWeight, textAnchors.length]);
   const effectiveMatchingWeights = matchingWeights;
   const validationSteps = [
-    { step: 1, label: "Review ROI & OCR", enabled: true, done: ocrPreviewPassed },
-    { step: 2, label: "Layout Simulation", enabled: ocrPreviewPassed, done: simulationPassed },
-    { step: 3, label: "New Document Test", enabled: simulationPassed, done: Boolean(detectionTest) },
-    { step: 4, label: "Publish Review", enabled: Boolean(detectionTest), done: overallReady },
+    { step: 1, label: "ตรวจสอบ ROI และ OCR", enabled: true, done: ocrPreviewPassed },
+    { step: 2, label: "สร้างข้อมูลอ้างอิง Template", enabled: ocrPreviewPassed, done: simulationPassed },
+    { step: 3, label: "ทดสอบเอกสารใหม่", enabled: simulationPassed, done: Boolean(detectionTest) },
+    { step: 4, label: "ตรวจสอบก่อนเผยแพร่", enabled: Boolean(detectionTest), done: overallReady },
   ];
   const layoutSignaturePages: PrepublishLayoutSignaturePage[] =
     simulation?.layoutSignaturePages?.length
@@ -822,10 +822,10 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     try {
       const result = await runPrepublishDetectionTest(templateId, testDocumentFile);
       setDetectionTest(result);
-      setStatusMessage("New document detection test completed. Review unified candidate ranking before publishing.");
+      setStatusMessage("การทดสอบตรวจจับเอกสารเสร็จสิ้น ตรวจสอบผลการจัดอันดับก่อนเผยแพร่");
     } catch (error) {
-      console.warn("Pre-publish new document detection test failed.", error);
-      setDetectionTestError(error instanceof Error ? error.message : "New document detection test failed.");
+      console.warn("การทดสอบ Draft Template ด้วยเอกสารใหม่ไม่สำเร็จ", error);
+      setDetectionTestError(error instanceof Error ? error.message : "ไม่สามารถทดสอบด้วยเอกสารใหม่ได้");
     } finally {
       setDetectionTestAction(false);
     }
@@ -956,15 +956,15 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-lg font-black text-slate-900">Pre-Publish Template Validation</h2>
+            <h2 className="text-lg font-black text-slate-900">ตรวจสอบ Template ก่อนเผยแพร่</h2>
             <p className="mt-1 text-xs font-semibold text-slate-500">
-              Draft-only validation. Detection Lab remains separate and only tests published Active templates.
+              ทดสอบ Template ฉบับร่างก่อนเผยแพร่ โดยไม่กระทบกับ Template ที่เผยแพร่แล้ว
             </p>
             {statusMessage && <p className="mt-2 text-xs font-bold text-emerald-600">{statusMessage}</p>}
             {simulationError && <p className="mt-2 text-xs font-bold text-red-600">{simulationError}</p>}
           </div>
           <Link href={`/admin/templates/${templateId}/edit`} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700">
-            Back to Edit Template
+            ย้อนกลับไปแก้ไข Template
           </Link>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -984,7 +984,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
               }`}
             >
-              <span className="block text-[9px] uppercase opacity-75">Step {step}</span>
+              <span className="block text-[9px] uppercase opacity-75">ขั้นตอนที่ {step}</span>
               <span className="block">{label}</span>
               <span className="mt-1 block text-[9px] uppercase opacity-70">{done ? "Done" : enabled ? "Ready" : "Locked"}</span>
             </button>
@@ -1459,7 +1459,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
 
         <div className="mt-4 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-700">Test Document</label>
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-700">เอกสารทดสอบ</label>
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp,application/pdf"
@@ -1506,13 +1506,13 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             ) : (
               <div className="rounded-xl border border-slate-100 bg-white p-3">
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  <DraftOverviewMetric label="Matched" value={detectionTest.matched ? "YES" : "NO"} tone={detectionTest.matched ? "emerald" : "slate"} />
-                  <DraftOverviewMetric label="Selected Template" value={detectionTest.selectedTemplate?.templateName || detectionTest.selectedTemplate?.templateId || "N/A"} />
-                  <DraftOverviewMetric label="Selected Type" value={detectionTest.selectedTemplateType || "N/A"} />
-                  <DraftOverviewMetric label="Final Confidence" value={formatPrepublishScore(detectionTest.finalConfidence)} tone="indigo" />
-                  <DraftOverviewMetric label="Decision Reason" value={detectionTest.decisionReason || "N/A"} />
-                  <DraftOverviewMetric label="Draft Template Rank" value={detectionTest.draftTemplateRank ?? "N/A"} />
-                  <DraftOverviewMetric label="Result" value={detectionTest.passed ? "PASS" : detectionTest.warning ? "WARNING" : "FAIL"} tone={detectionTest.passed ? "emerald" : detectionTest.warning ? "orange" : "slate"} />
+                  <DraftOverviewMetric label="ผลการจับคู่" value={detectionTest.matched ? "ตรวจพบ" : "ตรวจไม่พบ"} tone={detectionTest.matched ? "emerald" : "slate"} />
+                  <DraftOverviewMetric label="Template ที่ตรวจพบ" value={detectionTest.selectedTemplate?.templateName || detectionTest.selectedTemplate?.templateId || "N/A"} />
+                  <DraftOverviewMetric label="ประเภทของ Template" value={detectionTest.selectedTemplateType || "N/A"} />
+                  <DraftOverviewMetric label="คะแนนความมั่นใจในการจับคู่" value={formatPrepublishScore(detectionTest.finalConfidence)} tone="indigo" />
+                  <DraftOverviewMetric label="เหตุผลที่เลือก Template" value={detectionTest.decisionReason || "N/A"} />
+                  <DraftOverviewMetric label="ลำดับของ Template ใน Draft" value={detectionTest.draftTemplateRank ?? "N/A"} />
+                  <DraftOverviewMetric label="สถานะการทดสอบ" value={detectionTest.passed ? "ผ่าน" : detectionTest.warning ? "คำเตือน" : "ไม่ผ่าน"} tone={detectionTest.passed ? "emerald" : detectionTest.warning ? "orange" : "slate"} />
                 </div>
               </div>
             )}
@@ -1523,20 +1523,20 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
 
       {validationStep === 3 && detectionTest && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <DraftSectionHeader title="Candidate Ranking" subtitle="แสดงผลหลังจาก Run Detection Test แล้วเท่านั้น รายละเอียดเชิงลึกซ่อนอยู่ในปุ่ม expand." />
+        <DraftSectionHeader title="ผลการจัดอันดับ Template" subtitle="แสดงผลหลังจากทดสอบการตรวจจับ โดยสามารถขยายเพื่อดูรายละเอียดของแต่ละ Template ได้" />
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200 text-xs">
             <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="px-3 py-2 text-left">Rank</th>
-                <th className="px-3 py-2 text-left">Template Name</th>
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Final</th>
+                <th className="px-3 py-2 text-left">อันดับ</th>
+                <th className="px-3 py-2 text-left">Template</th>
+                <th className="px-3 py-2 text-left">แหล่งข้อมูล</th>
+                <th className="px-3 py-2 text-left">คะแนนรวม</th>
                 <th className="px-3 py-2 text-left">Layout</th>
                 <th className="px-3 py-2 text-left">Verification</th>
                 <th className="px-3 py-2 text-left">Text Anchor</th>
                 <th className="px-3 py-2 text-left">Image Anchor</th>
-                <th className="px-3 py-2 text-left">Decision</th>
+                <th className="px-3 py-2 text-left">ผลการประเมิน</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -1552,7 +1552,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                     <td className="px-3 py-2 font-black text-slate-900">#{candidate.rank}</td>
                     <td className="px-3 py-2 font-bold text-slate-800">{candidate.templateName || candidate.templateId}</td>
                     <td className="px-3 py-2 font-semibold text-slate-600">
-                      <div>{candidate.sourceLabel || (candidate.isCurrentDraft ? "Draft / Layout References" : "Published / Layout Signature")}</div>
+                      <div>{candidate.sourceLabel || (candidate.isCurrentDraft ? "Template ฉบับร่าง" : "Template ที่เผยแพร่")}</div>
                       {candidate.isCurrentDraft && candidate.layoutReferenceCount ? (
                         <div className="mt-1 text-[10px] font-black uppercase text-indigo-500">
                           {candidate.layoutReferenceCount} Layout References

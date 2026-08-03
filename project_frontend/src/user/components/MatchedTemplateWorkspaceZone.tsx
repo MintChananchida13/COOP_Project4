@@ -133,15 +133,11 @@ export default function MatchedTemplateWorkspaceZone({
                     {matchedTemplate.confidence !== undefined && matchedTemplate.confidence !== null
                       ? `ความมั่นใจ ${(matchedTemplate.confidence * 100).toFixed(1)}%`
                       : "ยังไม่มีค่าความมั่นใจ"}
-                    {matchedTemplate.decisionReason ? ` · ${matchedTemplate.decisionReason}` : ""}
+                    
                   </p>
                   <div className="mt-3 rounded-xl border border-emerald-100 bg-white/75 px-3 py-2">
                     <p className="ui-caption break-words font-semibold text-emerald-800">
                       ใช้ภาพที่จัดแนวเข้ากับ Template และใช้ ROI ต้นฉบับของ Template
-                    </p>
-                    <p className="ui-caption mt-0.5 break-words text-emerald-700">
-                      ไม่มีการปรับ ROI อัตโนมัติ
-                      {matchedTemplate.alignmentStatus ? ` · Alignment ${matchedTemplate.alignmentStatus}` : ""}
                     </p>
                   </div>
                 </div>

@@ -802,8 +802,8 @@ def _candidate_from_result(
         decision = {
             **decision,
             "final_passed": False,
-            "decision_reason": "layout_score_below_threshold",
-            "decision_path": "layout_score_below_threshold",
+            "decision_reason": "คะแนนรวมต่ำกว่าเกณฑ์",
+            "decision_path": "คะแนนรวมต่ำกว่าเกณฑ์",
         }
     extraction_image_path = str(alignment.get("aligned_image_path") or query_image_path) if verification_source_used == "aligned" else query_image_path
     extraction_image_preview_url = _detection_debug_url(extraction_image_path)
@@ -1119,8 +1119,8 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) ->
             candidate["top_k_limit"] = DETECTION_TOP_K_LIMIT
             if not layout_confident:
                 candidate["final_passed"] = False
-                candidate["decision_reason"] = "layout_score_below_threshold"
-                candidate["decision_path"] = "layout_score_below_threshold"
+                candidate["decision_reason"] = "คะแนนรวมต่ำกว่าเกณฑ์"
+                candidate["decision_path"] = "คะแนนรวมต่ำกว่าเกณฑ์"
                 candidate["evaluation_status"] = "layout_rejected"
             candidates.append(candidate)
             if should_fully_evaluate and candidate["final_passed"] and early_accept_rank is None:

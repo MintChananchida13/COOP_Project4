@@ -553,10 +553,10 @@ export default function WorkspaceTemplateEditorV2({
           />
         </label>
         <label className="space-y-1 block">
-          <span className="text-[9px] font-black uppercase text-slate-400">Verification Method</span>
+          <span className="text-[9px] font-black uppercase text-slate-400">วิธีตรวจสอบ</span>
           <select className={inputClass} value={method} onChange={(event) => updateAnchorMethod(anchor, event.target.value)}>
-            <option value="ocr_text">OCR Text</option>
-            <option value="image_feature">Image</option>
+            <option value="ocr_text">ข้อความที่ OCR อ่านได้</option>
+            <option value="image_feature">ประเภทของรูปภาพ</option>
           </select>
         </label>
         {method === "image_feature" && (() => {
@@ -649,7 +649,7 @@ export default function WorkspaceTemplateEditorV2({
             บันทึก
           </button>
           <button type="button" onClick={() => onDeleteField(anchor.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-            Delete ROI
+            ลบ ROI
           </button>
         </div>
       </section>
@@ -1222,20 +1222,20 @@ export default function WorkspaceTemplateEditorV2({
                     }}
                     className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100"
                   >
-                    Back to 2.1 Define Extraction Fields
+                    ย้อนกลับไป 2.1 Workspace ROI
                   </button>
                 </section>
                 <section className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
                   <h3 className="text-xs font-black uppercase tracking-wider text-amber-900">Verification ROI</h3>
                   <p className="text-[10px] font-semibold leading-relaxed text-amber-800">
-                    Draw fixed text or logo regions used only to confirm the template.
+                    กำหนด ROI ของข้อความหรือภาพที่ใช้สำหรับยืนยัน Template เท่านั้น
                   </p>
                 </section>
                 <section className="flex min-h-0 flex-1 flex-col space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">Page {currentPage + 1} ROI</h3>
                   <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                     {currentPageAnchors.length === 0 ? (
-                      <p className="text-xs font-semibold text-slate-400">Draw an orange ROI to create a verification region.</p>
+                      <p className="text-xs font-semibold text-slate-400">วาด ROI เพื่อกำหนดพื้นที่สำหรับยืนยัน Template</p>
                     ) : currentPageAnchors.map((anchor) => {
                       const isSelected = selectedAnchor?.id === anchor.id;
                       return (
@@ -1276,7 +1276,7 @@ export default function WorkspaceTemplateEditorV2({
                                   <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">ต้องเลือกประเภทภาพ</span>
                                 )}
                                 {anchorMethod(anchor) === "ocr_text" && !String(anchor.expectedText || "").trim() && (
-                                  <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">Expected Required</span>
+                                  <span className="rounded bg-red-100 px-1 py-0.5 text-red-700">ค่าที่ใช้ยืนยัน</span>
                                 )}
                               </div>
                             </button>

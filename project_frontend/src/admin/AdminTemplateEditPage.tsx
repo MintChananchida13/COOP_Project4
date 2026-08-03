@@ -242,20 +242,20 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const processSteps = [
     {
       id: "adjust",
-      label: "2.0 ปรับภาพ",
-      description: "ตรวจภาพและครอปเอกสาร",
+      label: "2.0 ปรับแต่งภาพ",
+      description: "ตรวจภาพและ Crop เอกสาร",
       status: editorStage === "roi" ? "done" : "active",
     },
     {
       id: "roi",
-      label: "2.1 Workspace ROI",
-      description: "วาด ROI และทดสอบ OCR",
+      label: "2.1 กำหนด Extraction ROI",
+      description: "วาดพื้นที่ข้อมูลสำหรับ OCR และทดสอบ OCR",
       status: editorStage === "roi" ? "active" : "next",
     },
     {
       id: "verification",
-      label: "2.2 Verification Anchors",
-      description: "ตั้งจุดยืนยัน Template",
+      label: "2.2 กำหนด Verification ROI",
+      description: "เลือกจุดอ้างอิงสำหรับยืนยัน Template",
       status: editorStage === "roi" && verificationAnchorCount > 0 ? "active" : "next",
     },
   ] as const;

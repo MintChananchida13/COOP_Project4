@@ -484,7 +484,7 @@ async def process_document(payload: DocumentPayload):
                 extracted_text = normalize_ocr_text(ocr_result.get("text"))
                 confidence_score = float(ocr_result.get("confidence") or 0.0)
                 if not extracted_text and (roi.type or "").lower() != "image":
-                    extracted_text = "(no text found in ROI)"
+                    extracted_text = "(ไม่พบข้อความในพื้นที่ที่กำหนด)"
                     confidence_score = 0.0
 
                 results.append(

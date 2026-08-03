@@ -269,7 +269,7 @@ export default function AdjustZone({
   onBatchConfirm,
 }: AdjustZoneProps) {
   
-  // ✨ สเตตพิเศษ: ใช้ล็อกและจำ URL รูปภาพแรกสุดที่ component นี้เคยได้รับ (ห้ามใครเปลี่ยน)
+  // ✨ สเตตพิเศษ: ใช้ล็อกและจำ URL รูปเอกสารแรกสุดที่ component นี้เคยได้รับ (ห้ามใครเปลี่ยน)
   const [originalBackupList, setOriginalBackupList] = useState<string[]>([]);
 
   // ถ้าโหลดเข้ามาครั้งแรกสุด และ backup ยังว่าง ให้เซ็ตค่าจำรูปออริจินัลไว้เลย
@@ -416,7 +416,7 @@ export default function AdjustZone({
     try {
       const activeImageElement = isCropped ? croppedImageRef.current : rawImageRef.current;
       
-      // 🛡️ เช็คสถานะภาพบน DOM ก่อนการเซฟลงประวัติเพื่อบล็อกการสร้างรูปภาพดำเปล่า ๆ
+      // 🛡️ เช็คสถานะเอกสารบน DOM ก่อนการเซฟลงประวัติเพื่อบล็อกการสร้างรูปเอกสารดำเปล่า ๆ
       if (activeImageElement && activeImageElement.complete && activeImageElement.naturalWidth > 0) {
         const config = pagesConfig[currentIndex] || { ...DEFAULT_CONFIG };
         const resultUrl = processSingleImageCanvas(activeImageElement, config, isCropped);
@@ -441,7 +441,7 @@ export default function AdjustZone({
     }
   };
 
-  // 🚀 รวบรวมภาพตกแต่งสมบูรณ์ของทุกหน้าแยกอิสระ ส่งขึ้นสู่หน้าประมวลผลกล่องข้อความใหญ่
+  // 🚀 รวบรวมเอกสารตกแต่งสมบูรณ์ของทุกหน้าแยกอิสระ ส่งขึ้นสู่หน้าประมวลผลกล่องข้อความใหญ่
   const handleConfirmAll = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
@@ -527,7 +527,7 @@ export default function AdjustZone({
     if (currentConfig.cropCorners && currentConfig.cropCorners.length === 4 && rawImageRef.current && rawImageRef.current.complete && rawImageRef.current.naturalWidth > 0) {
       const croppedUrl = extractPerspectiveCropAreaUrl(rawImageRef.current, currentConfig);
       if (!croppedUrl) {
-        setCropError("ไม่สามารถครอปภาพจากกรอบนี้ได้ กรุณาปรับมุมทั้ง 4 จุดให้ครอบคลุมเอกสารอีกครั้ง");
+        setCropError("ไม่สามารถ Crop เอกสารจากกรอบนี้ได้ กรุณาปรับมุมทั้ง 4 จุดให้ครอบคลุมเอกสารอีกครั้ง");
         return;
       }
       updateCurrentConfig({ 
@@ -537,7 +537,7 @@ export default function AdjustZone({
       });
       return;
     }
-    setCropError("รูปภาพยังไม่พร้อมสำหรับการครอป กรุณารอสักครู่แล้วลองอีกครั้ง");
+    setCropError("รูปเอกสารยังไม่พร้อมสำหรับการ Crop กรุณารอสักครู่แล้วลองอีกครั้ง");
   };
 
   const handleModifyCrop = () => {
@@ -684,7 +684,7 @@ return (
 
         <div className="flex shrink-0 flex-col items-center justify-between gap-4 rounded-xl border border-slate-200 bg-[#edf2f7] p-3 sm:flex-row">
           <div className="text-slate-600 text-xs font-semibold px-2 shrink-0">
-            เอกสารในคิว:
+            เอกสาร :
             <span className="text-blue-600 font-mono font-bold ml-1">
               {currentIndex + 1} / {imagesList.length} หน้า
             </span>
@@ -747,7 +747,7 @@ return (
   <div className="min-h-0 flex-1 overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
     <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
       <h3 className="text-xs font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
-        <RotateCcw size={13} /> รีเซ็ตการปรับแต่ง
+        <RotateCcw size={13} /> คืนค่าการปรับแต่งทั้งหมด
       </h3>
 
       <p className="mt-1 text-[11px] text-slate-400">
@@ -759,14 +759,14 @@ return (
         onClick={handleResetToDefault}
         className="mt-3 w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
       >
-        <RefreshCw size={13} /> กลับไปใช้ภาพต้นฉบับ
+        <RefreshCw size={13} /> กลับไปใช้เอกสารต้นฉบับ
       </button>
     </div>
 
     <div className="border-t border-slate-100 pt-4">
       <div className="flex justify-between items-center">
         <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
-          <Crop size={13} className="text-blue-600" /> ครอปภาพ
+          <Crop size={13} className="text-blue-600" /> Crop เอกสาร
         </h3>
 
         <span
@@ -776,7 +776,7 @@ return (
               : "bg-slate-50 text-slate-400"
           }`}
         >
-          {isCropped ? "ครอปแล้ว" : "พร้อม"}
+          {isCropped ? "Crop สำเร็จ" : "พร้อม"}
         </span>
       </div>
 
@@ -788,7 +788,7 @@ return (
               onClick={handleInstantLocalCrop}
               className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
             >
-              <Scissors size={13} /> ครอปหน้าปัจจุบัน
+              <Scissors size={13} /> Crop หน้าปัจจุบัน
             </button>
           ) : (
             <button
@@ -796,7 +796,7 @@ return (
               onClick={handleActivateCrop}
               className="w-full py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-slate-50"
             >
-              <Crop size={13} /> เปิดเครื่องมือครอป
+              <Crop size={13} /> เปิดเครื่องมือ Crop
             </button>
           )
         ) : (
@@ -814,7 +814,7 @@ return (
               onClick={handleCancelCrop}
               className="w-full py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
             >
-              <Crop size={13} /> ยกเลิกครอป
+              <Crop size={13} /> ยกเลิก Crop
             </button>
           </div>
         )}
@@ -829,7 +829,7 @@ return (
 
     <div className="border-t border-slate-100 pt-4">
       <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
-        <FlipHorizontal size={13} className="text-slate-500" /> พลิกภาพ
+        <FlipHorizontal size={13} className="text-slate-500" /> พลิกเอกสาร
       </h3>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
@@ -862,7 +862,7 @@ return (
     <div className="border-t border-slate-100 pt-4 space-y-3">
       <div className="flex justify-between items-center">
         <h3 className="text-xs font-bold text-[#172b4d] uppercase tracking-wider flex items-center gap-1.5">
-          <Maximize2 size={13} /> ปรับระนาบภาพ
+          <Maximize2 size={13} /> ปรับระนาบเอกสาร
         </h3>
 
         <button
@@ -877,8 +877,8 @@ return (
       </div>
 
       {[
-        ["ปรับเส้นแนวตั้ง", perspectiveH, "perspectiveH"],
-        ["ปรับเส้นแนวนอน", perspectiveV, "perspectiveV"],
+        ["ปรับแนวตั้ง", perspectiveH, "perspectiveH"],
+        ["ปรับแนวนอน", perspectiveV, "perspectiveV"],
       ].map(([label, value, key]) => (
         <div key={key as string} className="space-y-1">
           <div className="flex justify-between items-center text-xs">
@@ -906,7 +906,7 @@ return (
 
     {[
       {
-        label: "หมุนภาพ",
+        label: "หมุนเอกสาร",
         value: rotation,
         min: -180,
         max: 180,
@@ -1024,12 +1024,12 @@ return (
       {isProcessing ? (
         <>
           <RefreshCw size={14} className="animate-spin" />
-          กำลังประมวลผลภาพ...
+          กำลังประมวลผลเอกสาร...
         </>
       ) : (
         <>
           <Check size={14} />
-          ยืนยันภาพและกำหนด ROI
+          ยืนยันเอกสารและค้นหา Template
         </>
       )}
     </button>

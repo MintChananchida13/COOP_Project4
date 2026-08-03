@@ -79,8 +79,8 @@ const USER_FLOW_STEPS = [
   },
   {
     key: "adjust",
-    title: "ตรวจขอบเขตภาพ",
-    description: "ปรับกรอบให้ครอบเฉพาะตัวเอกสาร",
+    title: "ตรวจสอบขอบเอกสาร",
+    description: "ปรับกรอบให้พอดีกับขอบเอกสาร",
     note: "กรอบที่แม่นยำช่วยให้การค้นหา Template และ OCR ดีขึ้น",
   },
   {
@@ -120,28 +120,77 @@ const USER_STEP_ACTIONS: Record<(typeof USER_FLOW_STEPS)[number]["key"], string[
   ],
 };
 
-const NoTemplateDetectionCard = ({ notice }: { notice: TemplateDetectionNotice }) => (
-  <section className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
-    <div className="flex items-start gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-amber-600 shadow-sm ring-1 ring-amber-100">
-        <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-        </svg>
-      </div>
-      <div className="min-w-0">
-        <h3 className="ui-label text-amber-800">ไม่พบ Template ที่ตรงกัน</h3>
-        <p className="ui-card-title mt-1 text-amber-950">{notice.title}</p>
-        <p className="ui-caption mt-1 break-words text-amber-700">{notice.message}</p>
-        {notice.detail && (
+const NoTemplateDetectionCard = ({
+  notice,
+}: {
+  notice: TemplateDetectionNotice;
+}) => {
+  const isRuntimeUnavailable = [
+    notice.title,
+    notice.message,
+    notice.detail,
+  ]
+    .filter(Boolean)
+    .some((text) =>
+      String(text).toLowerCase().includes("runtime unavailable")
+    );
+
+  const heading = isRuntimeUnavailable
+    ? "ไม่สามารถตรวจสอบ Template ได้"
+    : "ไม่พบ Template ที่ตรงกัน";
+
+  const title = isRuntimeUnavailable
+    ? "ระบบตรวจจับ Template ไม่พร้อมใช้งาน"
+    : notice.title || "ตรวจจับ Template ไม่สำเร็จ";
+
+  const message = isRuntimeUnavailable
+    ? "ขณะนี้ไม่สามารถเชื่อมต่อระบบประมวลผลได้ กรุณาลองใหม่อีกครั้ง หรือดำเนินการด้วย Custom OCR"
+    : notice.message || "ไม่พบ Template ที่ตรงกับเอกสารนี้";
+
+  return (
+    <section className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-amber-600 shadow-sm ring-1 ring-amber-100">
+          <svg
+            className="h-[18px] w-[18px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+            />
+          </svg>
+        </div>
+
+        <div className="min-w-0">
+          <h3 className="ui-label text-amber-800">{heading}</h3>
+
+          <p className="ui-card-title mt-1 text-amber-950">
+            {title}
+          </p>
+
+          <p className="ui-caption mt-1 break-words text-amber-700">
+            {message}
+          </p>
+
           <div className="mt-3 rounded-xl border border-amber-100 bg-white/75 px-3 py-2">
-            <p className="ui-caption break-words font-semibold text-amber-800">{notice.detail}</p>
-            <p className="ui-caption mt-0.5 text-amber-700">ระบบเปิด Custom OCR ให้ใช้งานต่อ สามารถตีกรอบ ROI เองหรือใช้ Auto ROI ได้</p>
+            <p className="ui-caption break-words font-semibold text-amber-800">
+              สามารถดำเนินการต่อด้วย Custom OCR
+            </p>
+
+            <p className="ui-caption mt-0.5 break-words text-amber-700">
+              กำหนดกรอบ ROI ด้วยตนเอง หรือใช้ Auto ROI เพื่อช่วยตรวจจับพื้นที่ข้อมูล
+            </p>
           </div>
-        )}
+        </div>
       </div>
-    </div>
-  </section>
-);
+    </section>
+  );
+};
 
 const UploadZone = dynamic(() => import("../user/components/UploadZone"), {
   ssr: false,
@@ -2384,7 +2433,7 @@ function HomeWorkspace() {
                   <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[280px_1fr]">
                     <aside className="space-y-5 overflow-auto border-b border-slate-200 bg-slate-50 p-5 lg:border-b-0 lg:border-r">
                       <div>
-                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Format</p>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">รูปแบบไฟล์</p>
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           {visibleExportFormats.map((format) => (
                             <button
@@ -2404,7 +2453,7 @@ function HomeWorkspace() {
                       </div>
 
                       <div>
-                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Content</p>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">ข้อมูลที่ต้องการส่งออก</p>
                         <div className="mt-2 space-y-2">
                           {exportContentChoices.length === 0 && (
                             <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-500">
@@ -2426,11 +2475,11 @@ function HomeWorkspace() {
                       </div>
 
                       <div>
-                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Options</p>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">ตัวเลือกการแสดงผล</p>
                         <div className="mt-2 space-y-2">
                           {[
-                            ["showFieldNames", "Show Field Names"],
-                            ["showDocumentTitle", "Show Document Title"],
+                            ["showDocumentTitle", "แสดงชื่อเอกสาร"],
+                            ["showFieldNames", "แสดงชื่อ Field"],
                           ].map(([key, label]) => (
                             <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
                               <input
@@ -2461,9 +2510,7 @@ function HomeWorkspace() {
                   </div>
 
                   <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-xs font-semibold text-slate-500">
-                      Preview จะอัปเดตทันทีเมื่อเปลี่ยน Format, Content หรือ Options
-                    </p>
+
                     <button
                       type="button"
                       onClick={() => requestExport(exportFormat)}
@@ -2506,7 +2553,7 @@ function HomeWorkspace() {
                         onClick={() => setExportJson("")}
                         className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800"
                       >
-                        Close
+                        ปิด
                       </button>
                     </div>
                   </div>
