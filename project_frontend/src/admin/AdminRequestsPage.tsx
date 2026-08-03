@@ -3,20 +3,29 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AdminTemplateRequest } from "../types/ocr";
+import { EmptyState, InlineState, LoadingState, StatusBadge, cardClassName } from "../shared/ui";
 import { fetchTemplateRequests } from "./adminApi";
 
 type RequestFilter = "pending" | "converted" | "rejected" | "all";
+type LoadStatus = "loading" | "loaded" | "error";
 
 const formatDate = (value?: string) => {
   if (!value) return "ยังไม่มีวันที่ส่ง";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return date.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
 };
+
+const filterOptions: { value: RequestFilter; label: string }[] = [
+  { value: "all", label: "ทั้งหมด" },
+  { value: "pending", label: "รอตรวจสอบ" },
+  { value: "converted", label: "สร้าง Template แล้ว" },
+  { value: "rejected", label: "ปฏิเสธ" },
+];
 
 export default function AdminRequestsPage() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
-  const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
+  const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [filter, setFilter] = useState<RequestFilter>("all");
 
   useEffect(() => {
@@ -44,11 +53,11 @@ export default function AdminRequestsPage() {
     };
   }, []);
 
-  const counts = {
+  const counts: Record<RequestFilter, number> = {
+    all: requests.length,
     pending: requests.filter((request) => request.status === "submitted" || request.status === "in_review").length,
     converted: requests.filter((request) => request.status === "converted").length,
     rejected: requests.filter((request) => request.status === "rejected").length,
-    all: requests.length,
   };
 
   const filteredRequests = requests.filter((request) => {
@@ -57,43 +66,34 @@ export default function AdminRequestsPage() {
     return request.status === filter;
   });
 
-  const filterTabs: { value: RequestFilter; label: string; count: number }[] = [
-    { value: "pending", label: "รอตรวจสอบ", count: counts.pending },
-    { value: "converted", label: "สร้าง Template แล้ว", count: counts.converted },
-    { value: "rejected", label: "ปฏิเสธ", count: counts.rejected },
-    { value: "all", label: "ทั้งหมด", count: counts.all },
-  ];
-
   return (
     <section className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className={`${cardClassName} p-4`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">
-              คำขอสร้าง Template
-            </h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">
-              ตรวจคำขอที่ผู้ใช้ส่งมาจากหน้า OCR และแปลงเป็น Template เมื่อตรวจสอบแล้วพร้อมใช้งาน
+            <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">คำขอ Template</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              ตรวจคำขอสร้าง Template ที่ผู้ใช้ส่งเข้ามา และแปลงเป็น Template เมื่อพร้อมใช้งาน
             </p>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-4">
-            {filterTabs.map((tab) => (
+            {filterOptions.map((option) => (
               <button
-                key={tab.value}
+                key={option.value}
                 type="button"
-                onClick={() => setFilter(tab.value)}
+                onClick={() => setFilter(option.value)}
                 className={`rounded-xl border px-3 py-2 text-xs font-black transition-colors ${
-                  filter === tab.value
+                  filter === option.value
                     ? "border-indigo-500 bg-indigo-600 text-white shadow-sm"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
               >
-                {tab.label}
+                {option.label}
                 <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] ${
-                  filter === tab.value ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                  filter === option.value ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
                 }`}>
-                  {tab.count}
+                  {counts[option.value]}
                 </span>
               </button>
             ))}
@@ -101,46 +101,31 @@ export default function AdminRequestsPage() {
         </div>
       </div>
 
-      {loadStatus === "loading" && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500 shadow-sm">
-          กำลังโหลดคำขอจากฐานข้อมูล...
-        </div>
-      )}
+      {loadStatus === "loading" && <LoadingState message="กำลังโหลดคำขอจาก Backend..." />}
       {loadStatus === "error" && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-700 shadow-sm">
-          โหลดคำขอจาก Backend ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่
-        </div>
+        <InlineState tone="warning" message="โหลดคำขอ Template จาก Backend ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองใหม่" />
       )}
 
-      {loadStatus === "loaded" && requests.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
-          ยังไม่มีคำขอสร้าง Template
-        </div>
-      ) : loadStatus === "loaded" && filteredRequests.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
-          ไม่พบคำขอในสถานะนี้
-        </div>
-      ) : loadStatus === "loaded" ? (
+      {loadStatus === "loaded" && requests.length === 0 && (
+        <EmptyState title="ยังไม่มีคำขอ Template" message="เมื่อผู้ใช้ส่งคำขอสร้าง Template รายการจะแสดงที่นี่" />
+      )}
+
+      {loadStatus === "loaded" && requests.length > 0 && filteredRequests.length === 0 && (
+        <EmptyState title="ไม่พบคำขอในสถานะนี้" message="ลองเปลี่ยนตัวกรองเป็นทั้งหมดเพื่อดูรายการคำขอที่มีอยู่" />
+      )}
+
+      {loadStatus === "loaded" && filteredRequests.length > 0 && (
         <div className="grid gap-3">
           {filteredRequests.map((request) => (
-            <article
-              key={request.id}
-              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-            >
+            <article key={request.id} className={`${cardClassName} p-4`}>
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
-                  <h3 className="truncate text-base font-black text-slate-900">
-                    {request.requestTitle}
-                  </h3>
+                  <h3 className="truncate text-base font-black text-slate-900">{request.requestTitle}</h3>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase text-indigo-600">
-                      {request.requestMode}
-                    </span>
+                    <StatusBadge status={request.requestMode} tone="primary" />
+                    <StatusBadge status={request.status} />
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-                      {request.status}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-                      {request.documentType || "ยังไม่ระบุประเภท"}
+                      {request.documentType || "ไม่ระบุประเภท"}
                     </span>
                   </div>
                   <p className="mt-2 text-xs font-semibold text-slate-500">
@@ -168,7 +153,7 @@ export default function AdminRequestsPage() {
             </article>
           ))}
         </div>
-      ) : null}
+      )}
     </section>
   );
 }
