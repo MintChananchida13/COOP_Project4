@@ -350,6 +350,16 @@ export default function AdminRequestDetailPage({
       setActionError("กรุณาระบุชื่อ Template ก่อนสร้าง Template");
       return;
     }
+    if (creationType === "new_template") {
+      const documentPrefix = nextDocumentType.trim();
+      const nameSuffix = documentPrefix && nextTemplateName.startsWith(`${documentPrefix} - `)
+        ? nextTemplateName.slice(documentPrefix.length + 3).trim()
+        : nextTemplateName.trim();
+      if (!nameSuffix) {
+        setActionError("กรุณาระบุชื่อ Template ต่อท้ายประเภทเอกสารก่อนสร้าง Template");
+        return;
+      }
+    }
     if (!nextDocumentType) {
       setActionError(creationType === "new_template" ? "กรุณาระบุประเภทเอกสารก่อนสร้าง Template" : "กรุณาเลือก Template เดิมก่อนสร้าง Version ใหม่");
       return;
@@ -658,7 +668,16 @@ export default function AdminRequestDetailPage({
                   <input
                     type="text"
                     value={templateDocumentType}
-                    onChange={(event) => setTemplateDocumentType(event.target.value)}
+                    onChange={(event) => {
+                      const nextDocumentType = event.target.value;
+                      const previousPrefix = templateDocumentType.trim();
+                      const currentName = templateName.trim();
+                      const suffix = previousPrefix && currentName.startsWith(`${previousPrefix} - `)
+                        ? currentName.slice(previousPrefix.length + 3)
+                        : currentName;
+                      setTemplateDocumentType(nextDocumentType);
+                      setTemplateName(nextDocumentType.trim() ? `${nextDocumentType.trim()} - ${suffix}` : suffix);
+                    }}
                     placeholder="เช่น ใบแจ้งหนี้ผู้ขาย"
                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
@@ -669,16 +688,29 @@ export default function AdminRequestDetailPage({
 
                 <label className="block space-y-1.5">
                   <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                    Shared Fields
+                    ชื่อ Template นี้
                   </span>
-                  <textarea
-                    value={sharedFieldsText}
-                    onChange={(event) => setSharedFieldsText(event.target.value)}
-                    rows={3}
-                    placeholder="เช่น เลขที่เอกสาร, วันที่, ชื่อลูกค้า"
-                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[10px] font-semibold text-slate-400">หนึ่งบรรทัดหรือคั่นด้วย comma ได้</p>
+                  <div className="rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
+                    <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-black leading-5 text-slate-500 break-words">
+                      {(templateDocumentType.trim() || "ประเภทเอกสาร")} -
+                    </div>
+                    <input
+                      type="text"
+                      value={
+                        templateName.startsWith(`${templateDocumentType.trim()} - `)
+                          ? templateName.slice(templateDocumentType.trim().length + 3)
+                          : templateName
+                      }
+                      onChange={(event) => {
+                        const suffix = event.target.value;
+                        const prefix = templateDocumentType.trim();
+                        setTemplateName(prefix ? `${prefix} - ${suffix}` : suffix);
+                      }}
+                      placeholder="เช่น ฟอร์มหลัก 2026"
+                      className="h-11 w-full px-3 text-xs font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+                  <p className="text-[10px] font-semibold text-slate-400">ชื่อที่ใช้ในคลัง Template และตอนค้นหาเอกสาร</p>
                 </label>
               </div>
             ) : (

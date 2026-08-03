@@ -88,6 +88,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [selectedIgnoreRegions, setSelectedIgnoreRegions] = useState<IgnoreRegion[]>([]);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [saveStatus, setSaveStatus] = useState("");
+  const [showUpdateSuccessDialog, setShowUpdateSuccessDialog] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [editorStage, setEditorStage] = useState<AdminEditorStage>("adjust");
   const [adjustPageConfigs, setAdjustPageConfigs] = useState<AdminAdjustPageConfig[]>([]);
@@ -491,8 +492,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     void (async () => {
       await flushFieldDrafts();
       if (selectedTemplate?.status === "active") {
-        window.alert("อัปเดต Template เรียบร้อยแล้ว");
-        router.push("/admin/templates");
+        setShowUpdateSuccessDialog(true);
         return;
       }
       router.push(`/admin/templates/${templateId}/test`);
@@ -837,6 +837,30 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onBackToAdjust={() => setEditorStage("adjust")}
             />
           )}
+        </div>
+      )}
+
+      {showUpdateSuccessDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-6 text-center shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-2xl font-black text-emerald-700">
+              ✓
+            </div>
+            <h3 className="mt-4 text-lg font-black text-slate-950">อัปเดต Template สำเร็จ</h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+              ระบบบันทึกการเปลี่ยนแปลงล่าสุดของ Template แล้ว และจะพากลับไปยังคลัง Template
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setShowUpdateSuccessDialog(false);
+                router.push("/admin/templates");
+              }}
+              className="mt-5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+            >
+              ตกลง
+            </button>
+          </div>
         </div>
       )}
     </section>

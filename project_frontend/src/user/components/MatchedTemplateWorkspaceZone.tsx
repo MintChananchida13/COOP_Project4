@@ -4,7 +4,7 @@ import { ArrowLeft, CheckCircle2, Cpu, FileText, Image as ImageIcon, Table } fro
 import { useRef, useState } from "react";
 import { ROI } from "../../types/ocr";
 import WorkspaceCustomEditor, { WorkspaceCustomEditorProps } from "../../shared/workspace/WorkspaceCustomEditor";
-import { InlineState, StatusBadge } from "../../shared/ui";
+import { InlineState } from "../../shared/ui";
 
 interface MatchedTemplateInfo {
   id: string;
@@ -227,7 +227,6 @@ export default function MatchedTemplateWorkspaceZone({
                           <span className="block truncate font-semibold">{roi.fieldName || "(Unnamed)"}</span>
                           <span className="ui-caption mt-0.5 block text-slate-400">{readableTypeLabel(roi)}</span>
                         </span>
-                        <StatusBadge status={checked ? "ready" : "disabled"} tone={checked ? "success" : "neutral"} />
                       </label>
                     );
                   })
