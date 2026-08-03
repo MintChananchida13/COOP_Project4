@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { ArrowUpRight, BadgeCheck, CircleX, FileClock, FilePenLine, Plus } from "lucide-react";
 import { AdminTemplateRequest, Template } from "../types/ocr";
 import { EmptyState, StatusBadge } from "../shared/ui";
-import { fetchAdminDashboard, fetchTemplateRequests, fetchTemplates } from "./adminApi";
+import { fetchTemplateRequests, fetchTemplates } from "./adminApi";
 import { AdminDashboardSummary } from "./adminTypes";
 
 const buildDashboardFromLists = (nextRequests: AdminTemplateRequest[], nextTemplates: Template[]): AdminDashboardSummary => ({
@@ -17,31 +17,6 @@ const buildDashboardFromLists = (nextRequests: AdminTemplateRequest[], nextTempl
   latestRequests: nextRequests.slice(0, 4),
   latestTemplates: nextTemplates.slice(0, 4),
 });
-
-const mergeDashboardWithLists = (
-  nextDashboard: AdminDashboardSummary,
-  nextRequests: AdminTemplateRequest[],
-  nextTemplates: Template[]
-): AdminDashboardSummary => {
-  const listDashboard = buildDashboardFromLists(nextRequests, nextTemplates);
-  const shouldTrustListCounts =
-    nextDashboard.templateCount === 0 &&
-    nextDashboard.pendingRequests === 0 &&
-    nextDashboard.draftTemplates === 0 &&
-    nextDashboard.activeTemplates === 0 &&
-    nextDashboard.rejectedRequests === 0 &&
-    (nextRequests.length > 0 || nextTemplates.length > 0);
-
-  return {
-    pendingRequests: shouldTrustListCounts ? listDashboard.pendingRequests : nextDashboard.pendingRequests,
-    draftTemplates: shouldTrustListCounts ? listDashboard.draftTemplates : nextDashboard.draftTemplates,
-    activeTemplates: shouldTrustListCounts ? listDashboard.activeTemplates : nextDashboard.activeTemplates,
-    rejectedRequests: shouldTrustListCounts ? listDashboard.rejectedRequests : nextDashboard.rejectedRequests,
-    templateCount: shouldTrustListCounts ? listDashboard.templateCount : nextDashboard.templateCount,
-    latestRequests: nextDashboard.latestRequests.length ? nextDashboard.latestRequests : listDashboard.latestRequests,
-    latestTemplates: nextDashboard.latestTemplates.length ? nextDashboard.latestTemplates : listDashboard.latestTemplates,
-  };
-};
 
 const formatDateTime = (value?: string) => {
   if (!value) return "ไม่พบเวลาอัปเดต";
@@ -69,42 +44,23 @@ export default function AdminDashboard() {
     const loadDashboard = async () => {
       setLoadStatus("loading");
       try {
-        const [dashboardResult, requestsResult, templatesResult] = await Promise.allSettled([
-          fetchAdminDashboard(),
+        const [nextRequests, nextTemplates] = await Promise.all([
           fetchTemplateRequests(),
           fetchTemplates(),
         ]);
         if (cancelled) return;
 
-        const nextRequests = requestsResult.status === "fulfilled" ? requestsResult.value : [];
-        const nextTemplates = templatesResult.status === "fulfilled" ? templatesResult.value : [];
-        const listDashboard = buildDashboardFromLists(nextRequests, nextTemplates);
-        const nextDashboard = dashboardResult.status === "fulfilled"
-          ? mergeDashboardWithLists(dashboardResult.value, nextRequests, nextTemplates)
-          : listDashboard;
-
         setRequests(nextRequests);
         setTemplates(nextTemplates);
-        setDashboard(nextDashboard);
-        setLoadStatus(requestsResult.status === "fulfilled" || templatesResult.status === "fulfilled" ? "loaded" : "error");
-
-        if (dashboardResult.status === "rejected") console.warn("Admin dashboard summary load failed.", dashboardResult.reason);
-        if (requestsResult.status === "rejected") console.warn("Template request list load failed.", requestsResult.reason);
-        if (templatesResult.status === "rejected") console.warn("Template list load failed.", templatesResult.reason);
+        setDashboard(buildDashboardFromLists(nextRequests, nextTemplates));
+        setLoadStatus("loaded");
       } catch (error) {
         console.warn("Admin dashboard load failed.", error);
         if (cancelled) return;
-        const [nextRequests, nextTemplates] = await Promise.allSettled([
-          fetchTemplateRequests().catch(() => []),
-          fetchTemplates().catch(() => []),
-        ]);
-        if (cancelled) return;
-        const safeRequests = nextRequests.status === "fulfilled" ? nextRequests.value : [];
-        const safeTemplates = nextTemplates.status === "fulfilled" ? nextTemplates.value : [];
-        setRequests(safeRequests);
-        setTemplates(safeTemplates);
-        setDashboard(buildDashboardFromLists(safeRequests, safeTemplates));
-        setLoadStatus(safeRequests.length > 0 || safeTemplates.length > 0 ? "loaded" : "error");
+        setRequests([]);
+        setTemplates([]);
+        setDashboard(buildDashboardFromLists([], []));
+        setLoadStatus("error");
       }
     };
     loadDashboard();

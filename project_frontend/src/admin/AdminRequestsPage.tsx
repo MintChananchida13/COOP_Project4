@@ -17,7 +17,7 @@ const formatDate = (value?: string) => {
 export default function AdminRequestsPage() {
   const [requests, setRequests] = useState<AdminTemplateRequest[]>([]);
   const [loadStatus, setLoadStatus] = useState<"loading" | "loaded" | "error">("loading");
-  const [filter, setFilter] = useState<RequestFilter>("pending");
+  const [filter, setFilter] = useState<RequestFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
