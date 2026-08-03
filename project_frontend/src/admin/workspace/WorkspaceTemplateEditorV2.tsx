@@ -852,7 +852,7 @@ export default function WorkspaceTemplateEditorV2({
     return (
       <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-100 bg-slate-50 px-2.5 py-1.5 text-[9px] font-black uppercase text-slate-500">
-          Table Result
+          ผลลัพธ์ตาราง
         </div>
         <div className="max-h-48 overflow-auto">
           <table className="min-w-full border-collapse text-left text-[11px] font-semibold text-slate-700">
@@ -917,7 +917,7 @@ export default function WorkspaceTemplateEditorV2({
     if (step === "extraction_fields") return null;
     return (
       <div className="rounded-lg border border-slate-100 bg-white p-2">
-        <div className="text-[9px] font-black uppercase text-slate-400">ผลลัพธ์รูปภาพ</div>
+        <div className="text-[9px] font-black uppercase text-slate-400">ผลลัพธ์ประเภทรูปภาพ</div>
         <div className="mt-1 rounded-lg bg-sky-50 px-2 py-1.5 text-sm font-black text-sky-700">
           {item.predictedImageCategoryLabel || item.actualText || "-"}
         </div>
@@ -980,8 +980,7 @@ export default function WorkspaceTemplateEditorV2({
                     <div className="min-w-0 rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
                       <div className="text-[9px] font-black uppercase text-slate-400">ข้อความที่อ่านได้</div>
                       <div className="mt-2 max-h-44 min-w-0 space-y-1 overflow-y-auto rounded bg-slate-50 p-2 text-[11px] leading-5 text-slate-700">
-                        {item.expectedText && <p className="whitespace-pre-wrap break-words">Expected: {item.expectedText}</p>}
-                        {(item.ocrText || item.actualText) && <p className="whitespace-pre-wrap break-words">Result: {item.ocrText || item.actualText}</p>}
+                        {(item.ocrText || item.actualText) && <p className="whitespace-pre-wrap break-words">{item.ocrText || item.actualText}</p>}
                       </div>
                     </div>
                   )}
@@ -1273,7 +1272,7 @@ export default function WorkspaceTemplateEditorV2({
                   </div>
                 </section>
                 {!selectedAnchor && (
-                  <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">Draw or select a verification ROI first.</p>
+                  <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">กรุณาวาดหรือเลือก ROI สำหรับยืนยัน Template ก่อน</p>
                 )}
               </>
             )}

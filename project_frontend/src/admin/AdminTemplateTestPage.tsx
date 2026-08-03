@@ -939,6 +939,12 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     void handleRunPrepublishSimulation();
   }, [ocrPreviewPassed, simulation, simulationAction, stepOneConfirmed, validationStep]);
 
+  useEffect(() => {
+    if (validationStep === 2 && simulationPassed && simulationAction === null) {
+      setValidationStep(3);
+    }
+  }, [simulationAction, simulationPassed, validationStep]);
+
   if (loadStatus === "loading") {
     return <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">Loading draft validation...</section>;
   }
