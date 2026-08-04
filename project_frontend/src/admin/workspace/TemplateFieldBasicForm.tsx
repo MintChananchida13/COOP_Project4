@@ -17,9 +17,9 @@ const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 outline-none focus:border-indigo-500";
 
 const roiTypes = [
-  { label: "Text", value: "text" as const, icon: FileText },
-  { label: "Table", value: "table" as const, icon: Table },
-  { label: "Image", value: "image" as const, icon: ImageIcon },
+  { label: "ข้อความ", value: "text" as const, icon: FileText },
+  { label: "ตาราง", value: "table" as const, icon: Table },
+  { label: "รูปภาพ", value: "image" as const, icon: ImageIcon },
 ];
 
 export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, compact = false, onSave }: TemplateFieldBasicFormProps) {
@@ -55,7 +55,7 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
       <h3 className="text-xs font-black uppercase tracking-wider text-indigo-800">{compact ? "Field ที่เลือก" : "Template Field"}</h3>
 
       <label className="space-y-1 block">
-        <span className="text-[9px] font-black uppercase text-slate-400">Field Name</span>
+        <span className="text-[9px] font-black uppercase text-slate-400">ชื่อ field</span>
         <input
           className={inputClass}
           value={fieldNameDraft}
@@ -70,7 +70,7 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
       </label>
 
       <div className="space-y-1">
-        <span className="text-[9px] font-black uppercase text-slate-400">ROI Type</span>
+        <span className="text-[9px] font-black uppercase text-slate-400">ปรเภท ROI</span>
         <div className="grid grid-cols-3 gap-1">
           {roiTypes.map(({ label, value, icon: Icon }) => (
             <button
@@ -92,10 +92,10 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
 
       <div className={compact ? "grid grid-cols-1 gap-2" : "grid grid-cols-2 gap-2"}>
         <button type="button" onClick={handleSave} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white">
-          Save Field
+          บันทึก Field
         </button>
         <button type="button" onClick={() => onDelete(field.id)} className={`${compact ? "hidden" : ""} rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700`}>
-          Delete Field
+          ลบ Field
         </button>
       </div>
     </section>

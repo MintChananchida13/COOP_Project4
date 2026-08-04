@@ -552,6 +552,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         setTemplate(bundle.template);
         setPages(bundle.pages);
         setFields(bundle.fields);
+        setStepOneConfirmed(false);
+        autoSimulationStartedRef.current = false;
         setLoadStatus("loaded");
       } catch (error) {
         console.warn("Template pre-publish load failed.", error);
@@ -559,6 +561,8 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         setTemplate(null);
         setPages([]);
         setFields([]);
+        setStepOneConfirmed(false);
+        autoSimulationStartedRef.current = false;
         setLoadStatus("error");
       }
     };
@@ -748,9 +752,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       setSimulation(result);
       setTemplate(result.template);
       setStatusMessage("Temporary layout signature simulation completed. Review candidate ranking and readiness before publishing.");
-      if (validationStep === 2) {
-        setValidationStep(3);
-      }
     } catch (error) {
       console.warn("Pre-publish simulation failed.", error);
       setSimulationError(error instanceof Error ? error.message : "Pre-publish simulation failed.");
@@ -1015,7 +1016,13 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 flex justify-end">
           <button
             type="button"
-            onClick={() => setValidationStep(2)}
+            onClick={() => {
+              autoSimulationStartedRef.current = false;
+              setSimulation(null);
+              setSimulationError("");
+              setStepOneConfirmed(true);
+              setValidationStep(2);
+            }}
             disabled={!ocrPreviewPassed}
             className="ui-stable-action-lg rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm disabled:bg-slate-300 disabled:text-slate-500"
           >
@@ -1256,9 +1263,15 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             subtitle="สร้างและทดสอบ Layout Signature จาก Main และ Reference ทั้งหมด หลังจาก ROI & OCR Preview ผ่านแล้วเท่านั้น"
           />
           <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
-            simulationAction === "run" ? "bg-indigo-100 text-indigo-700" : simulation ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+            simulationAction === "run"
+              ? "bg-indigo-100 text-indigo-700"
+              : stepTwoCompleted
+                ? "bg-emerald-100 text-emerald-700"
+                : simulation
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-slate-200 text-slate-600"
           }`}>
-            {simulationAction === "run" ? "Running" : simulation ? "Completed" : "Waiting"}
+            {simulationAction === "run" ? "Running" : stepTwoCompleted ? "Completed" : simulation ? "Incomplete" : "Waiting"}
           </span>
         </div>
         {!ocrPreviewPassed && (
