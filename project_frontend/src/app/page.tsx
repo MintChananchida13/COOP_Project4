@@ -620,6 +620,23 @@ const tableRowsToObjects = (rows: string[][]) => {
   );
 };
 
+const rowsFromStructuredCells = (structured?: StructuredTableResult | null): string[][] | null => {
+  const cells = structured?.cells;
+  if (!Array.isArray(cells) || cells.length === 0) return null;
+  const visibleCells = cells.filter(cell => !cell.hidden);
+  if (visibleCells.length === 0) return null;
+  const maxRow = Math.max(...visibleCells.map(cell => Number(cell.row ?? 0) + Math.max(1, Number(cell.rowSpan ?? 1)) - 1));
+  const maxCol = Math.max(...visibleCells.map(cell => Number(cell.col ?? 0) + Math.max(1, Number(cell.colSpan ?? 1)) - 1));
+  if (!Number.isFinite(maxRow) || !Number.isFinite(maxCol) || maxRow < 0 || maxCol < 0) return null;
+  const rows = Array.from({ length: maxRow + 1 }, () => Array(maxCol + 1).fill(""));
+  for (const cell of visibleCells) {
+    const row = Math.max(0, Number(cell.row ?? 0));
+    const col = Math.max(0, Number(cell.col ?? 0));
+    rows[row][col] = String(cell.groundTruth ?? cell.text ?? cell.ocrText ?? "");
+  }
+  return rows;
+};
+
 const tableRowsToMarkdown = (rows: string[][]) => {
   if (!rows.length) return "";
   const columnCount = Math.max(...rows.map((row) => row.length), 1);
@@ -1090,7 +1107,7 @@ function HomeWorkspace() {
                     : parsedHtmlStructured || undefined;
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
-                : responseStructured?.rows || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+                : responseStructured?.rows || rowsFromStructuredCells(responseStructured) || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
               const finalTableStructured = isTableRoi ? responseStructured || createEmptyStructuredTable() : responseStructured;
               const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
