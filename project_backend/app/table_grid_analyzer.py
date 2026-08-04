@@ -23,7 +23,14 @@ def _clip_region(x: int, y: int, width: int, height: int, image_width: int, imag
 
 
 def _line_mask(gray: np.ndarray, orientation: str) -> np.ndarray:
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        12,
+    )
     height, width = gray.shape[:2]
     if orientation == "horizontal":
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(12, width // 24), 1))
@@ -31,6 +38,20 @@ def _line_mask(gray: np.ndarray, orientation: str) -> np.ndarray:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(12, height // 24)))
     opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
     return cv2.dilate(opened, kernel, iterations=1)
+
+
+def _contour_summary(mask: np.ndarray, image_width: int, image_height: int) -> Dict[str, Any]:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes: List[Dict[str, Any]] = []
+    min_area = max(64, int(image_width * image_height * 0.002))
+    for contour in contours:
+        x, y, width, height = cv2.boundingRect(contour)
+        area = int(width * height)
+        if area < min_area:
+            continue
+        boxes.append({"bbox": _clip_region(x, y, width, height, image_width, image_height), "area": area})
+    large_boxes = [box for box in boxes if box["area"] >= image_width * image_height * 0.05]
+    return {"count": len(boxes), "large_count": len(large_boxes), "boxes": boxes[:12]}
 
 
 def _projected_line_positions(mask: np.ndarray, axis: int, threshold_ratio: float) -> List[int]:
@@ -70,6 +91,8 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
         horizontal = _line_mask(gray, "horizontal")
         vertical = _line_mask(gray, "vertical")
+        grid_mask = cv2.bitwise_or(horizontal, vertical)
+        contours = _contour_summary(grid_mask, width, height)
         horizontal_positions = _projected_line_positions(horizontal, axis=1, threshold_ratio=0.22)
         vertical_positions = _projected_line_positions(vertical, axis=0, threshold_ratio=0.18)
 
@@ -80,6 +103,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "regions": [],
                 "reason": "insufficient_grid_lines",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
+                "contour_summary": contours,
             }
 
         boundaries = [0, *horizontal_positions, height]
@@ -94,6 +118,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "regions": [],
                 "reason": "single_grid_topology",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
+                "contour_summary": contours,
             }
 
         segment_counts = _vertical_segment_counts(vertical, bands, width)
@@ -107,6 +132,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "reason": "no_topology_change",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
+                "contour_summary": contours,
             }
 
         regions: List[Dict[str, Any]] = []
@@ -116,14 +142,24 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
             if count != current_count:
                 region_bbox = _clip_region(0, current_top, width, current_bottom - current_top, width, height)
                 if region_bbox["height"] >= height * _MIN_REGION_HEIGHT_RATIO and region_bbox["width"] >= width * _MIN_REGION_WIDTH_RATIO:
-                    regions.append({"type": "grid" if current_count >= 3 else "merged_block", "bbox": region_bbox, "grid_line_count": current_count})
+                    regions.append({
+                        "type": "grid" if current_count >= 3 else "merged_block",
+                        "bbox": region_bbox,
+                        "confidence": 0.0,
+                        "grid_line_count": current_count,
+                    })
                 current_top = top
                 current_count = count
             current_bottom = bottom
 
         region_bbox = _clip_region(0, current_top, width, current_bottom - current_top, width, height)
         if region_bbox["height"] >= height * _MIN_REGION_HEIGHT_RATIO and region_bbox["width"] >= width * _MIN_REGION_WIDTH_RATIO:
-            regions.append({"type": "grid" if current_count >= 3 else "merged_block", "bbox": region_bbox, "grid_line_count": current_count})
+            regions.append({
+                "type": "grid" if current_count >= 3 else "merged_block",
+                "bbox": region_bbox,
+                "confidence": 0.0,
+                "grid_line_count": current_count,
+            })
 
         if len(regions) < 2:
             return {
@@ -133,12 +169,15 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "reason": "region_split_not_confident",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
+                "contour_summary": contours,
             }
 
         line_strength = min(1.0, (len(horizontal_positions) / 8.0) * 0.45 + (len(vertical_positions) / 6.0) * 0.35)
         topology_strength = min(1.0, topology_changes / max(1, len(bands) - 1))
         confidence = round(max(0.0, min(1.0, line_strength + topology_strength * 0.45)), 4)
         detected = confidence >= _MIN_CONFIDENCE
+        for region in regions:
+            region["confidence"] = confidence
         return {
             "detected": detected,
             "confidence": confidence,
@@ -146,6 +185,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
             "reason": "topology_change_detected" if detected else "low_confidence",
             "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
             "segment_counts": segment_counts,
+            "contour_summary": contours,
         }
     except Exception as error:
         logger.info("Table grid analyzer failed: %s", error)

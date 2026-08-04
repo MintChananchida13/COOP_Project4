@@ -370,6 +370,18 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertTrue(analysis["detected"])
         self.assertGreaterEqual(len(analysis["regions"]), 2)
         self.assertGreaterEqual(analysis["confidence"], 0.72)
+        self.assertTrue(all({"bbox", "confidence", "type"}.issubset(region) for region in analysis["regions"]))
+
+    def test_normal_table_does_not_split(self) -> None:
+        image = np.full((220, 220, 3), 255, dtype=np.uint8)
+        for y in [10, 70, 130, 190]:
+            image[y : y + 2, 10:210] = 0
+        for x in [10, 80, 150, 210]:
+            image[10:190, x : x + 2] = 0
+
+        analysis = analyze_table_regions(image)
+
+        self.assertFalse(analysis["detected"])
 
     def test_semi_structured_regions_are_read_with_slanext_and_merged(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)
@@ -404,6 +416,54 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "merged")
         self.assertEqual(result["table_selected_method"], "semi_structured_regions")
 
+    def test_semi_structured_remaps_bbox_and_preserves_spans(self) -> None:
+        image = np.zeros((160, 160, 3), dtype=np.uint8)
+
+        class BboxModel:
+            calls = 0
+
+            def predict(self, **kwargs):
+                BboxModel.calls += 1
+                label = "First" if BboxModel.calls == 1 else "Second"
+                return [
+                    {
+                        "table_rows": [[label, ""], ["A", "B"]],
+                        "table_structured": {
+                            "rows": [[label, ""], ["A", "B"]],
+                            "cells": [
+                                {"row": 0, "col": 0, "text": label, "rowSpan": 1, "colSpan": 2, "bbox": {"x": 2, "y": 3, "width": 40, "height": 10}},
+                                {"row": 1, "col": 0, "text": "A", "rowSpan": 1, "colSpan": 1, "bbox": {"x": 2, "y": 20, "width": 18, "height": 10}},
+                                {"row": 1, "col": 1, "text": "B", "rowSpan": 1, "colSpan": 1, "bbox": {"x": 24, "y": 20, "width": 18, "height": 10}},
+                            ],
+                        },
+                    }
+                ]
+
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "confidence": 0.91, "bbox": {"x": 5, "y": 7, "width": 120, "height": 60}},
+                {"type": "grid", "confidence": 0.91, "bbox": {"x": 9, "y": 80, "width": 120, "height": 60}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            result = _try_semi_structured_table(image, BboxModel(), 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        cells = result["table_structured"]["cells"]
+        self.assertEqual(cells[0]["colSpan"], 2)
+        self.assertEqual(cells[0]["bbox"]["x"], 7.0)
+        self.assertEqual(cells[0]["bbox"]["y"], 10.0)
+        self.assertEqual(cells[3]["row"], 2)
+        self.assertEqual(cells[3]["bbox"]["x"], 11.0)
+        self.assertEqual(cells[3]["bbox"]["y"], 83.0)
+
     def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)
         fake_analysis = {
@@ -416,6 +476,21 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = _try_semi_structured_table(image, object(), 0.0)
 
         self.assertIsNone(result)
+
+    def test_grid_analyzer_error_falls_back_to_whole_roi(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
+
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            side_effect=RuntimeError("grid analyzer boom"),
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
+            "app.table_recognition_v2_adapter.Path.unlink"
+        ):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_rows"], [["A", "B"]])
+        self.assertNotIn("table_semi_analysis", result)
 
 
 if __name__ == "__main__":

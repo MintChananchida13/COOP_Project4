@@ -608,6 +608,11 @@ def _markdown_table(rows: List[List[str]]) -> str:
 
 
 def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
+    structured = result.get("table_structured")
+    if isinstance(structured, dict) and isinstance(structured.get("rows"), list):
+        rows = structured.get("rows")
+        if rows and all(isinstance(row, list) for row in rows):
+            return normalize_table_rows(rows)
     for key in ("rows", "table_rows", "cells"):
         rows = _rows_from_cells(result.get(key))
         if rows:
@@ -620,6 +625,9 @@ def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
 
 
 def _extract_structured_table(result: Dict[str, Any], rows: List[List[str]], html: str) -> Optional[Dict[str, Any]]:
+    structured = result.get("table_structured")
+    if isinstance(structured, dict):
+        return structured
     for key in ("cells", "table_cells"):
         source_cells = _normalize_cell_dicts(result.get(key))
         if source_cells:
@@ -1057,6 +1065,8 @@ def _remap_candidate_to_roi(candidate: Dict[str, Any], offset_x: float, offset_y
                     next_cell[bbox_key] = _remap_bbox_value(next_cell[bbox_key], offset_x, offset_y)
             cells.append(next_cell)
         next_structured["cells"] = cells
+        if "bbox" in next_structured:
+            next_structured["bbox"] = _remap_bbox_value(next_structured["bbox"], offset_x, offset_y)
         remapped["table_structured"] = next_structured
     segments = []
     for segment in remapped.get("segments") or []:
@@ -1077,12 +1087,15 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
     attempts: List[Dict[str, Any]] = []
     html_parts: List[str] = []
     candidates_for_competition: List[Dict[str, Any]] = []
+    header_row_count = 0
     for candidate in region_candidates:
-        rows = normalize_table_rows(candidate.get("table_rows") or [])
+        structured = candidate.get("table_structured")
+        structured_rows = normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else [])
+        rows = structured_rows or normalize_table_rows(candidate.get("table_rows") or [])
         row_offset = len(merged_rows)
         merged_rows.extend(rows)
-        structured = candidate.get("table_structured")
         if isinstance(structured, dict):
+            header_row_count += int(structured.get("headerRowCount") or structured.get("header_row_count") or 0)
             for cell in structured.get("cells") or []:
                 if isinstance(cell, dict):
                     next_cell = dict(cell)
@@ -1094,9 +1107,12 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
             html_parts.append(str(candidate.get("table_html")))
         candidates_for_competition.append(candidate)
 
-    structured = _structured_from_rows(merged_rows, merged_cells) if merged_rows else None
-    if structured and merged_cells:
-        structured["cells"] = merged_cells
+    structured = {
+        "rows": merged_rows,
+        "cells": merged_cells,
+        "headerRowCount": header_row_count or 1,
+        "postProcessing": "semi_structured_region_merge",
+    } if merged_rows or merged_cells else None
     result = {
         "text": _markdown_table(merged_rows),
         "confidence": 0.0,
@@ -1134,6 +1150,9 @@ def _try_semi_structured_table(image: np.ndarray, model: Any, started: float) ->
     merge_regions: List[Dict[str, Any]] = []
     height, width = image.shape[:2]
     for index, region in enumerate(regions):
+        if region.get("type") != "grid":
+            merge_regions.append({**region, "status": "skipped_non_grid_region"})
+            continue
         bbox = region.get("bbox")
         if not isinstance(bbox, dict):
             continue
