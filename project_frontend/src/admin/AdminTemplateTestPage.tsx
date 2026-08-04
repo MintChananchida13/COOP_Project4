@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, XCircle } from "lucide-react";
 import RoiLayer from "../shared/workspace/RoiLayer";
 import { WorkspaceRoi } from "../shared/workspace/RoiBox";
 import WorkspaceCanvas from "../shared/workspace/WorkspaceCanvas";
@@ -160,32 +160,6 @@ const evaluateVerification = (field: TemplateField, ocrText: string): OcrPreview
   if (!field.expectedText) return "not_configured";
   return ocrText.toLowerCase().includes(field.expectedText.toLowerCase()) ? "pass" : "fail";
 };
-
-function ProgressBar({ value, tone = "indigo" }: { value: number; tone?: "indigo" | "emerald" | "amber" | "red" | "sky" }) {
-  const width = `${Math.max(0, Math.min(100, Math.round(value)))}%`;
-  const colorClass = {
-    indigo: "bg-indigo-600",
-    emerald: "bg-emerald-600",
-    amber: "bg-amber-500",
-    red: "bg-red-600",
-    sky: "bg-sky-600",
-  }[tone];
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-      <div className={`h-full rounded-full ${colorClass}`} style={{ width }} />
-    </div>
-  );
-}
-
-const prepublishSimulationSteps = [
-  "Generate Layout Signature",
-  "Searching Layout Candidates",
-  "Top 5 Retrieved",
-  "Running Image Anchors",
-  "Running Text Anchors",
-  "Re-ranking",
-  "Completed",
-];
 
 const formatPrepublishScore = (value?: number | null) => (typeof value === "number" ? value.toFixed(2) : "N/A");
 
@@ -457,10 +431,8 @@ function DraftCandidateCard({
                     <tr>
                       <th className="px-3 py-2 text-left">Anchor</th>
                       <th className="px-3 py-2 text-left">ประเภท</th>
-                      <th className="px-3 py-2 text-left">จำเป็น</th>
                       <th className="px-3 py-2 text-left">คะแนน</th>
                       <th className="px-3 py-2 text-left">ผลการตรวจสอบ</th>
-                      <th className="px-3 py-2 text-left">เหตุผล</th>
                       <th className="px-3 py-2 text-left">ค่าที่กำหนด</th>
                       <th className="px-3 py-2 text-left">ค่าที่ตรวจพบ</th>
                     </tr>
@@ -477,19 +449,11 @@ function DraftCandidateCard({
                           <td className="px-3 py-2 font-semibold text-slate-600">
                             {String(readPrepublishValue(detail, ["anchor_type", "verification_method", "match_type"]) || "verification")}
                           </td>
-                          <td className="px-3 py-2">
-                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${required ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
-                              {required ? "Required" : "Optional"}
-                            </span>
-                          </td>
                           <td className="px-3 py-2 font-black text-slate-900">
                             {formatPrepublishScore(readVerificationRecordScore(detail))}
                           </td>
                           <td className="px-3 py-2">
                             <DraftStatusPill passed={passed} label={passed ? "PASS" : "FAIL"} />
-                          </td>
-                          <td className="px-3 py-2 font-semibold text-slate-600">
-                            {String(readPrepublishValue(detail, ["failure_reason", "error", "status"]) || "N/A")}
                           </td>
                           <td className="max-w-[180px] truncate px-3 py-2 font-semibold text-slate-600">
                             {String(readPrepublishValue(detail, ["expected_text"]) || "N/A")}
@@ -564,7 +528,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [simulation, setSimulation] = useState<PrepublishSimulationResult | null>(null);
   const [simulationAction, setSimulationAction] = useState<"run" | "confirm" | null>(null);
-  const [simulationStep, setSimulationStep] = useState(0);
   const [simulationError, setSimulationError] = useState("");
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [showPublishSuccessDialog, setShowPublishSuccessDialog] = useState(false);
@@ -606,15 +569,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   }, [templateId]);
 
   useEffect(() => {
-    if (simulationAction !== "run") return;
-    setSimulationStep(0);
-    const intervalId = window.setInterval(() => {
-      setSimulationStep((step) => Math.min(step + 1, prepublishSimulationSteps.length - 1));
-    }, 700);
-    return () => window.clearInterval(intervalId);
-  }, [simulationAction]);
-
-  useEffect(() => {
     return () => {
       if (testDocumentPreviewUrl) URL.revokeObjectURL(testDocumentPreviewUrl);
     };
@@ -643,13 +597,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     acc[result.pageNumber] = [...(acc[result.pageNumber] || []), result];
     return acc;
   }, {});
-  const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
-  const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
-  const publishPrerequisitesMet = Boolean(simulationPassed && detectionTestPassed);
-  const overallReady = publishPrerequisitesMet;
   const ocrPreviewPassed = Boolean(extractionFields.length > 0 || verificationAnchors.length > 0);
-  const canRunDetectionTest = Boolean(simulationPassed && simulationAction === null && testDocumentFile && !detectionTestAction);
-  const canConfirmPublish = publishPrerequisitesMet && simulationAction === null && template?.status !== "active";
   const finalConfidenceThreshold = typeof template?.finalConfidenceThreshold === "number" && Number.isFinite(template.finalConfidenceThreshold)
     ? template.finalConfidenceThreshold
     : DEFAULT_FINAL_CONFIDENCE_THRESHOLD;
@@ -667,12 +615,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     });
   }, [imageAnchors.length, template?.imageAnchorWeight, template?.layoutWeight, template?.textAnchorWeight, textAnchors.length]);
   const effectiveMatchingWeights = matchingWeights;
-  const validationSteps = [
-    { step: 1, label: "ตรวจสอบ ROI และ OCR", enabled: true, done: ocrPreviewPassed },
-    { step: 2, label: "สร้างข้อมูลอ้างอิง Template", enabled: stepOneConfirmed, done: simulationPassed },
-    { step: 3, label: "ทดสอบเอกสารใหม่", enabled: simulationPassed, done: Boolean(detectionTest) },
-    { step: 4, label: "ตรวจสอบก่อนเผยแพร่", enabled: Boolean(detectionTest), done: overallReady },
-  ];
   const layoutSignaturePages: PrepublishLayoutSignaturePage[] =
     simulation?.layoutSignaturePages?.length
       ? simulation.layoutSignaturePages
@@ -694,6 +636,21 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             persisted: false,
             reason: null,
           }));
+  const generatedLayoutReferenceCount = layoutSignaturePages.filter((page) => page.status === "generated").length;
+  const layoutReferencesGenerated = layoutSignaturePages.length > 0 && generatedLayoutReferenceCount === layoutSignaturePages.length;
+  const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
+  const stepTwoCompleted = Boolean(simulationPassed && layoutReferencesGenerated);
+  const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
+  const publishPrerequisitesMet = Boolean(stepTwoCompleted && detectionTestPassed);
+  const overallReady = publishPrerequisitesMet;
+  const canRunDetectionTest = Boolean(stepTwoCompleted && simulationAction === null && testDocumentFile && !detectionTestAction);
+  const canConfirmPublish = publishPrerequisitesMet && simulationAction === null && template?.status !== "active";
+  const validationSteps = [
+    { step: 1, label: "ตรวจสอบ ROI และ OCR", enabled: true, done: ocrPreviewPassed },
+    { step: 2, label: "สร้างข้อมูลอ้างอิง Template", enabled: stepOneConfirmed, done: stepTwoCompleted },
+    { step: 3, label: "ทดสอบเอกสารใหม่", enabled: stepTwoCompleted, done: Boolean(detectionTest) },
+    { step: 4, label: "ตรวจสอบก่อนเผยแพร่", enabled: Boolean(detectionTest), done: overallReady },
+  ];
   const goToValidationStep = (step: number) => {
     const target = validationSteps.find((item) => item.step === step);
     if (!target?.enabled) return;
@@ -790,7 +747,6 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       const result = await runPrepublishSimulation(templateId);
       setSimulation(result);
       setTemplate(result.template);
-      setSimulationStep(prepublishSimulationSteps.length - 1);
       setStatusMessage("Temporary layout signature simulation completed. Review candidate ranking and readiness before publishing.");
       if (validationStep === 2) {
         setValidationStep(3);
@@ -932,10 +888,16 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   };
 
   useEffect(() => {
-    if (validationStep !== 2 || autoSimulationStartedRef.current || simulation || simulationAction !== null || !ocrPreviewPassed) return;
+    if (validationStep !== 2 || autoSimulationStartedRef.current || simulation || simulationAction !== null || !ocrPreviewPassed || !stepOneConfirmed) return;
     autoSimulationStartedRef.current = true;
     void handleRunPrepublishSimulation();
-  }, [ocrPreviewPassed, simulation, simulationAction, validationStep]);
+  }, [ocrPreviewPassed, simulation, simulationAction, stepOneConfirmed, validationStep]);
+
+  useEffect(() => {
+    if (validationStep === 2 && stepTwoCompleted && simulationAction === null) {
+      setValidationStep(3);
+    }
+  }, [simulationAction, stepTwoCompleted, validationStep]);
 
   if (loadStatus === "loading") {
     return <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">Loading draft validation...</section>;
@@ -1290,7 +1252,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
-            title="Layout References Simulation"
+            title="สร้างข้อมูลอ้างอิง Template"
             subtitle="สร้างและทดสอบ Layout Signature จาก Main และ Reference ทั้งหมด หลังจาก ROI & OCR Preview ผ่านแล้วเท่านั้น"
           />
           <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
@@ -1304,62 +1266,16 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             ต้อง Preview OCR ใน Step 1 ให้ผ่านก่อนจึงจะเริ่ม Simulation ได้
           </p>
         )}
-        {false && <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-700">Simulation Pipeline</h4>
-              <p className="mt-1 text-[10px] font-semibold text-slate-500">Temporary only. Nothing is saved to production layout storage.</p>
-            </div>
-            <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${
-              simulationAction === "run"
-                ? "bg-indigo-100 text-indigo-700"
-                : simulation
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-slate-200 text-slate-600"
-            }`}>
-              {simulationAction === "run" ? "Running" : simulation ? "Completed" : "Not Started"}
-            </span>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-7">
-          {prepublishSimulationSteps.map((step, index) => {
-            const isDone = Boolean(simulation) || index < simulationStep;
-            const isCurrent = simulationAction === "run" && index === simulationStep;
-            return (
-              <div
-                key={step}
-                className={`rounded-lg border px-2.5 py-2 text-[10px] font-black ${
-                  isDone
-                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-                    : isCurrent
-                      ? "border-indigo-100 bg-indigo-50 text-indigo-700"
-                      : "border-slate-100 bg-slate-50 text-slate-400"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  {isDone ? <CheckCircle2 size={14} /> : isCurrent ? <Info size={14} /> : <span className="block h-3.5 w-3.5 rounded-full bg-slate-200" />}
-                  <span className="leading-snug">{step}</span>
-                </div>
-              </div>
-            );
-          })}
-          </div>
-        </div>}
         <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
           {simulationAction === "run" && (
             <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 p-4">
               <div className="flex items-center gap-3">
-                <span className="h-3 w-3 animate-pulse rounded-full bg-indigo-600" />
+                <Loader2 size={20} className="shrink-0 animate-spin text-indigo-700" />
                 <div>
                   <div className="text-sm font-black text-indigo-950">กำลังสร้าง Layout Simulation</div>
                   <p className="mt-1 text-xs font-semibold text-indigo-700">
                     ระบบกำลังสร้าง Layout Signature ชั่วคราวและตรวจความพร้อมก่อนทดสอบเอกสารใหม่
                   </p>
-                </div>
-              </div>
-              <div className="mt-3">
-                <ProgressBar value={((simulationStep + 1) / prepublishSimulationSteps.length) * 100} tone="indigo" />
-                <div className="mt-2 text-[11px] font-bold text-indigo-700">
-                  {prepublishSimulationSteps[simulationStep] || "Processing"}
                 </div>
               </div>
             </div>
@@ -1372,7 +1288,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
               </p>
             </div>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase text-slate-600">
-              {layoutSignaturePages.filter((page) => page.status === "generated").length}/{layoutSignaturePages.length} generated
+              {generatedLayoutReferenceCount}/{layoutSignaturePages.length} generated
             </span>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -1442,7 +1358,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <DraftSectionHeader
-            title="Test with a New Document"
+            title="ทดสอบการจับคู่ Template กับเอกสารใหม่"
             subtitle="อัปโหลดเอกสารใหม่เพื่อทดสอบว่า Draft Template นี้ถูกเลือกได้ถูกต้องก่อน Publish."
           />
           <button
@@ -1488,7 +1404,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                 PNG, JPEG, WebP หรือ PDF
               </div>
             )}
-            {!simulationPassed && (
+            {!stepTwoCompleted && (
               <p className="mt-3 rounded-lg bg-amber-50 p-2.5 text-[11px] font-bold text-amber-700">
                 ต้อง Run Simulation ให้ผ่านก่อนจึงจะทดสอบเอกสารใหม่ได้
               </p>
@@ -1660,7 +1576,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {[
             ["ROI พร้อมใช้งาน", ocrPreviewPassed],
-            ["Layout Simulation", simulationPassed],
+            ["Layout Simulation", stepTwoCompleted],
             ["ทดสอบเอกสารใหม่", detectionTestPassed],
           ].map(([label, passed]) => (
             <div key={String(label)} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 p-3">
