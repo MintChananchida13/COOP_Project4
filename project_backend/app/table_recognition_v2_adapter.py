@@ -13,6 +13,7 @@ from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize
 from .ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
 from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr_batch
+from .table_grid_analyzer import analyze_table_regions
 
 
 class TableRecognitionV2UnavailableError(RuntimeError):
@@ -954,41 +955,27 @@ def _attach_candidate_competition(selected: Dict[str, Any], candidates: List[Dic
     return selected
 
 
-def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
-    started = time.perf_counter()
-    if image is None or image.size == 0:
-        return {
-            "text": "",
-            "confidence": 0.0,
-            "segments": [],
-            "attempts": [],
-            "preprocessing": "table_v2_empty_image",
-            "engine": "table_recognition_v2",
-            "model": _TABLE_MODEL_NAME,
-            "table_debug": {"status": "empty_image", "runtime_called": True},
-        }
-
-    logger.info("Using local Table Recognition runtime")
-    model = _load_table_model()
-    input_height, input_width = image.shape[:2]
+def _predict_table_model(model: Any, image: np.ndarray) -> Any:
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
     try:
         if not cv2.imwrite(temp.name, image):
             raise TableRecognitionV2UnavailableError("Unable to prepare table image for table_recognition_v2.")
         if _TABLE_MODEL_KIND == "pipeline_v2":
-            output = model.predict(
+            return model.predict(
                 input=temp.name,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_layout_detection=False,
                 use_ocr_model=True,
             )
-        else:
-            output = model.predict(input=temp.name, batch_size=1)
+        return model.predict(input=temp.name, batch_size=1)
     finally:
         Path(temp.name).unlink(missing_ok=True)
 
+
+def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, region_debug: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    input_height, input_width = image.shape[:2]
     dicts = _collect_dicts(output)
     html = ""
     rows: List[List[str]] = []
@@ -1006,7 +993,20 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     rows = normalize_table_rows(rows)
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
-    slanext_result = {
+    debug: Dict[str, Any] = {
+        "status": "recognized" if text or html else "structure_empty",
+        "row_count": len(rows),
+        "column_count": max((len(row) for row in rows), default=0),
+        "raw_result_count": len(dicts),
+        "model_kind": _TABLE_MODEL_KIND,
+        "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
+        "runtime_called": True,
+        "input_size": [int(input_width), int(input_height)],
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+    }
+    if region_debug:
+        debug["region"] = region_debug
+    return {
         "text": text,
         "confidence": 0.0,
         "segments": [],
@@ -1017,19 +1017,184 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         "table_html": html or None,
         "table_rows": rows,
         "table_structured": structured_table,
-        "table_debug": {
-            "status": "recognized" if text or html else "structure_empty",
-            "row_count": len(rows),
-            "column_count": max((len(row) for row in rows), default=0),
-            "raw_result_count": len(dicts),
-            "model_kind": _TABLE_MODEL_KIND,
-            "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
-            "runtime_called": True,
-            "input_size": [int(input_width), int(input_height)],
-            "elapsed_seconds": round(time.perf_counter() - started, 3),
-        },
+        "table_debug": debug,
         "raw_results": dicts,
     }
+
+
+def _remap_bbox_value(value: Any, offset_x: float, offset_y: float) -> Any:
+    if isinstance(value, dict):
+        remapped = dict(value)
+        if "x" in remapped:
+            remapped["x"] = float(remapped.get("x") or 0.0) + offset_x
+        if "y" in remapped:
+            remapped["y"] = float(remapped.get("y") or 0.0) + offset_y
+        return remapped
+    if isinstance(value, list) and len(value) >= 4:
+        remapped_list = list(value)
+        try:
+            remapped_list[0] = float(remapped_list[0]) + offset_x
+            remapped_list[1] = float(remapped_list[1]) + offset_y
+        except (TypeError, ValueError):
+            return value
+        return remapped_list
+    return value
+
+
+def _remap_candidate_to_roi(candidate: Dict[str, Any], offset_x: float, offset_y: float, row_offset: int) -> Dict[str, Any]:
+    remapped = dict(candidate)
+    structured = remapped.get("table_structured")
+    if isinstance(structured, dict):
+        next_structured = dict(structured)
+        cells = []
+        for cell in structured.get("cells") or []:
+            if not isinstance(cell, dict):
+                continue
+            next_cell = dict(cell)
+            next_cell["row"] = int(next_cell.get("row") or 0) + row_offset
+            for bbox_key in ("bbox", "box"):
+                if bbox_key in next_cell:
+                    next_cell[bbox_key] = _remap_bbox_value(next_cell[bbox_key], offset_x, offset_y)
+            cells.append(next_cell)
+        next_structured["cells"] = cells
+        remapped["table_structured"] = next_structured
+    segments = []
+    for segment in remapped.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        next_segment = dict(segment)
+        if "bbox" in next_segment:
+            next_segment["bbox"] = _remap_bbox_value(next_segment["bbox"], offset_x, offset_y)
+        segments.append(next_segment)
+    remapped["segments"] = segments
+    return remapped
+
+
+def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    merged_rows: List[List[str]] = []
+    merged_cells: List[Dict[str, Any]] = []
+    merged_segments: List[Dict[str, Any]] = []
+    attempts: List[Dict[str, Any]] = []
+    html_parts: List[str] = []
+    candidates_for_competition: List[Dict[str, Any]] = []
+    for candidate in region_candidates:
+        rows = normalize_table_rows(candidate.get("table_rows") or [])
+        row_offset = len(merged_rows)
+        merged_rows.extend(rows)
+        structured = candidate.get("table_structured")
+        if isinstance(structured, dict):
+            for cell in structured.get("cells") or []:
+                if isinstance(cell, dict):
+                    next_cell = dict(cell)
+                    next_cell["row"] = int(next_cell.get("row") or 0) + row_offset
+                    merged_cells.append(next_cell)
+        merged_segments.extend(segment for segment in candidate.get("segments") or [] if isinstance(segment, dict))
+        attempts.extend(attempt for attempt in candidate.get("attempts") or [] if isinstance(attempt, dict))
+        if candidate.get("table_html"):
+            html_parts.append(str(candidate.get("table_html")))
+        candidates_for_competition.append(candidate)
+
+    structured = _structured_from_rows(merged_rows, merged_cells) if merged_rows else None
+    if structured and merged_cells:
+        structured["cells"] = merged_cells
+    result = {
+        "text": _markdown_table(merged_rows),
+        "confidence": 0.0,
+        "segments": merged_segments,
+        "attempts": attempts or [{"step": "semi_structured_region_merge", "region_count": len(region_candidates)}],
+        "preprocessing": "semi_structured_table_regions",
+        "engine": "table_recognition_v2",
+        "model": _TABLE_MODEL_NAME,
+        "table_html": "\n".join(html_parts) if html_parts else None,
+        "table_rows": merged_rows,
+        "table_structured": structured,
+        "table_debug": {
+            "status": "semi_structured_merged" if merged_rows else "semi_structured_empty",
+            "region_count": len(region_candidates),
+        },
+        "table_semi_analysis": semi_analysis,
+    }
+    merged_candidate = _build_table_candidate(result, "semi_structured_regions")
+    selected, reason = _select_best_table_candidate([merged_candidate, *candidates_for_competition])
+    if selected is not merged_candidate:
+        selected = merged_candidate
+        reason = "semi_structured_region_merge"
+    return _attach_candidate_competition(selected, [merged_candidate, *candidates_for_competition], reason)
+
+
+def _try_semi_structured_table(image: np.ndarray, model: Any, started: float) -> Optional[Dict[str, Any]]:
+    analysis = analyze_table_regions(image)
+    if not analysis.get("detected") or float(analysis.get("confidence") or 0.0) < 0.72:
+        return None
+    regions = [region for region in analysis.get("regions") or [] if isinstance(region, dict)]
+    if len(regions) < 2:
+        return None
+
+    region_candidates: List[Dict[str, Any]] = []
+    merge_regions: List[Dict[str, Any]] = []
+    height, width = image.shape[:2]
+    for index, region in enumerate(regions):
+        bbox = region.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            x = max(0, int(float(bbox.get("x") or 0)))
+            y = max(0, int(float(bbox.get("y") or 0)))
+            w = min(max(1, int(float(bbox.get("width") or 1))), width - x)
+            h = min(max(1, int(float(bbox.get("height") or 1))), height - y)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+        crop = image[y : y + h, x : x + w]
+        try:
+            output = _predict_table_model(model, crop)
+            raw_result = _slanext_result_from_output(output, crop, started, {"index": index, "type": region.get("type"), "bbox": bbox})
+            candidate = _build_table_candidate(raw_result, "slanext")
+            remapped = _remap_candidate_to_roi(candidate, float(x), float(y), 0)
+            quality = remapped.get("table_debug", {}).get("quality") if isinstance(remapped.get("table_debug"), dict) else {}
+            if _candidate_has_content(remapped) and bool(quality.get("usable_shape")):
+                region_candidates.append(remapped)
+                merge_regions.append({**region, "status": "recognized"})
+            else:
+                merge_regions.append({**region, "status": "unusable_result"})
+        except Exception as error:
+            logger.info("Semi-structured table region %s failed: %s", index, error)
+            merge_regions.append({**region, "status": "failed", "reason": str(error)})
+
+    if not region_candidates:
+        return None
+    semi_analysis = dict(analysis)
+    semi_analysis["regions"] = merge_regions
+    semi_analysis["merge_status"] = "merged" if len(region_candidates) == len(regions) else "partial"
+    return _merge_region_candidates(region_candidates, semi_analysis)
+
+
+def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
+    started = time.perf_counter()
+    if image is None or image.size == 0:
+        return {
+            "text": "",
+            "confidence": 0.0,
+            "segments": [],
+            "attempts": [],
+            "preprocessing": "table_v2_empty_image",
+            "engine": "table_recognition_v2",
+            "model": _TABLE_MODEL_NAME,
+            "table_debug": {"status": "empty_image", "runtime_called": True},
+        }
+
+    logger.info("Using local Table Recognition runtime")
+    model = _load_table_model()
+    try:
+        semi_result = _try_semi_structured_table(image, model, started)
+        if semi_result:
+            return semi_result
+    except Exception as error:
+        logger.info("Semi-structured table analysis fell back to whole ROI: %s", error)
+
+    output = _predict_table_model(model, image)
+    slanext_result = _slanext_result_from_output(output, image, started)
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
     candidates = [slanext_candidate]
     slanext_debug = slanext_candidate.get("table_debug") if isinstance(slanext_candidate.get("table_debug"), dict) else {}
@@ -1042,9 +1207,10 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             if borderless_result:
                 borderless_debug = borderless_result.get("table_debug")
                 if isinstance(borderless_debug, dict):
-                    borderless_debug["slan_rows_before_fallback"] = len(rows)
-                    borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in rows), default=0)
-                    borderless_debug["slan_status_before_fallback"] = "structure_empty" if not rows else "low_quality_candidate"
+                    slanext_rows = normalize_table_rows(slanext_result.get("table_rows") or [])
+                    borderless_debug["slan_rows_before_fallback"] = len(slanext_rows)
+                    borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in slanext_rows), default=0)
+                    borderless_debug["slan_status_before_fallback"] = "structure_empty" if not slanext_rows else "low_quality_candidate"
                 candidates.append(_build_table_candidate(borderless_result, "borderless_text_clustering"))
         except Exception as error:
             logger.warning("Borderless table candidate failed: %s", error)

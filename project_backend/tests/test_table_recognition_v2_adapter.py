@@ -14,10 +14,12 @@ from app.table_recognition_v2_adapter import (
     _calculate_ocr_confidence,
     _calculate_table_quality,
     _select_best_table_candidate,
+    _try_semi_structured_table,
     recognize_table_v2,
     recognize_table_v2_local,
     table_recognition_runtime_summary,
 )
+from app.table_grid_analyzer import analyze_table_regions
 from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 
 
@@ -353,6 +355,67 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertGreater(quality["score"], 0.65)
         self.assertGreater(quality["merged_cell_ratio"], 0.0)
+
+    def test_grid_analyzer_splits_multiple_topologies_without_text_keywords(self) -> None:
+        image = np.full((240, 240, 3), 255, dtype=np.uint8)
+        for y in [10, 70, 130, 190, 230]:
+            image[y : y + 2, 10:230] = 0
+        for x in [10, 80, 150, 230]:
+            image[10:130, x : x + 2] = 0
+        for x in [10, 120, 230]:
+            image[130:230, x : x + 2] = 0
+
+        analysis = analyze_table_regions(image)
+
+        self.assertTrue(analysis["detected"])
+        self.assertGreaterEqual(len(analysis["regions"]), 2)
+        self.assertGreaterEqual(analysis["confidence"], 0.72)
+
+    def test_semi_structured_regions_are_read_with_slanext_and_merged(self) -> None:
+        image = np.zeros((120, 120, 3), dtype=np.uint8)
+
+        class RegionModel:
+            calls = 0
+
+            def predict(self, **kwargs):
+                RegionModel.calls += 1
+                value = "Top" if RegionModel.calls == 1 else "Bottom"
+                return [{"html": f"<table><tr><td>{value}</td><td>Value</td></tr><tr><td>A</td><td>B</td></tr></table>"}]
+
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 120, "height": 60}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            result = _try_semi_structured_table(image, RegionModel(), 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"], [["Top", "Value"], ["A", "B"], ["Bottom", "Value"], ["A", "B"]])
+        self.assertTrue(result["table_semi_analysis"]["detected"])
+        self.assertEqual(result["table_semi_analysis"]["merge_status"], "merged")
+        self.assertEqual(result["table_selected_method"], "semi_structured_regions")
+
+    def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
+        image = np.zeros((120, 120, 3), dtype=np.uint8)
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [{"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 60}}],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis):
+            result = _try_semi_structured_table(image, object(), 0.0)
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
