@@ -11,7 +11,6 @@ from app.model_runtime_client import ModelRuntimeUnavailableError
 from app.table_recognition_v2_adapter import (
     TableRecognitionV2UnavailableError,
     _build_table_candidate,
-    _build_geometry_reconstruction_candidate,
     _calculate_ocr_confidence,
     _calculate_table_quality,
     _select_best_table_candidate,
@@ -493,62 +492,6 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"], [["A", "B"]])
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "whole_roi_fallback")
         self.assertFalse(result["table_semi_analysis"]["detected"])
-
-    def test_geometry_reconstruction_splits_multi_line_slanext_cells(self) -> None:
-        original = _build_table_candidate(
-            {
-                "table_rows": [["IC-0001 IC-0003 IC-0004", "Computer Keyboard Scanner", "100 250 125"]],
-                "table_structured": {
-                    "rows": [["IC-0001 IC-0003 IC-0004", "Computer Keyboard Scanner", "100 250 125"]],
-                    "cells": [
-                        {"row": 0, "col": 0, "text": "IC-0001 IC-0003 IC-0004", "bbox": {"x": 0, "y": 0, "width": 90, "height": 90}, "rowSpan": 1, "colSpan": 1},
-                        {"row": 0, "col": 1, "text": "Computer Keyboard Scanner", "bbox": {"x": 100, "y": 0, "width": 140, "height": 90}, "rowSpan": 1, "colSpan": 1},
-                        {"row": 0, "col": 2, "text": "100 250 125", "bbox": {"x": 250, "y": 0, "width": 70, "height": 90}, "rowSpan": 1, "colSpan": 1},
-                    ],
-                },
-                "raw_results": [
-                    {"text": "IC-0001", "bbox": {"x": 5, "y": 10, "width": 50, "height": 10}, "confidence": 0.95},
-                    {"text": "Computer", "bbox": {"x": 105, "y": 10, "width": 70, "height": 10}, "confidence": 0.95},
-                    {"text": "100", "bbox": {"x": 255, "y": 10, "width": 30, "height": 10}, "confidence": 0.95},
-                    {"text": "IC-0003", "bbox": {"x": 5, "y": 35, "width": 50, "height": 10}, "confidence": 0.9},
-                    {"text": "Keyboard", "bbox": {"x": 105, "y": 35, "width": 70, "height": 10}, "confidence": 0.9},
-                    {"text": "250", "bbox": {"x": 255, "y": 35, "width": 30, "height": 10}, "confidence": 0.9},
-                    {"text": "IC-0004", "bbox": {"x": 5, "y": 60, "width": 50, "height": 10}, "confidence": 0.88},
-                    {"text": "Scanner", "bbox": {"x": 105, "y": 60, "width": 70, "height": 10}, "confidence": 0.88},
-                    {"text": "125", "bbox": {"x": 255, "y": 60, "width": 30, "height": 10}, "confidence": 0.88},
-                ],
-            },
-            "slanext",
-        )
-
-        reconstructed = _build_geometry_reconstruction_candidate(original)
-
-        self.assertIsNotNone(reconstructed)
-        assert reconstructed is not None
-        self.assertEqual(
-            reconstructed["table_rows"],
-            [["IC-0001", "Computer", "100"], ["IC-0003", "Keyboard", "250"], ["IC-0004", "Scanner", "125"]],
-        )
-        self.assertEqual(reconstructed["table_reconstruction"]["original_row_count"], 1)
-        self.assertEqual(reconstructed["table_reconstruction"]["reconstructed_row_count"], 3)
-        self.assertGreater(reconstructed["table_reconstruction"]["confidence"], 0.0)
-
-    def test_geometry_reconstruction_not_attempted_without_raw_ocr_geometry(self) -> None:
-        original = _build_table_candidate(
-            {
-                "table_rows": [["A B", "C D"]],
-                "table_structured": {
-                    "rows": [["A B", "C D"]],
-                    "cells": [
-                        {"row": 0, "col": 0, "text": "A B", "bbox": {"x": 0, "y": 0, "width": 90, "height": 40}},
-                        {"row": 0, "col": 1, "text": "C D", "bbox": {"x": 100, "y": 0, "width": 90, "height": 40}},
-                    ],
-                },
-            },
-            "slanext",
-        )
-
-        self.assertIsNone(_build_geometry_reconstruction_candidate(original))
 
 
 if __name__ == "__main__":

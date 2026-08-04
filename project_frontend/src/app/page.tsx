@@ -1141,12 +1141,12 @@ function HomeWorkspace() {
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
                 : responseStructured?.rows || rowsFromStructuredCells(responseStructured) || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+              const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const finalTableStructured = isTableRoi
                 ? rawTableRows
                   ? structuredTableFromRows(rawTableRows, responseStructured)
                   : responseStructured || createEmptyStructuredTable()
                 : responseStructured;
-              const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
               return {

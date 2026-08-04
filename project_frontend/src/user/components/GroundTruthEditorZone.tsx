@@ -1207,9 +1207,8 @@ export default function GroundTruthEditorZone({
     let changed = false;
     const updated = ocrResults.map(item => {
       const isTable = item.type === "table" || item.dataType === "table";
-      const normalizedTable = isTable ? normalizeResultTableForEditor(item) : null;
-      const rows = normalizedTable?.rows || normalizeTableRows(item.tableRows) || rowsFromStructuredCells(item.tableStructured);
-      const structured = normalizedTable?.structured || item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
+      const rows = normalizeTableRows(item.tableRows) || rowsFromStructuredCells(item.tableStructured);
+      const structured = item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
       const structuredJson = structured ? structuredTableToJson(structured) : "";
       const shouldUseStructured =
         Boolean(structuredJson) && (!item.extractedText.trim() || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(item.extractedText.trim()));

@@ -47,8 +47,6 @@ _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD = 0.45
 _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD = 0.70
 _TABLE_CANDIDATE_TIE_EPSILON = 0.03
 _TABLE_LOW_OCR_CONFIDENCE_THRESHOLD = 0.65
-_TABLE_RECONSTRUCTION_MIN_ROW_GAIN = 1
-_TABLE_RECONSTRUCTION_MIN_QUALITY_GAIN = 0.04
 
 
 def _model_service_url() -> str:
@@ -965,249 +963,6 @@ def _attach_candidate_competition(selected: Dict[str, Any], candidates: List[Dic
     return selected
 
 
-def _bbox_to_xywh(value: Any) -> Optional[Dict[str, float]]:
-    if isinstance(value, dict):
-        try:
-            if {"x", "y", "width", "height"}.issubset(value):
-                x = float(value.get("x") or 0.0)
-                y = float(value.get("y") or 0.0)
-                width = float(value.get("width") or 0.0)
-                height = float(value.get("height") or 0.0)
-                if width > 0 and height > 0:
-                    return {"x": x, "y": y, "width": width, "height": height}
-            if {"left", "top", "right", "bottom"}.issubset(value):
-                left = float(value.get("left") or 0.0)
-                top = float(value.get("top") or 0.0)
-                right = float(value.get("right") or 0.0)
-                bottom = float(value.get("bottom") or 0.0)
-                if right > left and bottom > top:
-                    return {"x": left, "y": top, "width": right - left, "height": bottom - top}
-        except (TypeError, ValueError):
-            return None
-    if isinstance(value, (list, tuple)) and len(value) >= 4:
-        try:
-            if all(isinstance(point, (list, tuple)) and len(point) >= 2 for point in value[:4]):
-                xs = [float(point[0]) for point in value[:4]]
-                ys = [float(point[1]) for point in value[:4]]
-                return {"x": min(xs), "y": min(ys), "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
-            x = float(value[0])
-            y = float(value[1])
-            third = float(value[2])
-            fourth = float(value[3])
-            width = third - x if third > x and fourth > y else third
-            height = fourth - y if third > x and fourth > y else fourth
-            if width > 0 and height > 0:
-                return {"x": x, "y": y, "width": width, "height": height}
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
-def _ocr_text_from_record(record: Dict[str, Any]) -> str:
-    for key in ("text", "ocrText", "ocr_text", "rec_text", "label", "content", "value"):
-        value = record.get(key)
-        if isinstance(value, str) and value.strip():
-            return normalize_ocr_text(value)
-    return ""
-
-
-def _collect_ocr_geometry(value: Any) -> List[Dict[str, Any]]:
-    boxes: List[Dict[str, Any]] = []
-    if isinstance(value, dict):
-        text = _ocr_text_from_record(value)
-        bbox = None
-        for key in ("bbox", "box", "points", "polygon", "poly", "dt_polys", "rec_boxes"):
-            bbox = _bbox_to_xywh(value.get(key))
-            if bbox:
-                break
-        if text and bbox:
-            confidence = _first_confidence_value(value, ["confidence", "score", "rec_score", "text_score", "ocr_confidence"])
-            boxes.append(
-                {
-                    "text": text,
-                    "bbox": bbox,
-                    "confidence": confidence,
-                    "center_x": bbox["x"] + bbox["width"] / 2,
-                    "center_y": bbox["y"] + bbox["height"] / 2,
-                    "height": bbox["height"],
-                }
-            )
-        for nested in value.values():
-            boxes.extend(_collect_ocr_geometry(nested))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            boxes.extend(_collect_ocr_geometry(item))
-    return boxes
-
-
-def _cell_bbox(cell: Dict[str, Any]) -> Optional[Dict[str, float]]:
-    return _bbox_to_xywh(cell.get("bbox") or cell.get("box"))
-
-
-def _contains_center(outer: Dict[str, float], inner: Dict[str, Any]) -> bool:
-    return (
-        outer["x"] <= float(inner["center_x"]) <= outer["x"] + outer["width"]
-        and outer["y"] <= float(inner["center_y"]) <= outer["y"] + outer["height"]
-    )
-
-
-def _cluster_boxes_by_y(boxes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    if not boxes:
-        return []
-    median_height = float(np.median([box["height"] for box in boxes if box.get("height")])) if boxes else 10.0
-    threshold = max(6.0, median_height * 0.65)
-    clusters: List[List[Dict[str, Any]]] = []
-    for box in sorted(boxes, key=lambda item: (item["center_y"], item["center_x"])):
-        target = None
-        for cluster in clusters:
-            center = sum(float(item["center_y"]) for item in cluster) / len(cluster)
-            if abs(float(box["center_y"]) - center) <= threshold:
-                target = cluster
-                break
-        if target is None:
-            clusters.append([box])
-        else:
-            target.append(box)
-    return [sorted(cluster, key=lambda item: item["center_x"]) for cluster in clusters]
-
-
-def _build_geometry_reconstruction_candidate(original: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    structured = original.get("table_structured")
-    if not isinstance(structured, dict) or not isinstance(structured.get("cells"), list):
-        return None
-    raw_boxes = _collect_ocr_geometry(original.get("raw_results"))
-    if len(raw_boxes) < 2:
-        raw_boxes = _collect_ocr_geometry(original.get("segments"))
-    if len(raw_boxes) < 2:
-        return None
-
-    visible_cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict) and not cell.get("hidden")]
-    cell_boxes: List[Dict[str, Any]] = []
-    for cell in visible_cells:
-        bbox = _cell_bbox(cell)
-        if not bbox:
-            continue
-        cell_boxes.append({**cell, "_bbox": bbox})
-    if len(cell_boxes) < 2:
-        return None
-
-    assigned: List[Dict[str, Any]] = []
-    for box in raw_boxes:
-        containing = [cell for cell in cell_boxes if _contains_center(cell["_bbox"], box)]
-        if not containing:
-            continue
-        cell = min(containing, key=lambda item: float(item["_bbox"]["width"]) * float(item["_bbox"]["height"]))
-        assigned.append({**box, "row": int(cell.get("row") or 0), "col": int(cell.get("col") or 0), "source_cell": cell})
-
-    if len(assigned) < 2:
-        return None
-    multi_box_cells: Dict[tuple[int, int], int] = {}
-    for item in assigned:
-        key = (int(item["row"]), int(item["col"]))
-        multi_box_cells[key] = multi_box_cells.get(key, 0) + 1
-    if not any(count > 1 for count in multi_box_cells.values()):
-        return None
-
-    clusters = _cluster_boxes_by_y(assigned)
-    if len(clusters) <= len(normalize_table_rows(original.get("table_rows") or [])):
-        return None
-    multi_column_lines = sum(1 for cluster in clusters if len({int(item["col"]) for item in cluster}) >= 2)
-    if multi_column_lines < 2:
-        return None
-
-    columns = sorted({int(cell.get("col") or 0) for cell in cell_boxes})
-    if len(columns) < 2:
-        return None
-    col_to_index = {col: index for index, col in enumerate(columns)}
-    reconstructed_rows: List[List[str]] = []
-    reconstructed_cells: List[Dict[str, Any]] = []
-    segments: List[Dict[str, Any]] = []
-    confidence_values: List[float] = []
-    for row_index, cluster in enumerate(clusters):
-        row_values = ["" for _ in columns]
-        grouped: Dict[int, List[Dict[str, Any]]] = {}
-        for item in cluster:
-            grouped.setdefault(int(item["col"]), []).append(item)
-            if item.get("confidence") is not None:
-                confidence_values.append(float(item["confidence"]))
-            segments.append({"text": item["text"], "confidence": item.get("confidence"), "bbox": item["bbox"]})
-        for original_col, items in grouped.items():
-            col_index = col_to_index.get(original_col)
-            if col_index is None:
-                continue
-            sorted_items = sorted(items, key=lambda item: item["center_x"])
-            text = normalize_ocr_text(" ".join(item["text"] for item in sorted_items))
-            bbox = _merge_bboxes([item["bbox"] for item in sorted_items])
-            row_values[col_index] = text
-            cell: Dict[str, Any] = {
-                "row": row_index,
-                "col": col_index,
-                "text": text,
-                "rowSpan": 1,
-                "colSpan": 1,
-                "ocrText": text,
-                "groundTruth": text,
-            }
-            if bbox:
-                cell["bbox"] = bbox
-            if sorted_items and sorted_items[0].get("confidence") is not None:
-                cell["confidence"] = sum(float(item.get("confidence") or 0.0) for item in sorted_items) / len(sorted_items)
-            reconstructed_cells.append(cell)
-        reconstructed_rows.append(row_values)
-
-    reconstructed_rows = normalize_table_rows(reconstructed_rows)
-    if not _has_usable_table_shape(reconstructed_rows):
-        return None
-
-    original_rows = normalize_table_rows(original.get("table_rows") or [])
-    structured_reconstructed = {
-        "rows": reconstructed_rows,
-        "cells": reconstructed_cells,
-        "headerRowCount": int(structured.get("headerRowCount") or structured.get("header_row_count") or 1),
-        "postProcessing": "geometry_guided_cell_reconstruction",
-    }
-    result = {
-        "text": _markdown_table(reconstructed_rows),
-        "confidence": 0.0,
-        "segments": segments,
-        "attempts": [*([attempt for attempt in original.get("attempts") or [] if isinstance(attempt, dict)]), {"step": "geometry_guided_cell_reconstruction", "logical_row_count": len(reconstructed_rows)}],
-        "preprocessing": original.get("preprocessing") or "paddle_table_recognition_v2",
-        "engine": original.get("engine") or "table_recognition_v2",
-        "model": original.get("model") or _TABLE_MODEL_NAME,
-        "table_html": original.get("table_html"),
-        "table_rows": reconstructed_rows,
-        "table_structured": structured_reconstructed,
-        "table_debug": {
-            **(original.get("table_debug") if isinstance(original.get("table_debug"), dict) else {}),
-            "status": "geometry_reconstructed",
-            "reconstruction_source": "slanext_cell_bbox_and_raw_ocr_geometry",
-        },
-        "raw_results": original.get("raw_results"),
-        "table_reconstruction": {
-            "attempted": True,
-            "selected": False,
-            "original_row_count": len(original_rows),
-            "reconstructed_row_count": len(reconstructed_rows),
-            "confidence": 0.0,
-        },
-    }
-    candidate = _build_table_candidate(result, "geometry_reconstruction")
-    candidate["table_reconstruction"]["confidence"] = candidate.get("confidence", 0.0)
-    original_quality = original.get("table_debug", {}).get("quality") if isinstance(original.get("table_debug"), dict) else {}
-    reconstructed_quality = candidate.get("table_debug", {}).get("quality") if isinstance(candidate.get("table_debug"), dict) else {}
-    row_gain = len(reconstructed_rows) - len(original_rows)
-    quality_gain = float(reconstructed_quality.get("score") or 0.0) - float(original_quality.get("score") or 0.0)
-    if row_gain < _TABLE_RECONSTRUCTION_MIN_ROW_GAIN and quality_gain < _TABLE_RECONSTRUCTION_MIN_QUALITY_GAIN:
-        return None
-    return candidate
-
-
-def _add_reconstruction_candidate(original_candidate: Dict[str, Any], candidates: List[Dict[str, Any]]) -> None:
-    reconstruction = _build_geometry_reconstruction_candidate(original_candidate)
-    if reconstruction:
-        candidates.append(reconstruction)
-
-
 def _predict_table_model(model: Any, image: np.ndarray) -> Any:
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
@@ -1420,11 +1175,6 @@ def _try_semi_structured_table(
             output = _predict_table_model(model, crop)
             raw_result = _slanext_result_from_output(output, crop, started, {"index": index, "type": region.get("type"), "bbox": bbox})
             candidate = _build_table_candidate(raw_result, "slanext")
-            region_candidates_for_selection = [candidate]
-            _add_reconstruction_candidate(candidate, region_candidates_for_selection)
-            candidate, _ = _select_best_table_candidate(region_candidates_for_selection)
-            if candidate.get("table_reconstruction"):
-                candidate["table_reconstruction"]["selected"] = True
             remapped = _remap_candidate_to_roi(candidate, float(x), float(y), 0)
             quality = remapped.get("table_debug", {}).get("quality") if isinstance(remapped.get("table_debug"), dict) else {}
             if _candidate_has_content(remapped) and bool(quality.get("usable_shape")):
@@ -1486,7 +1236,6 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_result = _slanext_result_from_output(output, image, started)
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
     candidates = [slanext_candidate]
-    _add_reconstruction_candidate(slanext_candidate, candidates)
     slanext_debug = slanext_candidate.get("table_debug") if isinstance(slanext_candidate.get("table_debug"), dict) else {}
     slanext_quality = slanext_debug.get("quality") if isinstance(slanext_debug.get("quality"), dict) else {}
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
@@ -1506,10 +1255,6 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             logger.warning("Borderless table candidate failed: %s", error)
 
     selected, selection_reason = _select_best_table_candidate(candidates)
-    for candidate in candidates:
-        reconstruction = candidate.get("table_reconstruction")
-        if isinstance(reconstruction, dict):
-            reconstruction["selected"] = candidate is selected
     selected = _attach_candidate_competition(selected, candidates, selection_reason)
     selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
     return selected
