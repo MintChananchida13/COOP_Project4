@@ -285,6 +285,7 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
                     "model": table_result.get("model"),
                     "table_html": table_result.get("table_html"),
                     "table_rows": table_result.get("table_rows"),
+                    "table_structured": table_result.get("table_structured"),
                     "table_debug": table_result.get("table_debug"),
                     "error": table_result.get("error"),
                 }

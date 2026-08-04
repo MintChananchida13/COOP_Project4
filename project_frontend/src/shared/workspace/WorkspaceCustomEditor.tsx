@@ -19,6 +19,25 @@ const roiTypePatch = (type: 'text' | 'table' | 'image'): Partial<ROI> => ({
   extractionMethod: type === 'image' ? 'extract_image' : type === 'table' ? 'table_recognition_v2' : 'paddle_thai_ocr',
 });
 
+const createWorkspaceRoiId = () => {
+  const randomPart = Math.floor(Math.random() * 1_000_000);
+  return Date.now() * 1000 + randomPart;
+};
+
+const normalizeRoiMetadata = (roi: ROI): ROI => {
+  const type =
+    roi.type === 'table' || roi.dataType === 'table' || roi.extractionMethod === 'ocr_table' || roi.extractionMethod === 'table_recognition_v2'
+      ? 'table'
+      : roi.type === 'image' || roi.dataType === 'image' || roi.extractionMethod === 'extract_image'
+        ? 'image'
+        : 'text';
+
+  return {
+    ...roi,
+    ...roiTypePatch(type),
+  };
+};
+
 interface LayoutDetectedRegion {
   field_name?: string;
   type?: "text" | "table" | "image";
@@ -291,7 +310,7 @@ export default function WorkspaceCustomEditor({
     const bbox = getBoundingBoxOfPoints(points);
     if (bbox.width <= 1 || bbox.height <= 1) return;
     const newBox = {
-      id: Date.now(),
+      id: createWorkspaceRoiId(),
       fieldName: `field_${rois.length + 1}`,
       x: bbox.x,
       y: bbox.y,
@@ -574,7 +593,7 @@ export default function WorkspaceCustomEditor({
 
     if (dragBox.w > 5 && dragBox.h > 5) {
       const newBox = {
-        id: Date.now(),
+        id: createWorkspaceRoiId(),
         fieldName: `field_${rois.length + 1}`,
         x: dragBox.x,
         y: dragBox.y,
@@ -624,7 +643,7 @@ export default function WorkspaceCustomEditor({
         });
       }
       
-      return { ...roi, ...fields, points: updatedPoints };
+      return normalizeRoiMetadata({ ...roi, ...fields, points: updatedPoints });
     }));
   };
 
@@ -733,7 +752,7 @@ export default function WorkspaceCustomEditor({
     if (width < 4 || height < 4) return null;
 
     return {
-      id: Date.now() + pageIndex * 1000000 + index + Math.floor(Math.random() * 1000000),
+      id: createWorkspaceRoiId() + pageIndex * 1000000 + index,
       fieldName: `field_${fieldNumber}`,
       x: xRatio * displayWidth,
       y: yRatio * displayHeight,

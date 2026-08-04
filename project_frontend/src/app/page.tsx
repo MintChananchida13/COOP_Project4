@@ -373,7 +373,32 @@ function getWorkspaceExtractionMethod(field: TemplateField) {
   ) {
     return field.extractionMethod;
   }
-  return field.dataType === "table" ? "table_recognition_v2" : "paddle_thai_ocr";
+  if (field.dataType === "table") return "table_recognition_v2";
+  if (field.dataType === "image") return "extract_image";
+  return "paddle_thai_ocr";
+}
+
+function getRoiFieldType(roi: ROI): "text" | "table" | "image" {
+  if (roi.type === "table" || roi.dataType === "table" || roi.extractionMethod === "ocr_table" || roi.extractionMethod === "table_recognition_v2") {
+    return "table";
+  }
+  if (roi.type === "image" || roi.dataType === "image" || roi.extractionMethod === "extract_image") {
+    return "image";
+  }
+  return "text";
+}
+
+function getRoiExtractionMethod(roi: ROI) {
+  const roiType = getRoiFieldType(roi);
+  if (
+    roi.extractionMethod === "ocr_table" ||
+    roi.extractionMethod === "table_recognition_v2" ||
+    roi.extractionMethod === "paddle_thai_ocr" ||
+    roi.extractionMethod === "extract_image"
+  ) {
+    return roi.extractionMethod;
+  }
+  return roiType === "image" ? "extract_image" : roiType === "table" ? "table_recognition_v2" : "paddle_thai_ocr";
 }
 
 async function buildTemplateCanvasImages(
@@ -1083,7 +1108,9 @@ function HomeWorkspace() {
         const roiPromises = pageRois.map(async (roi, rIdx) => {
           const croppedBase64 = cropRoiToImage(img, roi, scaleX, scaleY);
           if (!croppedBase64) return null;
-          const isTableRoi = roi.type === "table" || roi.dataType === "table" || roi.extractionMethod === "table_recognition_v2" || roi.extractionMethod === "ocr_table";
+          const roiFieldType = getRoiFieldType(roi);
+          const roiExtractionMethod = getRoiExtractionMethod(roi);
+          const isTableRoi = roiFieldType === "table";
           const createTablePlaceholderResult = (message: string): OCRResult & { pageIndex?: number } => {
             const emptyStructured = createEmptyStructuredTable();
             return {
@@ -1120,9 +1147,8 @@ function HomeWorkspace() {
                     y: 0,
                     width: roi.width * scaleX,
                     height: roi.height * scaleY,
-                    type: roi.type || "text",
-                    extractionMethod:
-                      roi.extractionMethod || (roi.type === "image" ? "extract_image" : roi.type === "table" ? "table_recognition_v2" : "paddle_thai_ocr"),
+                    type: roiFieldType,
+                    extractionMethod: roiExtractionMethod,
                   },
                 ],
               }),
@@ -1141,26 +1167,26 @@ function HomeWorkspace() {
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
                 : responseStructured?.rows || rowsFromStructuredCells(responseStructured) || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
-              const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const finalTableStructured = isTableRoi
                 ? rawTableRows
                   ? structuredTableFromRows(rawTableRows, responseStructured)
                   : responseStructured || createEmptyStructuredTable()
                 : responseStructured;
+              const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
                 roiId: roi.id,
-                fieldName: resItem.fieldName,
+                fieldName: String(resItem.fieldName || roi.fieldName),
                 bbox: [],
                 extractedText,
                 originalText: extractedText,
                 confidence: resItem.confidence,
                 saved_path: resItem.saved_path || "",
                 pageIndex: pageIdx,
-                type: (resItem.type as "text" | "table" | "image" | undefined) || roi.type || "text",
-                dataType: isTableRoi ? "table" : roi.dataType || "string",
+                type: roiFieldType,
+                dataType: roiFieldType,
                 role: roi.role || "data_extraction",
                 weight: roi.weight !== undefined ? roi.weight : 1.0,
                 points: roi.points,

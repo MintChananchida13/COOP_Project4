@@ -143,7 +143,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 region_bbox = _clip_region(0, current_top, width, current_bottom - current_top, width, height)
                 if region_bbox["height"] >= height * _MIN_REGION_HEIGHT_RATIO and region_bbox["width"] >= width * _MIN_REGION_WIDTH_RATIO:
                     regions.append({
-                        "type": "grid" if current_count >= 3 else "merged_block",
+                        "type": "grid" if current_count >= 2 else "merged_block",
                         "bbox": region_bbox,
                         "confidence": 0.0,
                         "grid_line_count": current_count,
@@ -155,7 +155,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
         region_bbox = _clip_region(0, current_top, width, current_bottom - current_top, width, height)
         if region_bbox["height"] >= height * _MIN_REGION_HEIGHT_RATIO and region_bbox["width"] >= width * _MIN_REGION_WIDTH_RATIO:
             regions.append({
-                "type": "grid" if current_count >= 3 else "merged_block",
+                "type": "grid" if current_count >= 2 else "merged_block",
                 "bbox": region_bbox,
                 "confidence": 0.0,
                 "grid_line_count": current_count,

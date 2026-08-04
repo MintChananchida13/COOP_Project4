@@ -416,6 +416,36 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "merged")
         self.assertEqual(result["table_selected_method"], "semi_structured_regions")
 
+    def test_semi_structured_keeps_region_with_content_even_when_region_shape_is_small(self) -> None:
+        image = np.zeros((120, 120, 3), dtype=np.uint8)
+
+        class SmallRegionModel:
+            calls = 0
+
+            def predict(self, **kwargs):
+                SmallRegionModel.calls += 1
+                return [{"html": f"<table><tr><td>Region {SmallRegionModel.calls}</td></tr></table>"}]
+
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 120, "height": 60}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            result = _try_semi_structured_table(image, SmallRegionModel(), 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"], [["Region 1"], ["Region 2"]])
+        self.assertEqual(result["table_debug"]["status"], "semi_structured_merged")
+
     def test_semi_structured_remaps_bbox_and_preserves_spans(self) -> None:
         image = np.zeros((160, 160, 3), dtype=np.uint8)
 

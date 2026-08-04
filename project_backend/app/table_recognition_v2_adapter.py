@@ -651,6 +651,12 @@ def _postprocess_table_result(result: Dict[str, Any]) -> Dict[str, Any]:
     structured = processed.get("table_structured")
     if not isinstance(structured, dict):
         structured = _extract_structured_table(processed, normalized_rows, html)
+    elif normalized_rows and not isinstance(structured.get("rows"), list):
+        structured = _structured_from_rows(normalized_rows, _normalize_cell_dicts(structured.get("cells")))
+    elif not normalized_rows and isinstance(structured.get("cells"), list):
+        normalized_rows = _rows_from_cells(structured.get("cells"))
+        if normalized_rows and not isinstance(structured.get("rows"), list):
+            structured = _structured_from_rows(normalized_rows, _normalize_cell_dicts(structured.get("cells")))
 
     if normalized_rows:
         processed["table_rows"] = normalized_rows
@@ -892,6 +898,17 @@ def _should_try_borderless_candidate(quality: Dict[str, Any], final_confidence: 
 
 def _candidate_has_content(candidate: Dict[str, Any]) -> bool:
     return bool(candidate.get("table_rows") or str(candidate.get("text") or "").strip())
+
+
+def _region_candidate_has_usable_content(candidate: Dict[str, Any], quality: Dict[str, Any]) -> bool:
+    if not _candidate_has_content(candidate):
+        return False
+    if bool(quality.get("usable_shape")):
+        return True
+    row_count = int(quality.get("row_count") or 0)
+    column_count = int(quality.get("column_count") or 0)
+    non_empty_cell_count = int(quality.get("non_empty_cell_count") or 0)
+    return row_count > 0 and column_count > 0 and non_empty_cell_count > 0
 
 
 def _candidate_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
@@ -1177,7 +1194,7 @@ def _try_semi_structured_table(
             candidate = _build_table_candidate(raw_result, "slanext")
             remapped = _remap_candidate_to_roi(candidate, float(x), float(y), 0)
             quality = remapped.get("table_debug", {}).get("quality") if isinstance(remapped.get("table_debug"), dict) else {}
-            if _candidate_has_content(remapped) and bool(quality.get("usable_shape")):
+            if _region_candidate_has_usable_content(remapped, quality):
                 region_candidates.append(remapped)
                 merge_regions.append({**region, "status": "recognized"})
             else:
