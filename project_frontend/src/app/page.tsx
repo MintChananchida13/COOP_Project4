@@ -656,6 +656,39 @@ const createEmptyStructuredTable = (): StructuredTableResult => ({
   headerRowCount: 1,
 });
 
+const structuredTableFromRows = (
+  rows: string[][],
+  sourceStructured?: StructuredTableResult | null
+): StructuredTableResult => {
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const normalizedRows = rows.map((row) => [
+    ...row.map((cell) => String(cell ?? "")),
+    ...Array(columnCount - row.length).fill(""),
+  ]);
+  const sourceCells = new Map((sourceStructured?.cells || []).map((cell) => [`${cell.row}:${cell.col}`, cell]));
+  return {
+    ...sourceStructured,
+    rows: normalizedRows,
+    cells: normalizedRows.flatMap((row, rowIndex) =>
+      row.map((text, colIndex) => {
+        const sourceCell = sourceCells.get(`${rowIndex}:${colIndex}`);
+        return {
+          row: rowIndex,
+          col: colIndex,
+          text,
+          rowSpan: sourceCell?.rowSpan ?? 1,
+          colSpan: sourceCell?.colSpan ?? 1,
+          bbox: sourceCell?.bbox,
+          ocrText: sourceCell?.ocrText ?? sourceCell?.text ?? text,
+          groundTruth: sourceCell?.groundTruth ?? text,
+          hidden: sourceCell?.hidden ?? false,
+        };
+      })
+    ),
+    headerRowCount: sourceStructured?.headerRowCount ?? 1,
+  };
+};
+
 const parseHtmlTableRows = (value?: string): string[][] | null => parseHtmlTableStructured(value)?.rows || null;
 
 const parseHtmlTableStructured = (value?: string): StructuredTableResult | null => {
@@ -1108,7 +1141,11 @@ function HomeWorkspace() {
               const rawTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
                 : responseStructured?.rows || rowsFromStructuredCells(responseStructured) || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
-              const finalTableStructured = isTableRoi ? responseStructured || createEmptyStructuredTable() : responseStructured;
+              const finalTableStructured = isTableRoi
+                ? rawTableRows
+                  ? structuredTableFromRows(rawTableRows, responseStructured)
+                  : responseStructured || createEmptyStructuredTable()
+                : responseStructured;
               const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");

@@ -473,6 +473,40 @@ const structuredTableToJson = (structured: StructuredTableResult) =>
     2
   );
 
+const normalizeResultTableForEditor = (result: OCRResult & { pageIndex?: number }) => {
+  const rows =
+    normalizeTableRows(result.tableStructured?.rows) ||
+    rowsFromStructuredCells(result.tableStructured) ||
+    normalizeTableRows(result.tableRows) ||
+    parseHtmlTable(result.tableHtml) ||
+    parseTableText(result.extractedText) ||
+    parseTableText(getRawOcrText(result));
+
+  if (!rows) {
+    return {
+      rows: null,
+      structured: result.tableStructured || null,
+      value: result.extractedText || getRawOcrText(result),
+    };
+  }
+
+  const structured = structuredTableFromSnapshot(
+    {
+      rows,
+      mergedCells: cloneMergedCells(result.tableMergedCells),
+      columnWidths: result.tableStructured?.colWidths || [],
+      headerRowCount: result.tableStructured?.headerRowCount ?? 1,
+    },
+    result.tableStructured
+  );
+
+  return {
+    rows,
+    structured,
+    value: result.extractedText || structuredTableToJson(structured),
+  };
+};
+
 const EditableTableResult = ({
   value,
   rows: sourceRows,
@@ -1173,8 +1207,9 @@ export default function GroundTruthEditorZone({
     let changed = false;
     const updated = ocrResults.map(item => {
       const isTable = item.type === "table" || item.dataType === "table";
-      const rows = normalizeTableRows(item.tableRows) || rowsFromStructuredCells(item.tableStructured);
-      const structured = item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
+      const normalizedTable = isTable ? normalizeResultTableForEditor(item) : null;
+      const rows = normalizedTable?.rows || normalizeTableRows(item.tableRows) || rowsFromStructuredCells(item.tableStructured);
+      const structured = normalizedTable?.structured || item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
       const structuredJson = structured ? structuredTableToJson(structured) : "";
       const shouldUseStructured =
         Boolean(structuredJson) && (!item.extractedText.trim() || /^\(?no\s+text\s+found\s+in\s+roi\)?$/i.test(item.extractedText.trim()));
@@ -1208,27 +1243,33 @@ export default function GroundTruthEditorZone({
 
 
   const currentPageRois = useMemo(() => {
-    return rois.filter(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === currentImageIndex);
+    const pageRois = rois.filter(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === currentImageIndex);
+    return pageRois.length > 0 ? pageRois : rois;
   }, [rois, currentImageIndex]);
 
 
   const currentPageOcrResults = useMemo(() => {
-    return ocrResults.filter(res => (res.pageIndex !== undefined ? Number(res.pageIndex) : 0) === currentImageIndex);
+    const pageResults = ocrResults.filter(res => (res.pageIndex !== undefined ? Number(res.pageIndex) : 0) === currentImageIndex);
+    return pageResults.length > 0 ? pageResults : ocrResults;
   }, [ocrResults, currentImageIndex]);
 
   const getRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
-    return currentPageRois.find(roi => roi.id === result.roiId) || currentPageRois.find(roi => roi.fieldName === result.fieldName);
+    return currentPageRois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
+      || rois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
+      || currentPageRois.find(roi => roi.fieldName === result.fieldName)
+      || rois.find(roi => roi.fieldName === result.fieldName);
   };
 
   const getAnyPageRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
     const resultPageIndex = result.pageIndex !== undefined ? Number(result.pageIndex) : 0;
-    return rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.id === result.roiId)
+    return rois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
+      || rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.id === result.roiId)
       || rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.fieldName === result.fieldName);
   };
 
   const currentPageResultGroups = useMemo(() => {
     const typedResults = currentPageOcrResults.map((res) => {
-      const matchedRoi = currentPageRois.find(roi => roi.id === res.roiId) || currentPageRois.find(roi => roi.fieldName === res.fieldName);
+      const matchedRoi = getRoiForResult(res);
       const fieldType = resolveResultFieldType(res, matchedRoi);
       return { res, matchedRoi, fieldType };
     });
@@ -1238,7 +1279,7 @@ export default function GroundTruthEditorZone({
       table: typedResults.filter(item => item.fieldType === "table"),
       image: typedResults.filter(item => item.fieldType === "image"),
     };
-  }, [currentPageOcrResults, currentPageRois]);
+  }, [currentPageOcrResults, currentPageRois, rois]);
 
   const allPageResultGroups = useMemo(() => {
     const typedResults = ocrResults.map((res) => {
@@ -1746,12 +1787,7 @@ export default function GroundTruthEditorZone({
                     <div className="space-y-3 p-3">
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
-                        const rawTableRows = tableRowsFromResult(res, getRawOcrText(res));
-                        const editedTableRows = normalizeTableRows(res.tableStructured?.rows) || rowsFromStructuredCells(res.tableStructured) || normalizeTableRows(res.tableRows) || parseTableText(res.extractedText) || rawTableRows;
-                        const fallbackStructured = editedTableRows
-                          ? structuredTableFromSnapshot({ rows: editedTableRows, mergedCells: cloneMergedCells(res.tableMergedCells), columnWidths: res.tableStructured?.colWidths || [], headerRowCount: res.tableStructured?.headerRowCount ?? 1 }, res.tableStructured)
-                          : null;
-                        const editedTableValue = res.extractedText || (fallbackStructured ? structuredTableToJson(fallbackStructured) : getRawOcrText(res));
+                        const normalizedTable = normalizeResultTableForEditor(res);
                         return (
                           <article
                             key={res.id}
@@ -1789,10 +1825,10 @@ export default function GroundTruthEditorZone({
 
                             <div onClick={(e) => e.stopPropagation()}>
                               <EditableTableResult
-                                value={editedTableValue}
-                                rows={editedTableRows}
+                                value={normalizedTable.value}
+                                rows={normalizedTable.rows}
                                 mergedCells={res.tableMergedCells}
-                                structured={res.tableStructured}
+                                structured={normalizedTable.structured}
                                 onChange={(nextValue, nextRows, nextMergedCells, nextStructured) =>
                                   setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells, tableStructured: nextStructured } : item))
                                 }
