@@ -1138,8 +1138,13 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
     return _attach_candidate_competition(selected, [merged_candidate, *candidates_for_competition], reason)
 
 
-def _try_semi_structured_table(image: np.ndarray, model: Any, started: float) -> Optional[Dict[str, Any]]:
-    analysis = analyze_table_regions(image)
+def _try_semi_structured_table(
+    image: np.ndarray,
+    model: Any,
+    started: float,
+    analysis: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    analysis = analysis if isinstance(analysis, dict) else analyze_table_regions(image)
     if not analysis.get("detected") or float(analysis.get("confidence") or 0.0) < 0.72:
         return None
     regions = [region for region in analysis.get("regions") or [] if isinstance(region, dict)]
@@ -1189,6 +1194,18 @@ def _try_semi_structured_table(image: np.ndarray, model: Any, started: float) ->
     return _merge_region_candidates(region_candidates, semi_analysis)
 
 
+def _whole_roi_semi_analysis(analysis: Optional[Dict[str, Any]], merge_status: str = "whole_roi_fallback") -> Dict[str, Any]:
+    if isinstance(analysis, dict):
+        result = dict(analysis)
+    else:
+        result = {"detected": False, "confidence": 0.0, "regions": [], "reason": "not_analyzed"}
+    result.setdefault("detected", False)
+    result.setdefault("confidence", 0.0)
+    result.setdefault("regions", [])
+    result["merge_status"] = merge_status
+    return result
+
+
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     started = time.perf_counter()
     if image is None or image.size == 0:
@@ -1205,12 +1222,15 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
 
     logger.info("Using local Table Recognition runtime")
     model = _load_table_model()
+    semi_analysis: Optional[Dict[str, Any]] = None
     try:
-        semi_result = _try_semi_structured_table(image, model, started)
+        semi_analysis = analyze_table_regions(image)
+        semi_result = _try_semi_structured_table(image, model, started, semi_analysis)
         if semi_result:
             return semi_result
     except Exception as error:
         logger.info("Semi-structured table analysis fell back to whole ROI: %s", error)
+        semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
 
     output = _predict_table_model(model, image)
     slanext_result = _slanext_result_from_output(output, image, started)
@@ -1235,7 +1255,9 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             logger.warning("Borderless table candidate failed: %s", error)
 
     selected, selection_reason = _select_best_table_candidate(candidates)
-    return _attach_candidate_competition(selected, candidates, selection_reason)
+    selected = _attach_candidate_competition(selected, candidates, selection_reason)
+    selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
+    return selected
 
 
 def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:

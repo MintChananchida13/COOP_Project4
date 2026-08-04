@@ -490,7 +490,8 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = recognize_table_v2_local(image)
 
         self.assertEqual(result["table_rows"], [["A", "B"]])
-        self.assertNotIn("table_semi_analysis", result)
+        self.assertEqual(result["table_semi_analysis"]["merge_status"], "whole_roi_fallback")
+        self.assertFalse(result["table_semi_analysis"]["detected"])
 
 
 if __name__ == "__main__":
