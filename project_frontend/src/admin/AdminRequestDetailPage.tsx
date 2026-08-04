@@ -623,7 +623,7 @@ export default function AdminRequestDetailPage({
               <div className="mt-3 grid gap-2">
                 {[
                   { value: "new_template", title: "Create New Template", note: "สร้าง Template ใหม่และเริ่ม Version 1" },
-                  { value: "new_version", title: "Add New Version", note: "เลือก Template เดิม แล้วให้ระบบช่วยหา Version ที่ใกล้ที่สุดเพื่อ reuse ROI" },
+                  { value: "new_version", title: "Add New Version", note: "เลือก Template เดิม และเริ่มสร้าง Version ใหม่" },
                 ].map((option) => (
                   <label
                     key={option.value}
