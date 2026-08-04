@@ -40,6 +40,12 @@ _TABLE_TEXT_RECOGNITION_MODEL_NAME = os.getenv("PADDLE_TABLE_TEXT_RECOGNITION_MO
 _TABLE_DEVICE = "cpu"
 _BORDERLESS_MIN_COLUMNS = 2
 _BORDERLESS_MIN_ROWS = 2
+_TABLE_BORDERLESS_FINAL_CONFIDENCE_THRESHOLD = 0.72
+_TABLE_BORDERLESS_FILL_RATIO_THRESHOLD = 0.20
+_TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD = 0.45
+_TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD = 0.70
+_TABLE_CANDIDATE_TIE_EPSILON = 0.03
+_TABLE_LOW_OCR_CONFIDENCE_THRESHOLD = 0.65
 
 
 def _model_service_url() -> str:
@@ -654,6 +660,300 @@ def _postprocess_table_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return processed
 
 
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _to_confidence_score(value: Any) -> Optional[float]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric) or numeric < 0:
+        return None
+    if numeric > 1.0:
+        numeric = numeric / 100.0
+    return _clamp01(numeric)
+
+
+def _cell_has_text(cell: Dict[str, Any]) -> bool:
+    return bool(str(cell.get("text") or cell.get("ocrText") or cell.get("ocr_text") or cell.get("groundTruth") or "").strip())
+
+
+def _first_confidence_value(record: Dict[str, Any], keys: List[str]) -> Optional[float]:
+    for key in keys:
+        if key in record:
+            score = _to_confidence_score(record.get(key))
+            if score is not None:
+                return score
+    return None
+
+
+def _calculate_table_quality(rows: List[List[str]], structured: Optional[Dict[str, Any]], method: str) -> Dict[str, Any]:
+    normalized_rows = normalize_table_rows(rows) if rows else []
+    row_count, column_count = _table_shape(normalized_rows)
+    total_cells = row_count * column_count if row_count and column_count else 0
+    non_empty_by_row = [sum(1 for cell in row if str(cell).strip()) for row in normalized_rows]
+    non_empty_cell_count = sum(non_empty_by_row)
+    non_empty_rows = sum(1 for count in non_empty_by_row if count > 0)
+    fill_ratio = non_empty_cell_count / total_cells if total_cells else 0.0
+    non_empty_row_ratio = non_empty_rows / row_count if row_count else 0.0
+    active_counts = [count for count in non_empty_by_row if count > 0]
+    if column_count <= 0 or not active_counts:
+        column_consistency = 0.0
+    else:
+        average_count = sum(active_counts) / len(active_counts)
+        variance = sum((count - average_count) ** 2 for count in active_counts) / len(active_counts)
+        normalized_std = (variance ** 0.5) / max(column_count, 1)
+        column_consistency = _clamp01(1.0 - normalized_std)
+    sparse_rows = sum(1 for count in non_empty_by_row if column_count > 0 and count > 0 and (count / column_count) < 0.35)
+    sparse_row_ratio = sparse_rows / row_count if row_count else 0.0
+
+    structured_cells = []
+    if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
+        structured_cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
+    visible_structured_cells = [cell for cell in structured_cells if not cell.get("hidden")]
+    has_structured_cells = any(_cell_has_text(cell) or cell.get("bbox") is not None for cell in visible_structured_cells)
+    merged_cells = [
+        cell
+        for cell in visible_structured_cells
+        if int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1) > 1
+        or int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1) > 1
+    ]
+    merged_cell_ratio = len(merged_cells) / len(visible_structured_cells) if visible_structured_cells else 0.0
+    usable_shape = _has_usable_table_shape(normalized_rows)
+    penalties: List[str] = []
+    if not normalized_rows:
+        penalties.append("no_rows")
+    if not usable_shape:
+        penalties.append("unusable_shape")
+    if column_count < _BORDERLESS_MIN_COLUMNS:
+        penalties.append("too_few_columns")
+    if fill_ratio < _TABLE_BORDERLESS_FILL_RATIO_THRESHOLD:
+        penalties.append("low_fill_ratio")
+    if column_consistency < _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD:
+        penalties.append("low_column_consistency")
+    if sparse_row_ratio > _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD:
+        penalties.append("too_many_sparse_rows")
+
+    shape_score = 0.0
+    if row_count >= _BORDERLESS_MIN_ROWS and column_count >= _BORDERLESS_MIN_COLUMNS:
+        shape_score = 1.0
+    elif row_count > 0 and column_count > 0:
+        shape_score = 0.35
+    structure_bonus = 0.08 if has_structured_cells else 0.0
+    merged_adjustment = 0.04 if 0.0 < merged_cell_ratio <= 0.35 else (-0.04 if merged_cell_ratio > 0.65 else 0.0)
+    score = (
+        shape_score * 0.30
+        + fill_ratio * 0.24
+        + non_empty_row_ratio * 0.16
+        + column_consistency * 0.18
+        + (1.0 - sparse_row_ratio) * 0.08
+        + structure_bonus
+        + merged_adjustment
+    )
+    if not usable_shape:
+        score *= 0.65
+    if not normalized_rows:
+        score = 0.0
+
+    return {
+        "score": round(_clamp01(score), 4),
+        "row_count": row_count,
+        "column_count": column_count,
+        "non_empty_cell_count": non_empty_cell_count,
+        "fill_ratio": round(_clamp01(fill_ratio), 4),
+        "non_empty_row_ratio": round(_clamp01(non_empty_row_ratio), 4),
+        "column_consistency": round(_clamp01(column_consistency), 4),
+        "sparse_row_ratio": round(_clamp01(sparse_row_ratio), 4),
+        "has_structured_cells": has_structured_cells,
+        "merged_cell_ratio": round(_clamp01(merged_cell_ratio), 4),
+        "usable_shape": usable_shape,
+        "penalties": penalties,
+        "method": method,
+    }
+
+
+def _collect_confidence_values(value: Any, include_empty: bool = False) -> List[float]:
+    values: List[float] = []
+    if isinstance(value, dict):
+        if include_empty or _cell_has_text(value):
+            for key in ("confidence", "score", "rec_score", "text_score", "ocr_confidence"):
+                score = _to_confidence_score(value.get(key))
+                if score is not None:
+                    values.append(score)
+            for key in ("rec_scores", "text_scores", "scores", "confidences"):
+                nested = value.get(key)
+                if isinstance(nested, (list, tuple)):
+                    values.extend(score for score in (_to_confidence_score(item) for item in nested) if score is not None)
+        for nested_value in value.values():
+            values.extend(_collect_confidence_values(nested_value, include_empty=include_empty))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            values.extend(_collect_confidence_values(item, include_empty=include_empty))
+    return values
+
+
+def _calculate_ocr_confidence(result: Dict[str, Any]) -> Dict[str, Any]:
+    values: List[float] = []
+    segments = result.get("segments")
+    if isinstance(segments, list):
+        for segment in segments:
+            if isinstance(segment, dict) and _cell_has_text(segment):
+                score = _first_confidence_value(segment, ["confidence", "score", "rec_score", "text_score", "ocr_confidence"])
+                if score is not None:
+                    values.append(score)
+
+    structured = result.get("table_structured")
+    if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
+        for cell in structured.get("cells") or []:
+            if isinstance(cell, dict) and _cell_has_text(cell):
+                for key in ("confidence", "score", "rec_score", "text_score", "ocr_confidence"):
+                    score = _to_confidence_score(cell.get(key))
+                    if score is not None:
+                        values.append(score)
+
+    raw_sources = [
+        result.get("raw_result"),
+        result.get("raw_results"),
+        result.get("table_debug", {}).get("raw_result") if isinstance(result.get("table_debug"), dict) else None,
+    ]
+    for source in raw_sources:
+        values.extend(_collect_confidence_values(source, include_empty=False))
+
+    if not values:
+        return {
+            "available": False,
+            "score": 0.0,
+            "average": 0.0,
+            "minimum": 0.0,
+            "recognized_count": 0,
+            "low_confidence_count": 0,
+        }
+
+    average = sum(values) / len(values)
+    minimum = min(values)
+    return {
+        "available": True,
+        "score": round(_clamp01(average), 4),
+        "average": round(_clamp01(average), 4),
+        "minimum": round(_clamp01(minimum), 4),
+        "recognized_count": len(values),
+        "low_confidence_count": sum(1 for value in values if value < _TABLE_LOW_OCR_CONFIDENCE_THRESHOLD),
+    }
+
+
+def _build_table_candidate(result: Dict[str, Any], method: str) -> Dict[str, Any]:
+    candidate = _postprocess_table_result(result)
+    rows = normalize_table_rows(candidate.get("table_rows") or [])
+    structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else None
+    quality = _calculate_table_quality(rows, structured, method)
+    ocr_confidence = _calculate_ocr_confidence(candidate)
+    structure_score = float(quality["score"])
+    if ocr_confidence["available"]:
+        final_confidence = structure_score * 0.65 + float(ocr_confidence["score"]) * 0.35
+    else:
+        final_confidence = structure_score * 0.85
+    final_confidence = round(_clamp01(final_confidence), 4)
+
+    candidate["confidence"] = final_confidence
+    debug = candidate.get("table_debug")
+    if not isinstance(debug, dict):
+        debug = {}
+    debug["quality"] = quality
+    debug["ocr_confidence"] = ocr_confidence
+    debug["final_confidence"] = final_confidence
+    debug["candidate_method"] = method
+    candidate["table_debug"] = debug
+    candidate["table_selected_method"] = method
+    return candidate
+
+
+def _should_try_borderless_candidate(quality: Dict[str, Any], final_confidence: float) -> bool:
+    return (
+        not bool(quality.get("usable_shape"))
+        or int(quality.get("row_count") or 0) <= 0
+        or int(quality.get("column_count") or 0) < _BORDERLESS_MIN_COLUMNS
+        or float(final_confidence or 0.0) < _TABLE_BORDERLESS_FINAL_CONFIDENCE_THRESHOLD
+        or float(quality.get("fill_ratio") or 0.0) < _TABLE_BORDERLESS_FILL_RATIO_THRESHOLD
+        or float(quality.get("column_consistency") or 0.0) < _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD
+        or float(quality.get("sparse_row_ratio") or 0.0) > _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD
+    )
+
+
+def _candidate_has_content(candidate: Dict[str, Any]) -> bool:
+    return bool(candidate.get("table_rows") or str(candidate.get("text") or "").strip())
+
+
+def _candidate_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    debug = candidate.get("table_debug") if isinstance(candidate.get("table_debug"), dict) else {}
+    quality = debug.get("quality") if isinstance(debug.get("quality"), dict) else {}
+    ocr_confidence = debug.get("ocr_confidence") if isinstance(debug.get("ocr_confidence"), dict) else {}
+    return {
+        "method": debug.get("candidate_method") or candidate.get("table_selected_method") or "",
+        "structure_score": float(quality.get("score") or 0.0),
+        "ocr_score": float(ocr_confidence.get("score") or 0.0),
+        "ocr_available": bool(ocr_confidence.get("available")),
+        "final_confidence": float(debug.get("final_confidence") or candidate.get("confidence") or 0.0),
+        "row_count": int(quality.get("row_count") or 0),
+        "column_count": int(quality.get("column_count") or 0),
+        "usable_shape": bool(quality.get("usable_shape")),
+        "has_structured_cells": bool(quality.get("has_structured_cells")),
+        "non_empty_cell_count": int(quality.get("non_empty_cell_count") or 0),
+        "penalties": quality.get("penalties") if isinstance(quality.get("penalties"), list) else [],
+    }
+
+
+def _select_best_table_candidate(candidates: List[Dict[str, Any]]) -> tuple[Dict[str, Any], str]:
+    valid_candidates = [candidate for candidate in candidates if _candidate_has_content(candidate)]
+    if not valid_candidates:
+        return (candidates[0] if candidates else {}, "no_valid_candidate")
+    if len(valid_candidates) == 1:
+        return valid_candidates[0], "only_valid_candidate"
+
+    sorted_candidates = sorted(valid_candidates, key=lambda item: float(item.get("confidence") or 0.0), reverse=True)
+    best = sorted_candidates[0]
+    runner_up = sorted_candidates[1]
+    best_score = float(best.get("confidence") or 0.0)
+    runner_score = float(runner_up.get("confidence") or 0.0)
+    if best_score - runner_score > _TABLE_CANDIDATE_TIE_EPSILON:
+        if _candidate_summary(best)["method"] == "borderless_text_clustering" and _candidate_summary(runner_up)["method"] == "slanext":
+            return best, "borderless_improved_low_quality_slanext"
+        return best, "higher_final_confidence"
+
+    def tie_key(candidate: Dict[str, Any]) -> tuple[int, int, int, int, int]:
+        summary = _candidate_summary(candidate)
+        return (
+            1 if summary["usable_shape"] else 0,
+            1 if summary["has_structured_cells"] else 0,
+            1 if summary["column_count"] > 1 else 0,
+            summary["non_empty_cell_count"],
+            1 if summary["method"] == "slanext" else 0,
+        )
+
+    selected = sorted(valid_candidates, key=lambda item: (tie_key(item), float(item.get("confidence") or 0.0)), reverse=True)[0]
+    if _candidate_summary(selected)["method"] == "slanext" and _candidate_summary(selected)["has_structured_cells"]:
+        return selected, "tie_preferred_structured_slanext"
+    return selected, "tie_breaker"
+
+
+def _attach_candidate_competition(selected: Dict[str, Any], candidates: List[Dict[str, Any]], reason: str) -> Dict[str, Any]:
+    selected_debug = selected.get("table_debug")
+    if not isinstance(selected_debug, dict):
+        selected_debug = {}
+    selected_method = _candidate_summary(selected)["method"]
+    selected_debug["candidate_competition"] = {
+        "selected_method": selected_method,
+        "selection_reason": reason,
+        "candidate_count": len(candidates),
+        "candidates": [_candidate_summary(candidate) for candidate in candidates],
+    }
+    selected["table_debug"] = selected_debug
+    selected["table_selected_method"] = selected_method
+    selected["table_candidates"] = [_candidate_summary(candidate) for candidate in candidates]
+    return selected
+
+
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     started = time.perf_counter()
     if image is None or image.size == 0:
@@ -704,22 +1004,11 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             structured_table = _extract_structured_table(item, rows, html)
 
     rows = normalize_table_rows(rows)
-    borderless_result: Optional[Dict[str, Any]] = None
-    if not _has_usable_table_shape(rows):
-        borderless_result = _recognize_borderless_table(image)
-        if borderless_result:
-            borderless_debug = borderless_result.get("table_debug")
-            if isinstance(borderless_debug, dict):
-                borderless_debug["slan_rows_before_fallback"] = len(rows)
-                borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in rows), default=0)
-                borderless_debug["slan_status_before_fallback"] = "structure_empty" if not rows else "insufficient_shape"
-            return _postprocess_table_result(borderless_result)
-
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
-    return _postprocess_table_result({
+    slanext_result = {
         "text": text,
-        "confidence": 1.0 if text or html else 0.0,
+        "confidence": 0.0,
         "segments": [],
         "attempts": [],
         "preprocessing": "paddle_table_recognition_v2",
@@ -739,7 +1028,29 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             "input_size": [int(input_width), int(input_height)],
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         },
-    })
+        "raw_results": dicts,
+    }
+    slanext_candidate = _build_table_candidate(slanext_result, "slanext")
+    candidates = [slanext_candidate]
+    slanext_debug = slanext_candidate.get("table_debug") if isinstance(slanext_candidate.get("table_debug"), dict) else {}
+    slanext_quality = slanext_debug.get("quality") if isinstance(slanext_debug.get("quality"), dict) else {}
+    slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
+
+    if _should_try_borderless_candidate(slanext_quality, slanext_confidence):
+        try:
+            borderless_result = _recognize_borderless_table(image)
+            if borderless_result:
+                borderless_debug = borderless_result.get("table_debug")
+                if isinstance(borderless_debug, dict):
+                    borderless_debug["slan_rows_before_fallback"] = len(rows)
+                    borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in rows), default=0)
+                    borderless_debug["slan_status_before_fallback"] = "structure_empty" if not rows else "low_quality_candidate"
+                candidates.append(_build_table_candidate(borderless_result, "borderless_text_clustering"))
+        except Exception as error:
+            logger.warning("Borderless table candidate failed: %s", error)
+
+    selected, selection_reason = _select_best_table_candidate(candidates)
+    return _attach_candidate_competition(selected, candidates, selection_reason)
 
 
 def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
@@ -761,6 +1072,12 @@ def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
             remote_debug.setdefault("remote_runtime_called", True)
         else:
             remote_result["table_debug"] = {"remote_runtime_called": True}
-        return _postprocess_table_result(remote_result)
+        if isinstance(remote_result.get("table_debug"), dict) and isinstance(
+            remote_result["table_debug"].get("candidate_competition"),
+            dict,
+        ):
+            return _postprocess_table_result(remote_result)
+        remote_method = str(remote_result.get("table_selected_method") or remote_result["table_debug"].get("candidate_method") or "remote_runtime")
+        return _build_table_candidate(remote_result, remote_method)
 
     return recognize_table_v2_local(image)

@@ -10,6 +10,10 @@ import numpy as np
 from app.model_runtime_client import ModelRuntimeUnavailableError
 from app.table_recognition_v2_adapter import (
     TableRecognitionV2UnavailableError,
+    _build_table_candidate,
+    _calculate_ocr_confidence,
+    _calculate_table_quality,
+    _select_best_table_candidate,
     recognize_table_v2,
     recognize_table_v2_local,
     table_recognition_runtime_summary,
@@ -219,6 +223,136 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[1], ["", ""])
         self.assertEqual(rows[2][1], "10")
+
+    def test_slanext_good_structure_wins_over_borderless(self) -> None:
+        slanext = _build_table_candidate(
+            {
+                "text": "",
+                "table_rows": [["A", "B"], ["C", "D"]],
+                "table_structured": {
+                    "rows": [["A", "B"], ["C", "D"]],
+                    "cells": [
+                        {"row": 0, "col": 0, "text": "A"},
+                        {"row": 0, "col": 1, "text": "B"},
+                        {"row": 1, "col": 0, "text": "C"},
+                        {"row": 1, "col": 1, "text": "D"},
+                    ],
+                },
+            },
+            "slanext",
+        )
+        borderless = _build_table_candidate({"table_rows": [["A", ""], ["C", ""]]}, "borderless_text_clustering")
+
+        selected, reason = _select_best_table_candidate([slanext, borderless])
+
+        self.assertIs(selected, slanext)
+        self.assertIn(reason, {"higher_final_confidence", "tie_preferred_structured_slanext", "tie_breaker"})
+
+    def test_sparse_slanext_loses_to_more_consistent_borderless(self) -> None:
+        slanext = _build_table_candidate({"table_rows": [["A", "", "", ""], ["", "", "", ""], ["B", "", "", ""]]}, "slanext")
+        borderless = _build_table_candidate(
+            {
+                "table_rows": [["A", "B", "C"], ["D", "E", "F"]],
+                "segments": [{"text": "A", "confidence": 0.92}, {"text": "B", "confidence": 0.9}],
+            },
+            "borderless_text_clustering",
+        )
+
+        selected, reason = _select_best_table_candidate([slanext, borderless])
+
+        self.assertIs(selected, borderless)
+        self.assertIn(reason, {"higher_final_confidence", "borderless_improved_low_quality_slanext"})
+
+    def test_tie_prefers_structured_slanext(self) -> None:
+        rows = [["A", "B"], ["C", "D"]]
+        slanext = _build_table_candidate(
+            {
+                "table_rows": rows,
+                "table_structured": {
+                    "rows": rows,
+                    "cells": [
+                        {"row": 0, "col": 0, "text": "A"},
+                        {"row": 0, "col": 1, "text": "B"},
+                        {"row": 1, "col": 0, "text": "C"},
+                        {"row": 1, "col": 1, "text": "D"},
+                    ],
+                },
+            },
+            "slanext",
+        )
+        borderless = _build_table_candidate({"table_rows": rows}, "borderless_text_clustering")
+        slanext["confidence"] = 0.8
+        slanext["table_debug"]["final_confidence"] = 0.8
+        borderless["confidence"] = 0.81
+        borderless["table_debug"]["final_confidence"] = 0.81
+
+        selected, reason = _select_best_table_candidate([borderless, slanext])
+
+        self.assertIs(selected, slanext)
+        self.assertEqual(reason, "tie_preferred_structured_slanext")
+
+    def test_borderless_error_returns_slanext_candidate(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
+
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"), patch(
+            "app.table_recognition_v2_adapter._recognize_borderless_table",
+            side_effect=RuntimeError("borderless boom"),
+        ):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_selected_method"], "slanext")
+        self.assertEqual(result["table_rows"], [["A", "B"]])
+
+    def test_no_rows_quality_score_is_zero(self) -> None:
+        quality = _calculate_table_quality([], None, "slanext")
+
+        self.assertEqual(quality["score"], 0.0)
+        self.assertFalse(quality["usable_shape"])
+        self.assertIn("no_rows", quality["penalties"])
+
+    def test_missing_ocr_confidence_is_not_assumed_perfect(self) -> None:
+        candidate = _build_table_candidate({"table_rows": [["A", "B"], ["C", "D"]]}, "slanext")
+
+        self.assertFalse(candidate["table_debug"]["ocr_confidence"]["available"])
+        self.assertLess(candidate["confidence"], 1.0)
+
+    def test_confidence_0_to_100_is_normalized(self) -> None:
+        ocr_confidence = _calculate_ocr_confidence(
+            {
+                "segments": [
+                    {"text": "A", "confidence": 95},
+                    {"text": "B", "confidence": 80},
+                    {"text": "", "confidence": 10},
+                ]
+            }
+        )
+
+        self.assertTrue(ocr_confidence["available"])
+        self.assertEqual(ocr_confidence["recognized_count"], 2)
+        self.assertAlmostEqual(ocr_confidence["average"], 0.875)
+
+    def test_merged_cells_are_not_over_penalized(self) -> None:
+        rows = [["Header", ""], ["A", "B"], ["C", "D"]]
+        structured = {
+            "rows": rows,
+            "cells": [
+                {"row": 0, "col": 0, "text": "Header", "rowSpan": 1, "colSpan": 2},
+                {"row": 0, "col": 1, "text": "", "hidden": True},
+                {"row": 1, "col": 0, "text": "A"},
+                {"row": 1, "col": 1, "text": "B"},
+                {"row": 2, "col": 0, "text": "C"},
+                {"row": 2, "col": 1, "text": "D"},
+            ],
+        }
+
+        quality = _calculate_table_quality(rows, structured, "slanext")
+
+        self.assertGreater(quality["score"], 0.65)
+        self.assertGreater(quality["merged_cell_ratio"], 0.0)
 
 
 if __name__ == "__main__":
