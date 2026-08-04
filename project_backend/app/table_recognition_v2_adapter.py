@@ -254,7 +254,30 @@ def _rows_from_html(html: str) -> List[List[str]]:
         parser.feed(html)
     except Exception:
         return []
-    return [row for row in parser.rows if row]
+    return parser.rows
+
+
+def _rows_from_structured_cells_preserve_grid(cells: Any) -> List[List[str]]:
+    normalized_cells = _normalize_cell_dicts(cells)
+    if not normalized_cells:
+        return []
+    max_row = 0
+    max_col = 0
+    for cell in normalized_cells:
+        row = int(cell.get("row") or 0)
+        col = int(cell.get("col") or 0)
+        row_span = max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+        col_span = max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+        max_row = max(max_row, row + row_span - 1)
+        max_col = max(max_col, col + col_span - 1)
+    rows = [["" for _ in range(max_col + 1)] for _ in range(max_row + 1)]
+    for cell in normalized_cells:
+        if cell.get("hidden"):
+            continue
+        row = int(cell.get("row") or 0)
+        col = int(cell.get("col") or 0)
+        rows[row][col] = normalize_ocr_text(cell.get("groundTruth") or cell.get("text") or cell.get("ocrText") or "")
+    return normalize_table_rows(rows)
 
 
 def _structured_from_html(html: str) -> Optional[Dict[str, Any]]:
@@ -273,7 +296,7 @@ def _structured_from_html(html: str) -> Optional[Dict[str, Any]]:
         parser.feed(html)
     except Exception:
         return None
-    rows = [row for row in parser.rows if row]
+    rows = parser.rows
     if not rows:
         return None
     max_columns = max((len(row) for row in rows), default=0)
@@ -576,6 +599,48 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     }
 
 
+def _has_usable_structured_cells(structured: Any) -> bool:
+    if not isinstance(structured, dict):
+        return False
+    cells = structured.get("cells")
+    if not isinstance(cells, list):
+        return False
+    return any(isinstance(cell, dict) and not cell.get("hidden") and _cell_has_text(cell) for cell in cells)
+
+
+def _has_usable_table_result(candidate: Dict[str, Any]) -> bool:
+    rows = normalize_table_rows(candidate.get("table_rows") or [])
+    if rows and _has_usable_table_shape(rows):
+        return True
+    return _has_usable_structured_cells(candidate.get("table_structured"))
+
+
+def _recognize_ocr_table_fallback(image: np.ndarray) -> Optional[Dict[str, Any]]:
+    result = _recognize_borderless_table(image)
+    if not result:
+        return None
+    rows = normalize_table_rows(result.get("table_rows") or [])
+    structured = result.get("table_structured") if isinstance(result.get("table_structured"), dict) else _structured_from_rows(rows)
+    if not rows and not _has_usable_structured_cells(structured):
+        return None
+    debug = result.get("table_debug") if isinstance(result.get("table_debug"), dict) else {}
+    debug.update(
+        {
+            "status": "ocr_table_fallback",
+            "ocr_table_fallback_used": True,
+            "borderless_fallback_used": True,
+        }
+    )
+    return {
+        **result,
+        "text": _markdown_table(rows) if rows else str(result.get("text") or ""),
+        "table_rows": rows,
+        "table_structured": structured,
+        "table_debug": debug,
+        "preprocessing": "ocr_table_fallback_text_detection_clustering",
+    }
+
+
 def _normalize_cell_dicts(cells: Any) -> List[Dict[str, Any]]:
     if not isinstance(cells, list):
         return []
@@ -585,8 +650,8 @@ def _normalize_cell_dicts(cells: Any) -> List[Dict[str, Any]]:
         if not isinstance(cell, dict):
             continue
         text = normalize_ocr_text(cell.get("text") or cell.get("content") or cell.get("value") or "")
-        row = cell.get("row") or cell.get("row_index") or cell.get("start_row")
-        col = cell.get("col") or cell.get("col_index") or cell.get("start_col")
+        row = cell.get("row") if cell.get("row") is not None else cell.get("row_index") if cell.get("row_index") is not None else cell.get("start_row")
+        col = cell.get("col") if cell.get("col") is not None else cell.get("col_index") if cell.get("col_index") is not None else cell.get("start_col")
         if row is None or col is None:
             continue
         try:
@@ -632,6 +697,10 @@ def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
         rows = structured.get("rows")
         if rows and all(isinstance(row, list) for row in rows):
             return normalize_table_rows(rows)
+    if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
+        rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
+        if rows:
+            return rows
     for key in ("rows", "table_rows", "cells"):
         rows = _rows_from_cells(result.get(key))
         if rows:
@@ -668,6 +737,8 @@ def _postprocess_table_result(result: Dict[str, Any]) -> Dict[str, Any]:
         normalized_rows = _rows_from_html(html)
 
     structured = processed.get("table_structured")
+    if isinstance(structured, dict) and isinstance(structured.get("cells"), list) and not normalized_rows:
+        normalized_rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
     if not isinstance(structured, dict):
         structured = _extract_structured_table(processed, normalized_rows, html)
     elif normalized_rows and not isinstance(structured.get("rows"), list):
@@ -1144,47 +1215,142 @@ def _cluster_values(values: List[float], tolerance: float) -> List[float]:
     return [sum(cluster) / len(cluster) for cluster in clusters]
 
 
-def _geometry_rows_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[List[str]]) -> Optional[List[List[str]]]:
+def _bbox_edges(cell: Dict[str, Any]) -> Optional[tuple[float, float, float, float]]:
+    bbox = cell.get("bbox") or cell.get("box")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox.get("x") or 0.0)
+        y = float(bbox.get("y") or 0.0)
+        width = float(bbox.get("width") or 0.0)
+        height = float(bbox.get("height") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return (x, y, x + width, y + height)
+
+
+def _column_anchors_from_cells(cells: List[Dict[str, Any]]) -> List[Dict[str, float]]:
     positioned = []
-    heights = []
     widths = []
     for cell in cells:
         center = _bbox_center(cell)
-        if center is None:
+        edges = _bbox_edges(cell)
+        if center is None or edges is None:
             continue
-        bbox = cell.get("bbox") or cell.get("box") or {}
         try:
-            heights.append(float(bbox.get("height") or 0.0))
-            widths.append(float(bbox.get("width") or 0.0))
+            col = int(cell.get("col"))
         except (TypeError, ValueError):
-            pass
-        positioned.append((center[0], center[1], cell))
+            col = -1
+        widths.append(max(1.0, edges[2] - edges[0]))
+        positioned.append({
+            "col": col,
+            "colSpan": float(max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))),
+            "center": center[0],
+            "left": edges[0],
+            "right": edges[2],
+        })
+    if not positioned:
+        return []
+
+    anchors_by_col: Dict[int, List[Dict[str, float]]] = {}
+    for item in positioned:
+        if item["col"] >= 0 and int(item["colSpan"]) == 1:
+            anchors_by_col.setdefault(int(item["col"]), []).append(item)
+
+    anchors: List[Dict[str, float]] = []
+    if anchors_by_col:
+        for next_col in sorted(anchors_by_col):
+            items = anchors_by_col[next_col]
+            center = sum(item["center"] for item in items) / len(items)
+            anchors.append({"col": float(next_col), "center": center, "left": min(item["left"] for item in items), "right": max(item["right"] for item in items)})
+    else:
+        tolerance = max(10.0, (sum(widths) / len(widths)) * 0.35 if widths else 10.0)
+        for index, center in enumerate(_cluster_values([item["center"] for item in positioned], tolerance)):
+            anchors.append({"col": float(index), "center": center, "left": center, "right": center})
+
+    anchors = sorted(anchors, key=lambda item: item["center"])
+    if not anchors:
+        return []
+    centers = [anchor["center"] for anchor in anchors]
+    median_gap = float(np.median([right - left for left, right in zip(centers, centers[1:])])) if len(centers) > 1 else (float(np.median(widths)) if widths else 40.0)
+    for index, anchor in enumerate(anchors):
+        left_bound = (centers[index - 1] + anchor["center"]) / 2.0 if index > 0 else anchor["center"] - median_gap / 2.0
+        right_bound = (anchor["center"] + centers[index + 1]) / 2.0 if index < len(anchors) - 1 else anchor["center"] + median_gap / 2.0
+        anchor["left"] = min(anchor["left"], left_bound)
+        anchor["right"] = max(anchor["right"], right_bound)
+        anchor["col"] = float(index)
+    return anchors
+
+
+def _nearest_anchor_index(center_x: float, anchors: List[Dict[str, float]], tolerance: float) -> int:
+    for index, anchor in enumerate(anchors):
+        if anchor["left"] - tolerance <= center_x <= anchor["right"] + tolerance:
+            return index
+    return min(range(len(anchors)), key=lambda index: abs(anchors[index]["center"] - center_x))
+
+
+def _span_for_bbox(left: float, right: float, center_x: float, anchors: List[Dict[str, float]], tolerance: float) -> tuple[int, int]:
+    anchor_index = _nearest_anchor_index(center_x, anchors, tolerance)
+    covered = [
+        index
+        for index, anchor in enumerate(anchors)
+        if left <= anchor["center"] + tolerance and right >= anchor["center"] - tolerance
+    ]
+    if len(covered) <= 1:
+        return (anchor_index, 1)
+    start = min(covered)
+    end = max(covered)
+    return (start, end - start + 1)
+
+
+def _geometry_table_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[List[str]]) -> Optional[tuple[List[List[str]], List[Dict[str, Any]], List[Dict[str, float]]]]:
+    positioned = []
+    heights = []
+    for cell in cells:
+        center = _bbox_center(cell)
+        edges = _bbox_edges(cell)
+        if center is None or edges is None:
+            continue
+        heights.append(max(1.0, edges[3] - edges[1]))
+        positioned.append((center[0], center[1], edges, cell))
     if not positioned:
         return None
 
     y_tolerance = max(8.0, (sum(heights) / len(heights)) * 0.55 if heights else 8.0)
-    x_tolerance = max(10.0, (sum(widths) / len(widths)) * 0.35 if widths else 10.0)
     row_centers = _cluster_values([item[1] for item in positioned], y_tolerance)
-    col_centers = _cluster_values([item[0] for item in positioned], x_tolerance)
-    if not row_centers or not col_centers:
+    anchors = _column_anchors_from_cells(cells)
+    if not row_centers or not anchors:
         return None
 
-    rows = [["" for _ in col_centers] for _ in row_centers]
-    for center_x, center_y, cell in positioned:
+    anchor_gap = float(np.median([right["center"] - left["center"] for left, right in zip(anchors, anchors[1:])])) if len(anchors) > 1 else 40.0
+    x_tolerance = max(8.0, anchor_gap * 0.18)
+    rows = [["" for _ in anchors] for _ in row_centers]
+    assigned_cells: List[Dict[str, Any]] = []
+    for center_x, center_y, edges, cell in positioned:
         row_index = min(range(len(row_centers)), key=lambda index: abs(row_centers[index] - center_y))
-        col_index = min(range(len(col_centers)), key=lambda index: abs(col_centers[index] - center_x))
+        col_index, inferred_col_span = _span_for_bbox(edges[0], edges[2], center_x, anchors, x_tolerance)
         text = normalize_ocr_text(cell.get("groundTruth") or cell.get("text") or cell.get("ocrText") or "")
         if not text:
             continue
         rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
+        source_col_span = max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+        source_row_span = max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+        col_span = inferred_col_span if inferred_col_span > 1 else source_col_span
+        assigned_cells.append({
+            **cell,
+            "row": row_index,
+            "col": col_index,
+            "text": text,
+            "ocrText": normalize_ocr_text(cell.get("ocrText") or cell.get("text") or text),
+            "groundTruth": text,
+            "rowSpan": source_row_span,
+            "colSpan": col_span,
+        })
 
     rows = normalize_table_rows(rows)
     if not rows:
         return None
-    fallback_columns = max((len(row) for row in fallback_rows), default=0)
-    if fallback_columns and len(rows[0]) == fallback_columns and len(rows) <= len(fallback_rows):
-        return None
-    return rows
+    return (rows, assigned_cells, anchors)
 
 
 def _section_from_region_candidate(candidate: Dict[str, Any], region: Dict[str, Any], region_id: str) -> Dict[str, Any]:
@@ -1194,16 +1360,43 @@ def _section_from_region_candidate(candidate: Dict[str, Any], region: Dict[str, 
     for cell in source_cells:
         cell["regionId"] = region_id
 
-    geometry_rows = _geometry_rows_from_cells(source_cells, source_rows)
+    geometry_table = _geometry_table_from_cells(source_cells, source_rows)
+    geometry_rows = geometry_table[0] if geometry_table else None
+    geometry_cells = geometry_table[1] if geometry_table else None
+    column_anchors = geometry_table[2] if geometry_table else []
     local_rows = geometry_rows or source_rows
-    local_structured = _structured_from_rows(local_rows, source_cells) if local_rows else None
+    local_structured = (
+        {
+            "rows": local_rows,
+            "cells": geometry_cells,
+            "headerRowCount": int(structured.get("headerRowCount") or structured.get("header_row_count") or 1) if isinstance(structured, dict) else 1,
+            "columnAnchors": column_anchors,
+        }
+        if geometry_cells
+        else (_structured_from_rows(local_rows, source_cells) if local_rows else None)
+    )
     if isinstance(local_structured, dict):
         for cell in local_structured.get("cells") or []:
             if isinstance(cell, dict):
                 cell["regionId"] = region_id
 
     local_column_count = max((len(row) for row in local_rows), default=0)
-    local_columns = [{"col": index, "label": f"Column {index + 1}"} for index in range(local_column_count)]
+    local_columns = [
+        {
+            "col": index,
+            "label": f"Column {index + 1}",
+            **(
+                {
+                    "center": column_anchors[index].get("center"),
+                    "left": column_anchors[index].get("left"),
+                    "right": column_anchors[index].get("right"),
+                }
+                if index < len(column_anchors)
+                else {}
+            ),
+        }
+        for index in range(local_column_count)
+    ]
     return {
         "regionId": region_id,
         "type": region.get("type") or "grid",
@@ -1215,9 +1408,10 @@ def _section_from_region_candidate(candidate: Dict[str, Any], region: Dict[str, 
         "table_structured": local_structured,
         "table_html": candidate.get("table_html"),
         "reconstruction": {
-            "method": "geometry_aware_section" if geometry_rows else "slanext_region_structure",
+            "method": "column_anchor_reconstruction" if geometry_rows else "slanext_region_structure",
             "used_geometry": bool(geometry_rows),
             "local_column_count": local_column_count,
+            "column_anchor_count": len(column_anchors),
             "source_row_count": len(source_rows),
             "row_count": len(local_rows),
         },
@@ -1239,9 +1433,8 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
         region_id = str(candidate_region.get("regionId") or candidate_region.get("region_id") or f"region_{section_index + 1}")
         section = _section_from_region_candidate(candidate, candidate_region if isinstance(candidate_region, dict) else {}, region_id)
         table_sections.append(section)
-        structured = candidate.get("table_structured")
-        structured_rows = normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else [])
-        rows = structured_rows or normalize_table_rows(candidate.get("table_rows") or [])
+        structured = section.get("table_structured") if isinstance(section.get("table_structured"), dict) else candidate.get("table_structured")
+        rows = normalize_table_rows(section.get("rows") or [])
         row_offset = len(merged_rows)
         merged_rows.extend(rows)
         if isinstance(structured, dict):
@@ -1475,27 +1668,45 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_debug = slanext_candidate.get("table_debug") if isinstance(slanext_candidate.get("table_debug"), dict) else {}
     slanext_quality = slanext_debug.get("quality") if isinstance(slanext_debug.get("quality"), dict) else {}
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
+    slanext_usable = _has_usable_table_result(slanext_candidate)
 
     if _should_try_borderless_candidate(slanext_quality, slanext_confidence):
         try:
             geometry_started = time.perf_counter()
-            borderless_result = _recognize_borderless_table(image)
-            if borderless_result:
+            fallback_result = _recognize_ocr_table_fallback(image)
+            if fallback_result:
                 ocr_inference_count += 2
-                borderless_debug = borderless_result.get("table_debug")
-                if isinstance(borderless_debug, dict):
+                fallback_debug = fallback_result.get("table_debug")
+                if isinstance(fallback_debug, dict):
                     slanext_rows = normalize_table_rows(slanext_result.get("table_rows") or [])
-                    borderless_debug["slan_rows_before_fallback"] = len(slanext_rows)
-                    borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in slanext_rows), default=0)
-                    borderless_debug["slan_status_before_fallback"] = "structure_empty" if not slanext_rows else "low_quality_candidate"
-                candidates.append(_build_table_candidate(borderless_result, "borderless_text_clustering"))
+                    fallback_debug["slan_rows_before_fallback"] = len(slanext_rows)
+                    fallback_debug["slan_columns_before_fallback"] = max((len(row) for row in slanext_rows), default=0)
+                    fallback_debug["slan_status_before_fallback"] = "structure_empty" if not slanext_rows else "low_quality_candidate"
+                fallback_candidate = _build_table_candidate(fallback_result, "ocr_table_fallback")
+                candidates.append(fallback_candidate)
+                if not slanext_usable:
+                    selected = _attach_candidate_competition(fallback_candidate, candidates, "ocr_table_fallback_after_unusable_slanext")
+                    selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
+                    selected_debug = selected.get("table_debug")
+                    if isinstance(selected_debug, dict):
+                        selected_debug["status"] = "ocr_table_fallback"
+                        selected_debug["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+                        selected_debug["model_inference_count"] = model_inference_count
+                        selected_debug["ocr_inference_count"] = ocr_inference_count
+                    logger.info(
+                        "Table Recognition phase timing: phase=Total path=ocr_table_fallback model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+                        model_inference_count,
+                        ocr_inference_count,
+                        time.perf_counter() - started,
+                    )
+                    return selected
             logger.info(
                 "Table Recognition phase timing: phase=Geometry Reconstruction elapsed=%.3fs used=%s",
                 time.perf_counter() - geometry_started,
-                bool(borderless_result),
+                bool(fallback_result),
             )
         except Exception as error:
-            logger.warning("Borderless table candidate failed: %s", error)
+            logger.warning("OCR table fallback failed: %s", error)
 
     selected, selection_reason = _select_best_table_candidate(candidates)
     selected = _attach_candidate_competition(selected, candidates, selection_reason)

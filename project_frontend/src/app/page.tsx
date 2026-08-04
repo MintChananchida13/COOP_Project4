@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
@@ -870,6 +870,7 @@ function HomeWorkspace() {
   const [rois, setRois] = useState<(ROI & { pageIndex?: number })[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [ocrResults, setOcrResults] = useState<(OCRResult & { pageIndex?: number })[]>([]);
+  const ocrRunIdRef = useRef(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isTemplateRequestOpen, setIsTemplateRequestOpen] = useState<boolean>(false);
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
@@ -1126,6 +1127,8 @@ function HomeWorkspace() {
   };
 
   const handleRunOCR = async () => {
+    const runId = ocrRunIdRef.current + 1;
+    ocrRunIdRef.current = runId;
     const activeRois = rois.filter((roi) => roi.enabled !== false);
     if (activeRois.length === 0) {
       setOperationNotice({
@@ -1145,6 +1148,7 @@ function HomeWorkspace() {
       const combinedResults: (OCRResult & { pageIndex?: number })[] = [];
 
       for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
+        if (ocrRunIdRef.current !== runId) return;
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
         const pageRois = rois.filter(
           (roi) => roi.enabled !== false && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
@@ -1199,6 +1203,7 @@ function HomeWorkspace() {
               rois: [
                 {
                   fieldName: roi.fieldName,
+                  roiId: roi.id,
                   x: 0,
                   y: 0,
                   width: roi.width * scaleX,
@@ -1231,8 +1236,8 @@ function HomeWorkspace() {
               const tableSections = normalizeTableSections(resItem.table_sections || resItem.tableSections);
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
-                roiId: roi.id,
-                fieldName: String(resItem.fieldName || roi.fieldName),
+                roiId: Number(resItem.roiId ?? roi.id),
+                fieldName: roi.fieldName,
                 bbox: [],
                 extractedText,
                 originalText: extractedText,
@@ -1264,11 +1269,13 @@ function HomeWorkspace() {
         });
 
         const roiResults = await Promise.all(roiPromises);
+        if (ocrRunIdRef.current !== runId) return;
         combinedResults.push(...(roiResults.filter((r) => r !== null) as (OCRResult & { pageIndex?: number })[]));
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
       }
 
       if (combinedResults.length > 0) {
+        if (ocrRunIdRef.current !== runId) return;
         setOcrResults(combinedResults);
         setCurrentIndex(0);
         setCurrentStep("editor");
@@ -1287,12 +1294,16 @@ function HomeWorkspace() {
         message: err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการประมวลผล OCR",
       });
     } finally {
-      setIsLoading(false);
-      setOcrProgress(null);
+      if (ocrRunIdRef.current === runId) {
+        setIsLoading(false);
+        setOcrProgress(null);
+      }
     }
   };
 
   const handleRunFullPageOCR = async () => {
+    const runId = ocrRunIdRef.current + 1;
+    ocrRunIdRef.current = runId;
     setIsLoading(true);
     setOcrResults([]);
     setOperationNotice(null);
@@ -1303,6 +1314,7 @@ function HomeWorkspace() {
       const allOcrResults: (OCRResult & { pageIndex?: number })[] = [];
 
       for (let pageIdx = 0; pageIdx < imagesList.length; pageIdx += 1) {
+        if (ocrRunIdRef.current !== runId) return;
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
 
         const currentImgUrl = imagesList[pageIdx];
@@ -1317,6 +1329,7 @@ function HomeWorkspace() {
           image: currentImgUrl,
           rois: [],
         });
+        if (ocrRunIdRef.current !== runId) return;
         if (!aiData.success || aiData.extracted_data.length === 0) {
           setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx + 1 });
           continue;
@@ -1385,6 +1398,7 @@ function HomeWorkspace() {
       }
 
       if (allOcrResults.length > 0) {
+        if (ocrRunIdRef.current !== runId) return;
         setRois((prev) => {
           const nonGeneratedRois = prev.filter((r) => !r.fieldName.startsWith("line_"));
           return [...nonGeneratedRois, ...allRoisFromOcr];
@@ -1408,8 +1422,10 @@ function HomeWorkspace() {
         message: err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการรัน OCR อัตโนมัติทั้งเอกสาร",
       });
     } finally {
-      setIsLoading(false);
-      setOcrProgress(null);
+      if (ocrRunIdRef.current === runId) {
+        setIsLoading(false);
+        setOcrProgress(null);
+      }
     }
   };
 

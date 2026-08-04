@@ -39,6 +39,7 @@ class ROIModel(BaseModel):
     y: float
     width: float
     height: float
+    roiId: int | None = None
     type: str | None = None
     extractionMethod: str | None = None
 
@@ -575,6 +576,7 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
 
             results.append(
                 {
+                    "roiId": roi.roiId,
                     "fieldName": roi.fieldName,
                     "text": extracted_text,
                     "confidence": confidence_score,

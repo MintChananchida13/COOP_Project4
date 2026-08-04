@@ -13,7 +13,9 @@ from app.table_recognition_v2_adapter import (
     _build_table_candidate,
     _calculate_ocr_confidence,
     _calculate_table_quality,
+    _postprocess_table_result,
     _select_best_table_candidate,
+    _section_from_region_candidate,
     _try_semi_structured_table,
     recognize_table_v2,
     recognize_table_v2_local,
@@ -540,6 +542,84 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_structured"]["cells"][0]["regionId"], "main")
         self.assertEqual(result["table_semi_analysis"]["regions"][1]["result"]["columns"][1]["col"], 1)
 
+    def test_column_anchor_assignment_prevents_values_shifting_to_neighbor_columns(self) -> None:
+        cells = []
+        anchors_x = [10, 50, 90, 130, 170, 210, 250]
+        for col, x in enumerate(anchors_x):
+            cells.append({"row": 0, "col": col, "text": f"H{col}", "bbox": {"x": x - 6, "y": 0, "width": 12, "height": 10}, "rowSpan": 1, "colSpan": 1})
+        # Deliberately wrong SLANeXt col values. Geometry should put all item ids back in column 0.
+        for row, item_id in enumerate(["IC-0003", "IC-0004", "IC-0005"], start=1):
+            cells.append({"row": row, "col": 1, "text": item_id, "bbox": {"x": 4, "y": row * 20, "width": 24, "height": 10}, "rowSpan": 1, "colSpan": 1})
+            cells.append({"row": row, "col": 3, "text": str(row * 100), "bbox": {"x": 84, "y": row * 20, "width": 18, "height": 10}, "rowSpan": 1, "colSpan": 1})
+        candidate = {
+            "confidence": 0.9,
+            "table_rows": [[""] * 7 for _ in range(4)],
+            "table_structured": {"rows": [[""] * 7 for _ in range(4)], "cells": cells, "headerRowCount": 1},
+        }
+
+        section = _section_from_region_candidate(candidate, {"bbox": {"x": 0, "y": 0, "width": 280, "height": 100}}, "main")
+
+        self.assertEqual(section["rows"][1][0], "IC-0003")
+        self.assertEqual(section["rows"][2][0], "IC-0004")
+        self.assertEqual(section["rows"][3][0], "IC-0005")
+        self.assertEqual(section["rows"][1][2], "100")
+        item_cells = [cell for cell in section["cells"] if cell["text"].startswith("IC-")]
+        self.assertTrue(all(cell["col"] == 0 for cell in item_cells))
+
+    def test_summary_table_uses_local_column_anchors(self) -> None:
+        cells = [
+            {"row": 0, "col": 0, "text": "Total", "bbox": {"x": 10, "y": 0, "width": 40, "height": 10}, "rowSpan": 1, "colSpan": 1},
+            {"row": 0, "col": 1, "text": "300", "bbox": {"x": 150, "y": 0, "width": 30, "height": 10}, "rowSpan": 1, "colSpan": 1},
+            {"row": 1, "col": 0, "text": "VAT", "bbox": {"x": 12, "y": 20, "width": 28, "height": 10}, "rowSpan": 1, "colSpan": 1},
+            {"row": 1, "col": 1, "text": "21", "bbox": {"x": 154, "y": 20, "width": 20, "height": 10}, "rowSpan": 1, "colSpan": 1},
+        ]
+        candidate = {"confidence": 0.8, "table_rows": [["Total", "300"], ["VAT", "21"]], "table_structured": {"rows": [["Total", "300"], ["VAT", "21"]], "cells": cells}}
+
+        section = _section_from_region_candidate(candidate, {"bbox": {"x": 0, "y": 120, "width": 220, "height": 60}}, "summary")
+
+        self.assertEqual(len(section["columns"]), 2)
+        self.assertEqual(section["rows"], [["Total", "300"], ["VAT", "21"]])
+        self.assertTrue(all(cell["colSpan"] == 1 for cell in section["cells"]))
+
+    def test_column_anchor_reconstruction_preserves_header_merge(self) -> None:
+        cells = [
+            {"row": 0, "col": 0, "text": "Asset", "bbox": {"x": 0, "y": 0, "width": 90, "height": 10}, "rowSpan": 1, "colSpan": 2},
+            {"row": 1, "col": 0, "text": "Code", "bbox": {"x": 0, "y": 20, "width": 30, "height": 10}, "rowSpan": 1, "colSpan": 1},
+            {"row": 1, "col": 1, "text": "Name", "bbox": {"x": 50, "y": 20, "width": 30, "height": 10}, "rowSpan": 1, "colSpan": 1},
+        ]
+        candidate = {"confidence": 0.8, "table_rows": [["Asset", ""], ["Code", "Name"]], "table_structured": {"rows": [["Asset", ""], ["Code", "Name"]], "cells": cells}}
+
+        section = _section_from_region_candidate(candidate, {"bbox": {"x": 0, "y": 0, "width": 120, "height": 50}}, "main")
+        header = next(cell for cell in section["cells"] if cell["text"] == "Asset")
+
+        self.assertEqual(header["col"], 0)
+        self.assertEqual(header["colSpan"], 2)
+
+    def test_postprocess_preserves_empty_cells_and_merge_grid(self) -> None:
+        result = {
+            "text": "",
+            "table_structured": {
+                "cells": [
+                    {"row": 0, "col": 0, "text": "Header", "rowSpan": 1, "colSpan": 3},
+                    {"row": 0, "col": 1, "text": "", "rowSpan": 1, "colSpan": 1, "hidden": True},
+                    {"row": 0, "col": 2, "text": "", "rowSpan": 1, "colSpan": 1, "hidden": True},
+                    {"row": 1, "col": 0, "text": "A", "rowSpan": 1, "colSpan": 1},
+                    {"row": 1, "col": 1, "text": "", "rowSpan": 1, "colSpan": 1},
+                    {"row": 1, "col": 2, "text": "C", "rowSpan": 1, "colSpan": 1},
+                    {"row": 2, "col": 0, "text": "", "rowSpan": 1, "colSpan": 1},
+                    {"row": 2, "col": 1, "text": "", "rowSpan": 1, "colSpan": 1},
+                    {"row": 2, "col": 2, "text": "", "rowSpan": 1, "colSpan": 1},
+                ],
+                "headerRowCount": 1,
+            },
+        }
+
+        processed = _postprocess_table_result(result)
+
+        self.assertEqual(processed["table_rows"], [["Header", "", ""], ["A", "", "C"], ["", "", ""]])
+        self.assertEqual(len(processed["table_structured"]["cells"]), 9)
+        self.assertEqual(processed["table_structured"]["cells"][0]["colSpan"], 3)
+
     def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)
         fake_analysis = {
@@ -568,6 +648,44 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"], [["A", "B"]])
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "whole_roi_fallback")
         self.assertFalse(result["table_semi_analysis"]["detected"])
+
+    def test_ocr_table_fallback_is_selected_when_slanext_has_no_usable_table(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EmptyTableRecognitionPipelineV2)
+        fallback_result = {
+            "text": "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            "confidence": 0.82,
+            "segments": [],
+            "attempts": [{"step": "ocr_table_fallback"}],
+            "preprocessing": "ocr_table_fallback_text_detection_clustering",
+            "engine": "table_recognition_v2",
+            "model": "SLANeXt_wired/SLANeXt_wireless",
+            "table_rows": [["A", "B"], ["1", "2"]],
+            "table_structured": {
+                "rows": [["A", "B"], ["1", "2"]],
+                "cells": [
+                    {"row": 0, "col": 0, "text": "A", "rowSpan": 1, "colSpan": 1},
+                    {"row": 0, "col": 1, "text": "B", "rowSpan": 1, "colSpan": 1},
+                    {"row": 1, "col": 0, "text": "1", "rowSpan": 1, "colSpan": 1},
+                    {"row": 1, "col": 1, "text": "2", "rowSpan": 1, "colSpan": 1},
+                ],
+                "headerRowCount": 1,
+            },
+            "table_debug": {"status": "ocr_table_fallback"},
+        }
+
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            return_value={"detected": False, "confidence": 0.0, "regions": [], "reason": "normal"},
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
+            "app.table_recognition_v2_adapter.Path.unlink"
+        ), patch("app.table_recognition_v2_adapter._recognize_ocr_table_fallback", return_value=fallback_result):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_selected_method"], "ocr_table_fallback")
+        self.assertEqual(result["table_debug"]["status"], "ocr_table_fallback")
+        self.assertEqual(result["table_rows"], [["A", "B"], ["1", "2"]])
+        self.assertNotEqual(result["table_rows"], [["Column 1"], [""]])
 
 
 if __name__ == "__main__":
