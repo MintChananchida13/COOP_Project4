@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import os
 import sys
 import tempfile
@@ -10,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -22,6 +23,7 @@ from app.ocr_adapter import recognize_text_crop_with_detection
 from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
+from app.db import connect as db_connect
 
 # Force UTF-8 console output on Windows.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -44,6 +46,7 @@ class ROIModel(BaseModel):
 class DocumentPayload(BaseModel):
     image: str
     rois: List[ROIModel]
+    async_mode: bool = False
 
 
 class LayoutImagePayload(BaseModel):
@@ -398,6 +401,205 @@ def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, An
     return recognize_text_crop_with_detection(crop_img)
 
 
+def _payload_to_json(payload: DocumentPayload) -> str:
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump()
+    else:
+        data = payload.dict()
+    data["async_mode"] = False
+    return json.dumps(data, ensure_ascii=False)
+
+
+def create_ocr_job(payload: DocumentPayload) -> str:
+    job_id = f"ocr_{uuid.uuid4().hex}"
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO ocr_jobs (id, status, request_json)
+            VALUES (?, 'queued', ?)
+            """,
+            (job_id, _payload_to_json(payload)),
+        )
+    return job_id
+
+
+def get_ocr_job(job_id: str) -> Dict[str, Any] | None:
+    with db_connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, status, requested_at, started_at, completed_at, error_message, result_json
+            FROM ocr_jobs
+            WHERE id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result_json = result.pop("result_json", None)
+    if result_json:
+        try:
+            result["result"] = json.loads(result_json)
+        except json.JSONDecodeError:
+            result["result"] = None
+    return result
+
+
+def update_ocr_job_status(job_id: str, status: str, error_message: str | None = None, result: Dict[str, Any] | None = None) -> None:
+    result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
+    with db_connect() as conn:
+        if status == "processing":
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET status = 'processing', started_at = CURRENT_TIMESTAMP, error_message = NULL
+                WHERE id = ?
+                """,
+                (job_id,),
+            )
+        elif status == "completed":
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET status = 'completed', completed_at = CURRENT_TIMESTAMP, result_json = ?, error_message = NULL
+                WHERE id = ?
+                """,
+                (result_json, job_id),
+            )
+        elif status == "failed":
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error_message = ?
+                WHERE id = ?
+                """,
+                (error_message or "OCR job failed.", job_id),
+            )
+
+
+def run_ocr_job(job_id: str) -> None:
+    job = get_ocr_job(job_id)
+    if not job:
+        return
+    try:
+        update_ocr_job_status(job_id, "processing")
+        with db_connect() as conn:
+            row = conn.execute("SELECT request_json FROM ocr_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            raise RuntimeError("OCR job request payload not found.")
+        payload = DocumentPayload(**json.loads(row["request_json"]))
+        result = process_document_payload(payload)
+        update_ocr_job_status(job_id, "completed", result=result)
+    except Exception as error:
+        update_ocr_job_status(job_id, "failed", error_message=str(error))
+
+
+def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
+    _, opencv_img = decode_base64_image(payload.image)
+    h_img, w_img = opencv_img.shape[:2]
+    results = []
+
+    if not payload.rois:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+        try:
+            cv2.imwrite(temp_path, opencv_img)
+            text_detection = detect_text_boxes(temp_path)
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+        for idx, region in enumerate(text_detection.get("regions", [])):
+            bbox = region.get("bbox") or {}
+            x = max(0, int(float(bbox.get("x") or 0)))
+            y = max(0, int(float(bbox.get("y") or 0)))
+            w = max(1, int(float(bbox.get("width") or 1)))
+            h = max(1, int(float(bbox.get("height") or 1)))
+            w = min(w, w_img - x)
+            h = min(h, h_img - y)
+
+            crop_img = opencv_img[y : y + h, x : x + w]
+            ocr_result = run_paddle_thai_ocr(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": []}
+            text = normalize_ocr_text(ocr_result.get("text"))
+            conf = float(ocr_result.get("confidence") or 0.0)
+            filepath = ""
+            if crop_img.size > 0:
+                filename = f"line_{idx + 1}_{uuid.uuid4().hex[:6]}.png"
+                filepath = os.path.join(OUTPUT_DIR, filename)
+                cv2.imwrite(filepath, crop_img)
+
+            results.append(
+                {
+                    "fieldName": f"line_{idx + 1}",
+                    "text": text,
+                    "confidence": float(conf),
+                    "saved_path": filepath,
+                    "x": float(x),
+                    "y": float(y),
+                    "width": float(w),
+                    "height": float(h),
+                    "bbox": [
+                        [float(x), float(y)],
+                        [float(x + w), float(y)],
+                        [float(x + w), float(y + h)],
+                        [float(x), float(y + h)],
+                    ],
+                    "raw_segments": ocr_result.get("segments", []),
+                    "ocr_attempts": [],
+                    "ocr_preprocessing": ocr_result.get("preprocessing", "paddle_text_detection_crop"),
+                    "ocr_engine": ocr_result.get("engine", "paddle_thai_ocr"),
+                    "ocr_model": ocr_result.get("model"),
+                }
+            )
+    else:
+        for idx, roi in enumerate(payload.rois):
+            crop_img = crop_opencv_region(
+                opencv_img,
+                int(roi.x),
+                int(roi.y),
+                int(roi.width),
+                int(roi.height),
+            )
+            if crop_img.size == 0:
+                continue
+
+            filename = f"{roi.fieldName}_{idx}_{uuid.uuid4().hex[:6]}.png"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            cv2.imwrite(filepath, crop_img)
+
+            ocr_result = process_roi_with_engine(crop_img, roi)
+            extracted_text = normalize_ocr_text(ocr_result.get("text"))
+            confidence_score = float(ocr_result.get("confidence") or 0.0)
+            if not extracted_text and (roi.type or "").lower() != "image":
+                extracted_text = "(ไม่พบข้อความในพื้นที่ที่กำหนด)"
+                confidence_score = 0.0
+
+            results.append(
+                {
+                    "fieldName": roi.fieldName,
+                    "text": extracted_text,
+                    "confidence": confidence_score,
+                    "saved_path": filepath,
+                    "type": roi.type,
+                    "extraction_method": roi.extractionMethod,
+                    "raw_segments": ocr_result.get("segments", []),
+                    "ocr_attempts": ocr_result.get("attempts", []),
+                    "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
+                    "ocr_engine": ocr_result.get("engine", "unknown"),
+                    "ocr_model": ocr_result.get("model"),
+                    "table_rows": ocr_result.get("table_rows"),
+                    "table_structured": ocr_result.get("table_structured"),
+                    "table_sections": ocr_result.get("table_sections"),
+                    "table_html": ocr_result.get("table_html"),
+                    "table_debug": ocr_result.get("table_debug"),
+                }
+            )
+
+    return {
+        "success": True,
+        "extracted_data": results,
+    }
+
+
 @app.get("/")
 def read_root():
     return {
@@ -407,110 +609,13 @@ def read_root():
 
 
 @app.post("/api/ai/process")
-async def process_document(payload: DocumentPayload):
+async def process_document(payload: DocumentPayload, background_tasks: BackgroundTasks):
     try:
-        _, opencv_img = decode_base64_image(payload.image)
-        h_img, w_img = opencv_img.shape[:2]
-        results = []
-
-        if not payload.rois:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                temp_path = temp_file.name
-            try:
-                cv2.imwrite(temp_path, opencv_img)
-                text_detection = detect_text_boxes(temp_path)
-            finally:
-                Path(temp_path).unlink(missing_ok=True)
-
-            for idx, region in enumerate(text_detection.get("regions", [])):
-                bbox = region.get("bbox") or {}
-                x = max(0, int(float(bbox.get("x") or 0)))
-                y = max(0, int(float(bbox.get("y") or 0)))
-                w = max(1, int(float(bbox.get("width") or 1)))
-                h = max(1, int(float(bbox.get("height") or 1)))
-                w = min(w, w_img - x)
-                h = min(h, h_img - y)
-
-                crop_img = opencv_img[y : y + h, x : x + w]
-                ocr_result = run_paddle_thai_ocr(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": []}
-                text = normalize_ocr_text(ocr_result.get("text"))
-                conf = float(ocr_result.get("confidence") or 0.0)
-                filepath = ""
-                if crop_img.size > 0:
-                    filename = f"line_{idx + 1}_{uuid.uuid4().hex[:6]}.png"
-                    filepath = os.path.join(OUTPUT_DIR, filename)
-                    cv2.imwrite(filepath, crop_img)
-
-                results.append(
-                    {
-                        "fieldName": f"line_{idx + 1}",
-                        "text": text,
-                        "confidence": float(conf),
-                        "saved_path": filepath,
-                        "x": float(x),
-                        "y": float(y),
-                        "width": float(w),
-                        "height": float(h),
-                        "bbox": [
-                            [float(x), float(y)],
-                            [float(x + w), float(y)],
-                            [float(x + w), float(y + h)],
-                            [float(x), float(y + h)],
-                        ],
-                        "raw_segments": ocr_result.get("segments", []),
-                        "ocr_attempts": [],
-                        "ocr_preprocessing": ocr_result.get("preprocessing", "paddle_text_detection_crop"),
-                        "ocr_engine": ocr_result.get("engine", "paddle_thai_ocr"),
-                        "ocr_model": ocr_result.get("model"),
-                    }
-                )
-        else:
-            for idx, roi in enumerate(payload.rois):
-                crop_img = crop_opencv_region(
-                    opencv_img,
-                    int(roi.x),
-                    int(roi.y),
-                    int(roi.width),
-                    int(roi.height),
-                )
-                if crop_img.size == 0:
-                    continue
-
-                filename = f"{roi.fieldName}_{idx}_{uuid.uuid4().hex[:6]}.png"
-                filepath = os.path.join(OUTPUT_DIR, filename)
-                cv2.imwrite(filepath, crop_img)
-
-                ocr_result = process_roi_with_engine(crop_img, roi)
-                extracted_text = normalize_ocr_text(ocr_result.get("text"))
-                confidence_score = float(ocr_result.get("confidence") or 0.0)
-                if not extracted_text and (roi.type or "").lower() != "image":
-                    extracted_text = "(ไม่พบข้อความในพื้นที่ที่กำหนด)"
-                    confidence_score = 0.0
-
-                results.append(
-                    {
-                        "fieldName": roi.fieldName,
-                        "text": extracted_text,
-                        "confidence": confidence_score,
-                        "saved_path": filepath,
-                        "type": roi.type,
-                        "extraction_method": roi.extractionMethod,
-                        "raw_segments": ocr_result.get("segments", []),
-                        "ocr_attempts": ocr_result.get("attempts", []),
-                        "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
-                        "ocr_engine": ocr_result.get("engine", "unknown"),
-                        "ocr_model": ocr_result.get("model"),
-                        "table_rows": ocr_result.get("table_rows"),
-                        "table_structured": ocr_result.get("table_structured"),
-                        "table_html": ocr_result.get("table_html"),
-                        "table_debug": ocr_result.get("table_debug"),
-                    }
-                )
-
-        return {
-            "success": True,
-            "extracted_data": results,
-        }
+        if payload.async_mode:
+            job_id = create_ocr_job(payload)
+            background_tasks.add_task(run_ocr_job, job_id)
+            return {"success": True, "job_id": job_id, "status": "queued"}
+        return process_document_payload(payload)
     except PaddleThaiOcrUnavailableError as err:
         print("Paddle Thai OCR processing error:")
         import traceback
@@ -529,6 +634,26 @@ async def process_document(payload: DocumentPayload):
 
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(err))
+
+
+@app.get("/api/ai/jobs/{job_id}")
+async def get_ai_process_job(job_id: str):
+    job = get_ocr_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="OCR job not found.")
+    response: Dict[str, Any] = {
+        "success": True,
+        "job_id": job["id"],
+        "status": job["status"],
+        "requested_at": str(job.get("requested_at")) if job.get("requested_at") is not None else None,
+        "started_at": str(job.get("started_at")) if job.get("started_at") is not None else None,
+        "completed_at": str(job.get("completed_at")) if job.get("completed_at") is not None else None,
+    }
+    if job["status"] == "completed":
+        response["result"] = job.get("result") or {"success": True, "extracted_data": []}
+    if job["status"] == "failed":
+        response["error"] = job.get("error_message") or "OCR job failed."
+    return response
 
 
 @app.post("/api/layout/analyze")

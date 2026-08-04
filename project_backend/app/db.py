@@ -386,6 +386,18 @@ _POSTGRES_SCHEMA = [
         metadata_json TEXT
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS ocr_jobs (
+        id TEXT NOT NULL PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'queued',
+        requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        error_message TEXT,
+        request_json TEXT NOT NULL,
+        result_json TEXT
+    )
+    """,
     'CREATE UNIQUE INDEX IF NOT EXISTS template_pages_template_id_page_number_key ON template_pages(template_id, page_number)',
     'CREATE INDEX IF NOT EXISTS template_fields_template_page_id_page_number_idx ON template_fields(template_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS ignore_regions_template_page_id_page_number_idx ON ignore_regions(template_page_id, page_number)',
@@ -397,4 +409,5 @@ _POSTGRES_SCHEMA = [
     'CREATE INDEX IF NOT EXISTS extraction_results_document_page_id_page_number_idx ON extraction_results(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS detection_logs_document_page_id_page_number_idx ON detection_logs(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)',
+    'CREATE INDEX IF NOT EXISTS ocr_jobs_status_requested_at_idx ON ocr_jobs(status, requested_at)',
 ]

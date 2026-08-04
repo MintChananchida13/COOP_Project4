@@ -432,6 +432,7 @@ def _cluster_text_cells(cells: List[Dict[str, Any]]) -> tuple[List[List[str]], L
 
 
 def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
+    phase_started = time.perf_counter()
     if image is None or image.size == 0:
         return None
 
@@ -452,7 +453,12 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     try:
         if not cv2.imwrite(temp.name, working_img):
             return None
+        detect_started = time.perf_counter()
         text_detection = detect_text_boxes(temp.name)
+        logger.info(
+            "Table Recognition phase timing: phase=Geometry Reconstruction text_detection elapsed=%.3fs",
+            time.perf_counter() - detect_started,
+        )
     except (LayoutAnalysisUnavailableError, Exception) as error:
         logger.info("Borderless table text detection failed: %s", error)
         return None
@@ -491,11 +497,18 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
         return None
 
     try:
+        ocr_started = time.perf_counter()
         recognitions = run_paddle_thai_ocr_batch(crops)
+        logger.info(
+            "Table Recognition phase timing: phase=Geometry Reconstruction OCR batch crops=%s elapsed=%.3fs",
+            len(crops),
+            time.perf_counter() - ocr_started,
+        )
     except PaddleThaiOcrUnavailableError as error:
         logger.info("Borderless table OCR failed: %s", error)
         return None
 
+    cluster_started = time.perf_counter()
     cells: List[Dict[str, Any]] = []
     confidence_values: List[float] = []
     for region, recognition in zip(valid_regions, recognitions):
@@ -522,6 +535,11 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
         )
 
     rows, source_cells = _cluster_text_cells(cells)
+    logger.info(
+        "Table Recognition phase timing: phase=Geometry Reconstruction clustering boxes=%s elapsed=%.3fs",
+        len(cells),
+        time.perf_counter() - cluster_started,
+    )
     if not rows:
         return None
     structured = _structured_from_rows(rows, source_cells)
@@ -553,6 +571,7 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
             "scale_factor": scale_factor,
             "input_size": [int(input_width), int(input_height)],
             "working_size": [int(working_img.shape[1]), int(working_img.shape[0])],
+            "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
         },
     }
 
@@ -981,6 +1000,7 @@ def _attach_candidate_competition(selected: Dict[str, Any], candidates: List[Dic
 
 
 def _predict_table_model(model: Any, image: np.ndarray) -> Any:
+    started = time.perf_counter()
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     temp.close()
     try:
@@ -996,6 +1016,7 @@ def _predict_table_model(model: Any, image: np.ndarray) -> Any:
             )
         return model.predict(input=temp.name, batch_size=1)
     finally:
+        logger.info("Table Recognition phase timing: phase=SLANeXt inference elapsed=%.3fs", time.perf_counter() - started)
         Path(temp.name).unlink(missing_ok=True)
 
 
@@ -1097,15 +1118,127 @@ def _remap_candidate_to_roi(candidate: Dict[str, Any], offset_x: float, offset_y
     return remapped
 
 
+def _bbox_center(cell: Dict[str, Any]) -> Optional[tuple[float, float]]:
+    bbox = cell.get("bbox") or cell.get("box")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox.get("x") or 0.0)
+        y = float(bbox.get("y") or 0.0)
+        width = float(bbox.get("width") or 0.0)
+        height = float(bbox.get("height") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return (x + width / 2.0, y + height / 2.0)
+
+
+def _cluster_values(values: List[float], tolerance: float) -> List[float]:
+    if not values:
+        return []
+    clusters: List[List[float]] = []
+    for value in sorted(values):
+        if not clusters or abs(value - (sum(clusters[-1]) / len(clusters[-1]))) > tolerance:
+            clusters.append([value])
+        else:
+            clusters[-1].append(value)
+    return [sum(cluster) / len(cluster) for cluster in clusters]
+
+
+def _geometry_rows_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[List[str]]) -> Optional[List[List[str]]]:
+    positioned = []
+    heights = []
+    widths = []
+    for cell in cells:
+        center = _bbox_center(cell)
+        if center is None:
+            continue
+        bbox = cell.get("bbox") or cell.get("box") or {}
+        try:
+            heights.append(float(bbox.get("height") or 0.0))
+            widths.append(float(bbox.get("width") or 0.0))
+        except (TypeError, ValueError):
+            pass
+        positioned.append((center[0], center[1], cell))
+    if not positioned:
+        return None
+
+    y_tolerance = max(8.0, (sum(heights) / len(heights)) * 0.55 if heights else 8.0)
+    x_tolerance = max(10.0, (sum(widths) / len(widths)) * 0.35 if widths else 10.0)
+    row_centers = _cluster_values([item[1] for item in positioned], y_tolerance)
+    col_centers = _cluster_values([item[0] for item in positioned], x_tolerance)
+    if not row_centers or not col_centers:
+        return None
+
+    rows = [["" for _ in col_centers] for _ in row_centers]
+    for center_x, center_y, cell in positioned:
+        row_index = min(range(len(row_centers)), key=lambda index: abs(row_centers[index] - center_y))
+        col_index = min(range(len(col_centers)), key=lambda index: abs(col_centers[index] - center_x))
+        text = normalize_ocr_text(cell.get("groundTruth") or cell.get("text") or cell.get("ocrText") or "")
+        if not text:
+            continue
+        rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
+
+    rows = normalize_table_rows(rows)
+    if not rows:
+        return None
+    fallback_columns = max((len(row) for row in fallback_rows), default=0)
+    if fallback_columns and len(rows[0]) == fallback_columns and len(rows) <= len(fallback_rows):
+        return None
+    return rows
+
+
+def _section_from_region_candidate(candidate: Dict[str, Any], region: Dict[str, Any], region_id: str) -> Dict[str, Any]:
+    structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else {}
+    source_rows = normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else []) or normalize_table_rows(candidate.get("table_rows") or [])
+    source_cells = [dict(cell) for cell in (structured.get("cells") if isinstance(structured, dict) else []) or [] if isinstance(cell, dict)]
+    for cell in source_cells:
+        cell["regionId"] = region_id
+
+    geometry_rows = _geometry_rows_from_cells(source_cells, source_rows)
+    local_rows = geometry_rows or source_rows
+    local_structured = _structured_from_rows(local_rows, source_cells) if local_rows else None
+    if isinstance(local_structured, dict):
+        for cell in local_structured.get("cells") or []:
+            if isinstance(cell, dict):
+                cell["regionId"] = region_id
+
+    local_column_count = max((len(row) for row in local_rows), default=0)
+    local_columns = [{"col": index, "label": f"Column {index + 1}"} for index in range(local_column_count)]
+    return {
+        "regionId": region_id,
+        "type": region.get("type") or "grid",
+        "bbox": region.get("bbox"),
+        "confidence": candidate.get("confidence", 0.0),
+        "columns": local_columns,
+        "rows": local_rows,
+        "cells": (local_structured or {}).get("cells", []),
+        "table_structured": local_structured,
+        "table_html": candidate.get("table_html"),
+        "reconstruction": {
+            "method": "geometry_aware_section" if geometry_rows else "slanext_region_structure",
+            "used_geometry": bool(geometry_rows),
+            "local_column_count": local_column_count,
+            "source_row_count": len(source_rows),
+            "row_count": len(local_rows),
+        },
+    }
+
+
 def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    merge_started = time.perf_counter()
     merged_rows: List[List[str]] = []
     merged_cells: List[Dict[str, Any]] = []
     merged_segments: List[Dict[str, Any]] = []
     attempts: List[Dict[str, Any]] = []
     html_parts: List[str] = []
     candidates_for_competition: List[Dict[str, Any]] = []
+    table_sections: List[Dict[str, Any]] = []
     header_row_count = 0
-    for candidate in region_candidates:
+    for section_index, candidate in enumerate(region_candidates):
+        candidate_region = candidate.get("table_debug", {}).get("region") if isinstance(candidate.get("table_debug"), dict) else {}
+        region_id = str(candidate_region.get("regionId") or candidate_region.get("region_id") or f"region_{section_index + 1}")
+        section = _section_from_region_candidate(candidate, candidate_region if isinstance(candidate_region, dict) else {}, region_id)
+        table_sections.append(section)
         structured = candidate.get("table_structured")
         structured_rows = normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else [])
         rows = structured_rows or normalize_table_rows(candidate.get("table_rows") or [])
@@ -1117,6 +1250,7 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
                 if isinstance(cell, dict):
                     next_cell = dict(cell)
                     next_cell["row"] = int(next_cell.get("row") or 0) + row_offset
+                    next_cell["regionId"] = region_id
                     merged_cells.append(next_cell)
         merged_segments.extend(segment for segment in candidate.get("segments") or [] if isinstance(segment, dict))
         attempts.extend(attempt for attempt in candidate.get("attempts") or [] if isinstance(attempt, dict))
@@ -1141,9 +1275,11 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
         "table_html": "\n".join(html_parts) if html_parts else None,
         "table_rows": merged_rows,
         "table_structured": structured,
+        "table_sections": table_sections,
         "table_debug": {
             "status": "semi_structured_merged" if merged_rows else "semi_structured_empty",
             "region_count": len(region_candidates),
+            "section_count": len(table_sections),
         },
         "table_semi_analysis": semi_analysis,
     }
@@ -1152,7 +1288,15 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
     if selected is not merged_candidate:
         selected = merged_candidate
         reason = "semi_structured_region_merge"
-    return _attach_candidate_competition(selected, [merged_candidate, *candidates_for_competition], reason)
+    merged = _attach_candidate_competition(selected, [merged_candidate, *candidates_for_competition], reason)
+    logger.info(
+        "Table Recognition phase timing: phase=Merge regions=%s rows=%s cells=%s elapsed=%.3fs",
+        len(region_candidates),
+        len(merged_rows),
+        len(merged_cells),
+        time.perf_counter() - merge_started,
+    )
+    return merged
 
 
 def _try_semi_structured_table(
@@ -1161,19 +1305,32 @@ def _try_semi_structured_table(
     started: float,
     analysis: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    semi_started = time.perf_counter()
     analysis = analysis if isinstance(analysis, dict) else analyze_table_regions(image)
     if not analysis.get("detected") or float(analysis.get("confidence") or 0.0) < 0.72:
+        logger.info(
+            "Table Recognition phase timing: phase=Region Inference skipped reason=%s elapsed=%.3fs",
+            analysis.get("reason") if isinstance(analysis, dict) else "not_detected",
+            time.perf_counter() - semi_started,
+        )
         return None
     regions = [region for region in analysis.get("regions") or [] if isinstance(region, dict)]
     if len(regions) < 2:
+        logger.info(
+            "Table Recognition phase timing: phase=Region Inference skipped reason=not_enough_regions regions=%s elapsed=%.3fs",
+            len(regions),
+            time.perf_counter() - semi_started,
+        )
         return None
 
     region_candidates: List[Dict[str, Any]] = []
     merge_regions: List[Dict[str, Any]] = []
     height, width = image.shape[:2]
+    inference_count = 0
     for index, region in enumerate(regions):
+        region_id = str(region.get("regionId") or region.get("region_id") or f"region_{index + 1}")
         if region.get("type") != "grid":
-            merge_regions.append({**region, "status": "skipped_non_grid_region"})
+            merge_regions.append({**region, "regionId": region_id, "status": "skipped_non_grid_region"})
             continue
         bbox = region.get("bbox")
         if not isinstance(bbox, dict):
@@ -1189,26 +1346,59 @@ def _try_semi_structured_table(
             continue
         crop = image[y : y + h, x : x + w]
         try:
+            region_started = time.perf_counter()
+            inference_count += 1
             output = _predict_table_model(model, crop)
-            raw_result = _slanext_result_from_output(output, crop, started, {"index": index, "type": region.get("type"), "bbox": bbox})
+            logger.info(
+                "Table Recognition phase timing: phase=Region Inference region=%s bbox=%s elapsed=%.3fs",
+                index,
+                bbox,
+                time.perf_counter() - region_started,
+            )
+            raw_result = _slanext_result_from_output(output, crop, started, {"index": index, "regionId": region_id, "type": region.get("type"), "bbox": bbox})
             candidate = _build_table_candidate(raw_result, "slanext")
             remapped = _remap_candidate_to_roi(candidate, float(x), float(y), 0)
             quality = remapped.get("table_debug", {}).get("quality") if isinstance(remapped.get("table_debug"), dict) else {}
             if _region_candidate_has_usable_content(remapped, quality):
                 region_candidates.append(remapped)
-                merge_regions.append({**region, "status": "recognized"})
+                section_preview = _section_from_region_candidate(remapped, {**region, "regionId": region_id}, region_id)
+                merge_regions.append({
+                    **region,
+                    "regionId": region_id,
+                    "status": "recognized",
+                    "result": {
+                        "rows": section_preview.get("rows") or [],
+                        "columns": section_preview.get("columns") or [],
+                        "cell_count": len(section_preview.get("cells") or []),
+                        "reconstruction": section_preview.get("reconstruction"),
+                    },
+                })
             else:
-                merge_regions.append({**region, "status": "unusable_result"})
+                merge_regions.append({**region, "regionId": region_id, "status": "unusable_result"})
         except Exception as error:
             logger.info("Semi-structured table region %s failed: %s", index, error)
-            merge_regions.append({**region, "status": "failed", "reason": str(error)})
+            merge_regions.append({**region, "regionId": region_id, "status": "failed", "reason": str(error)})
 
     if not region_candidates:
+        logger.info(
+            "Table Recognition phase timing: phase=Region Inference no_candidates regions=%s model_inferences=%s elapsed=%.3fs",
+            len(regions),
+            inference_count,
+            time.perf_counter() - semi_started,
+        )
         return None
     semi_analysis = dict(analysis)
     semi_analysis["regions"] = merge_regions
     semi_analysis["merge_status"] = "merged" if len(region_candidates) == len(regions) else "partial"
-    return _merge_region_candidates(region_candidates, semi_analysis)
+    result = _merge_region_candidates(region_candidates, semi_analysis)
+    logger.info(
+        "Table Recognition phase timing: phase=Region Inference complete regions=%s recognized=%s model_inferences=%s elapsed=%.3fs",
+        len(regions),
+        len(region_candidates),
+        inference_count,
+        time.perf_counter() - semi_started,
+    )
+    return result
 
 
 def _whole_roi_semi_analysis(analysis: Optional[Dict[str, Any]], merge_status: str = "whole_roi_fallback") -> Dict[str, Any]:
@@ -1225,6 +1415,8 @@ def _whole_roi_semi_analysis(analysis: Optional[Dict[str, Any]], merge_status: s
 
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     started = time.perf_counter()
+    model_inference_count = 0
+    ocr_inference_count = 0
     if image is None or image.size == 0:
         return {
             "text": "",
@@ -1241,15 +1433,42 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     model = _load_table_model()
     semi_analysis: Optional[Dict[str, Any]] = None
     try:
+        grid_started = time.perf_counter()
         semi_analysis = analyze_table_regions(image)
+        logger.info(
+            "Table Recognition phase timing: phase=Grid Analyzer detected=%s confidence=%s regions=%s elapsed=%.3fs",
+            bool(semi_analysis.get("detected")) if isinstance(semi_analysis, dict) else False,
+            semi_analysis.get("confidence") if isinstance(semi_analysis, dict) else None,
+            len(semi_analysis.get("regions") or []) if isinstance(semi_analysis, dict) else 0,
+            time.perf_counter() - grid_started,
+        )
         semi_result = _try_semi_structured_table(image, model, started, semi_analysis)
         if semi_result:
+            semi_debug = semi_result.get("table_semi_analysis") if isinstance(semi_result.get("table_semi_analysis"), dict) else {}
+            model_inference_count = sum(1 for region in semi_debug.get("regions") or [] if isinstance(region, dict) and region.get("status") in {"recognized", "unusable_result", "failed"})
+            semi_result.setdefault("table_debug", {})
+            if isinstance(semi_result["table_debug"], dict):
+                semi_result["table_debug"]["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+                semi_result["table_debug"]["model_inference_count"] = model_inference_count
+                semi_result["table_debug"]["ocr_inference_count"] = ocr_inference_count
+            logger.info(
+                "Table Recognition phase timing: phase=Total path=semi model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+                model_inference_count,
+                ocr_inference_count,
+                time.perf_counter() - started,
+            )
             return semi_result
     except Exception as error:
         logger.info("Semi-structured table analysis fell back to whole ROI: %s", error)
         semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
 
+    whole_started = time.perf_counter()
+    model_inference_count += 1
     output = _predict_table_model(model, image)
+    logger.info(
+        "Table Recognition phase timing: phase=Whole ROI SLANeXt elapsed=%.3fs",
+        time.perf_counter() - whole_started,
+    )
     slanext_result = _slanext_result_from_output(output, image, started)
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
     candidates = [slanext_candidate]
@@ -1259,8 +1478,10 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
 
     if _should_try_borderless_candidate(slanext_quality, slanext_confidence):
         try:
+            geometry_started = time.perf_counter()
             borderless_result = _recognize_borderless_table(image)
             if borderless_result:
+                ocr_inference_count += 2
                 borderless_debug = borderless_result.get("table_debug")
                 if isinstance(borderless_debug, dict):
                     slanext_rows = normalize_table_rows(slanext_result.get("table_rows") or [])
@@ -1268,12 +1489,29 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
                     borderless_debug["slan_columns_before_fallback"] = max((len(row) for row in slanext_rows), default=0)
                     borderless_debug["slan_status_before_fallback"] = "structure_empty" if not slanext_rows else "low_quality_candidate"
                 candidates.append(_build_table_candidate(borderless_result, "borderless_text_clustering"))
+            logger.info(
+                "Table Recognition phase timing: phase=Geometry Reconstruction elapsed=%.3fs used=%s",
+                time.perf_counter() - geometry_started,
+                bool(borderless_result),
+            )
         except Exception as error:
             logger.warning("Borderless table candidate failed: %s", error)
 
     selected, selection_reason = _select_best_table_candidate(candidates)
     selected = _attach_candidate_competition(selected, candidates, selection_reason)
     selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
+    selected_debug = selected.get("table_debug")
+    if isinstance(selected_debug, dict):
+        selected_debug["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+        selected_debug["model_inference_count"] = model_inference_count
+        selected_debug["ocr_inference_count"] = ocr_inference_count
+    logger.info(
+        "Table Recognition phase timing: phase=Total path=whole_roi selected=%s model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+        selected.get("table_selected_method"),
+        model_inference_count,
+        ocr_inference_count,
+        time.perf_counter() - started,
+    )
     return selected
 
 

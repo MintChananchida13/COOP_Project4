@@ -1,6 +1,8 @@
 import base64
 import json
+import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -8,6 +10,9 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModelRuntimeUnavailableError(RuntimeError):
@@ -44,6 +49,7 @@ def _post(endpoint: str, payload: Dict[str, Any], timeout: float = 120.0) -> Dic
     if not base_url:
         raise ModelRuntimeUnavailableError("MODEL_SERVICE_URL is not configured.")
 
+    started = time.perf_counter()
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}{endpoint}",
@@ -56,8 +62,22 @@ def _post(endpoint: str, payload: Dict[str, Any], timeout: float = 120.0) -> Dic
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
+        logger.info(
+            "Model Runtime phase timing: endpoint=%s status=%s payload_bytes=%s elapsed=%.3fs",
+            endpoint,
+            error.code,
+            len(body),
+            time.perf_counter() - started,
+        )
         raise ModelRuntimeUnavailableError(f"Model runtime HTTP {error.code}: {detail}") from error
     except OSError as error:
+        logger.info(
+            "Model Runtime phase timing: endpoint=%s error=%s payload_bytes=%s elapsed=%.3fs",
+            endpoint,
+            error,
+            len(body),
+            time.perf_counter() - started,
+        )
         raise ModelRuntimeUnavailableError(f"Model runtime unavailable: {error}") from error
 
     try:
@@ -68,6 +88,12 @@ def _post(endpoint: str, payload: Dict[str, Any], timeout: float = 120.0) -> Dic
     if not parsed.get("success", True):
         raise ModelRuntimeUnavailableError(str(parsed.get("detail") or parsed.get("error") or "Model runtime request failed."))
     data = parsed.get("data")
+    logger.info(
+        "Model Runtime phase timing: endpoint=%s payload_bytes=%s elapsed=%.3fs",
+        endpoint,
+        len(body),
+        time.perf_counter() - started,
+    )
     return data if isinstance(data, dict) else parsed
 
 

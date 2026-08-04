@@ -507,6 +507,16 @@ export interface TemplateStepTestItem {
     colWidths?: number[];
     [key: string]: unknown;
   } | null;
+  tableSections?: Array<{
+    regionId: string;
+    rows?: string[][];
+    cells?: Record<string, unknown>[];
+    tableStructured?: TemplateStepTestItem["tableStructured"];
+    bbox?: Record<string, unknown> | unknown[];
+    columns?: unknown[];
+    text?: string | null;
+    [key: string]: unknown;
+  }> | null;
   tableHtml?: string | null;
   tableDebug?: Record<string, unknown> | null;
   passed: boolean;
@@ -1559,6 +1569,11 @@ export const confirmTemplatePublish = async (templateId: string) => {
 };
 
 function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTestItem {
+  const rawSections = Array.isArray(item.table_sections)
+    ? item.table_sections
+    : Array.isArray(item.tableSections)
+      ? item.tableSections
+      : null;
   return {
     fieldId: (item.field_id as string | undefined) || undefined,
     anchorId: (item.anchor_id as string | undefined) || undefined,
@@ -1587,6 +1602,21 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
         : item.tableStructured && typeof item.tableStructured === "object"
           ? (item.tableStructured as TemplateStepTestItem["tableStructured"])
           : null,
+    tableSections: rawSections
+      ? (rawSections as Record<string, unknown>[]).map((section, index) => ({
+          ...section,
+          regionId: String(section.regionId || section.region_id || `region_${index + 1}`),
+          rows: Array.isArray(section.rows)
+            ? (section.rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+            : undefined,
+          tableStructured:
+            section.table_structured && typeof section.table_structured === "object"
+              ? (section.table_structured as TemplateStepTestItem["tableStructured"])
+              : section.tableStructured && typeof section.tableStructured === "object"
+                ? (section.tableStructured as TemplateStepTestItem["tableStructured"])
+                : undefined,
+        }))
+      : null,
     tableHtml: (item.table_html as string | null | undefined) ?? (item.tableHtml as string | null | undefined) ?? null,
     tableDebug:
       (item.table_debug as Record<string, unknown> | null | undefined) ??

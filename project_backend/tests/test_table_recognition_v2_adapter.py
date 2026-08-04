@@ -493,6 +493,52 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(cells[3]["row"], 2)
         self.assertEqual(cells[3]["bbox"]["x"], 11.0)
         self.assertEqual(cells[3]["bbox"]["y"], 83.0)
+        self.assertEqual(cells[0]["regionId"], "region_1")
+        self.assertEqual(result["table_sections"][0]["cells"][0]["regionId"], "region_1")
+
+    def test_semi_structured_sections_keep_local_columns_for_secondary_grids(self) -> None:
+        image = np.zeros((220, 220, 3), dtype=np.uint8)
+
+        class MultiTopologyModel:
+            calls = 0
+
+            def predict(self, **kwargs):
+                MultiTopologyModel.calls += 1
+                if MultiTopologyModel.calls == 1:
+                    row = "".join(f"<td>M{i}</td>" for i in range(1, 8))
+                    return [{"html": f"<table><tr>{row}</tr></table>"}]
+                if MultiTopologyModel.calls == 2:
+                    return [{"html": "<table><tr><td>S1</td><td>S2</td></tr></table>"}]
+                return [{"html": "<table><tr><td>A</td><td>B</td><td>C</td></tr></table>"}]
+
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.94,
+            "regions": [
+                {"type": "grid", "regionId": "main", "bbox": {"x": 0, "y": 0, "width": 220, "height": 80}},
+                {"type": "grid", "regionId": "summary_2col", "bbox": {"x": 0, "y": 80, "width": 220, "height": 60}},
+                {"type": "grid", "regionId": "summary_3col", "bbox": {"x": 0, "y": 140, "width": 220, "height": 60}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            result = _try_semi_structured_table(image, MultiTopologyModel(), 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        sections = result["table_sections"]
+        self.assertEqual([len(section["columns"]) for section in sections], [7, 2, 3])
+        self.assertEqual(sections[0]["regionId"], "main")
+        self.assertEqual(sections[1]["regionId"], "summary_2col")
+        self.assertEqual(sections[2]["regionId"], "summary_3col")
+        self.assertEqual(len(result["table_structured"]["rows"][0]), 7)
+        self.assertEqual(len(result["table_structured"]["rows"][1]), 2)
+        self.assertEqual(len(result["table_structured"]["rows"][2]), 3)
+        self.assertEqual(result["table_structured"]["cells"][0]["regionId"], "main")
+        self.assertEqual(result["table_semi_analysis"]["regions"][1]["result"]["columns"][1]["col"], 1)
 
     def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)

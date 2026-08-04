@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { ArrowLeft, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2, Columns3 } from 'lucide-react';
-import { ROI, OCRResult, StructuredTableResult, TableMergedCell } from '../../types/ocr';
+import { ROI, OCRResult, StructuredTableResult, TableMergedCell, TableSectionResult } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
@@ -504,6 +504,52 @@ const normalizeResultTableForEditor = (result: OCRResult & { pageIndex?: number 
     rows,
     structured,
     value: result.extractedText || structuredTableToJson(structured),
+  };
+};
+
+const getSectionSortValue = (section: TableSectionResult) => {
+  const bbox = section.bbox;
+  if (Array.isArray(bbox)) return { y: Number(bbox[1] ?? 0), x: Number(bbox[0] ?? 0) };
+  if (bbox && typeof bbox === "object") return { y: Number(bbox.y ?? 0), x: Number(bbox.x ?? 0) };
+  return { y: 0, x: 0 };
+};
+
+const normalizeTableSectionForEditor = (section: TableSectionResult) => {
+  const rawSection = section as TableSectionResult & { table_structured?: unknown; table_html?: string | null };
+  const structured =
+    section.tableStructured ||
+    (rawSection.table_structured && typeof rawSection.table_structured === "object"
+      ? (rawSection.table_structured as StructuredTableResult)
+      : undefined);
+  const rows =
+    normalizeTableRows(structured?.rows) ||
+    rowsFromStructuredCells(structured) ||
+    normalizeTableRows(section.rows) ||
+    parseHtmlTable(section.tableHtml || rawSection.table_html || undefined);
+  const text = String(section.text || "");
+  if (!rows) {
+    return {
+      rows: null,
+      structured: structured || null,
+      value: text,
+      readOnlyText: text.trim() ? text : "",
+    };
+  }
+  const nextStructured = structuredTableFromSnapshot(
+    {
+      rows,
+      mergedCells: [],
+      columnWidths: structured?.colWidths || [],
+      headerRowCount: structured?.headerRowCount ?? 1,
+    },
+    structured
+  );
+  nextStructured.cells = (nextStructured.cells || []).map(cell => ({ ...cell, regionId: section.regionId }));
+  return {
+    rows,
+    structured: nextStructured,
+    value: structuredTableToJson(nextStructured),
+    readOnlyText: "",
   };
 };
 
@@ -1823,15 +1869,69 @@ export default function GroundTruthEditorZone({
                             </div>
 
                             <div onClick={(e) => e.stopPropagation()}>
-                              <EditableTableResult
-                                value={normalizedTable.value}
-                                rows={normalizedTable.rows}
-                                mergedCells={res.tableMergedCells}
-                                structured={normalizedTable.structured}
-                                onChange={(nextValue, nextRows, nextMergedCells, nextStructured) =>
-                                  setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells, tableStructured: nextStructured } : item))
-                                }
-                              />
+                              {res.tableSections && res.tableSections.length > 0 ? (
+                                <div className="space-y-3">
+                                  {[...res.tableSections]
+                                    .sort((left, right) => {
+                                      const a = getSectionSortValue(left);
+                                      const b = getSectionSortValue(right);
+                                      return a.y - b.y || a.x - b.x;
+                                    })
+                                    .map((section) => {
+                                      const sectionTable = normalizeTableSectionForEditor(section);
+                                      return (
+                                        <div key={section.regionId} className="rounded-xl border border-indigo-100 bg-indigo-50/20 p-2">
+                                          <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                                            <span className="truncate text-[10px] font-black uppercase text-indigo-500">
+                                              Section {section.regionId}
+                                            </span>
+                                            <span className="text-[10px] font-bold text-slate-400">
+                                              {sectionTable.rows ? `${sectionTable.rows.length} แถว` : "ข้อความ"}
+                                            </span>
+                                          </div>
+                                          {sectionTable.rows ? (
+                                            <EditableTableResult
+                                              value={sectionTable.value}
+                                              rows={sectionTable.rows}
+                                              mergedCells={[]}
+                                              structured={sectionTable.structured}
+                                              onChange={(nextValue, nextRows, _nextMergedCells, nextStructured) =>
+                                                setOcrResults(p => p.map(item => {
+                                                  if (item.id !== res.id) return item;
+                                                  const nextSections = (item.tableSections || []).map(currentSection =>
+                                                    currentSection.regionId === section.regionId
+                                                      ? {
+                                                          ...currentSection,
+                                                          rows: nextRows,
+                                                          tableStructured: nextStructured,
+                                                          text: nextValue,
+                                                        }
+                                                      : currentSection
+                                                  );
+                                                  return { ...item, tableSections: nextSections };
+                                                }))
+                                              }
+                                            />
+                                          ) : (
+                                            <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm font-semibold leading-relaxed text-slate-700">
+                                              {sectionTable.readOnlyText || "ไม่มีข้อมูลตารางใน Section นี้"}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              ) : (
+                                <EditableTableResult
+                                  value={normalizedTable.value}
+                                  rows={normalizedTable.rows}
+                                  mergedCells={res.tableMergedCells}
+                                  structured={normalizedTable.structured}
+                                  onChange={(nextValue, nextRows, nextMergedCells, nextStructured) =>
+                                    setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells, tableStructured: nextStructured } : item))
+                                  }
+                                />
+                              )}
                             </div>
                           </article>
                         );

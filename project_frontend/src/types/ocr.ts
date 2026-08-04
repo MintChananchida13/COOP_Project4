@@ -36,6 +36,7 @@ export interface OCRResult {
   tableRows?: string[][];
   tableMergedCells?: TableMergedCell[];
   tableStructured?: StructuredTableResult;
+  tableSections?: TableSectionResult[];
   tableHtml?: string;
   tableDebug?: Record<string, unknown>;
 }
@@ -45,6 +46,7 @@ export interface StructuredTableCell {
   col: number;
   text: string;
   bbox?: number[];
+  regionId?: string;
   rowSpan?: number;
   colSpan?: number;
   ocrText?: string;
@@ -60,6 +62,20 @@ export interface StructuredTableResult {
   rowSpans?: number[];
   colWidths?: number[];
   headerRowCount?: number;
+}
+
+export interface TableSectionResult {
+  regionId: string;
+  type?: string;
+  bbox?: { x?: number; y?: number; width?: number; height?: number } | number[];
+  confidence?: number;
+  columns?: Array<{ col?: number; label?: string } | string>;
+  rows?: string[][];
+  cells?: StructuredTableCell[];
+  tableStructured?: StructuredTableResult;
+  tableHtml?: string | null;
+  text?: string | null;
+  reconstruction?: Record<string, unknown>;
 }
 
 export interface TableMergedCell {
