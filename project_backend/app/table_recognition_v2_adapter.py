@@ -1625,13 +1625,11 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
     attempts: List[Dict[str, Any]] = []
     html_parts: List[str] = []
     candidates_for_competition: List[Dict[str, Any]] = []
-    table_sections: List[Dict[str, Any]] = []
     header_row_count = 0
     for section_index, candidate in enumerate(region_candidates):
         candidate_region = candidate.get("table_debug", {}).get("region") if isinstance(candidate.get("table_debug"), dict) else {}
         region_id = str(candidate_region.get("regionId") or candidate_region.get("region_id") or f"region_{section_index + 1}")
         section = _section_from_region_candidate(candidate, candidate_region if isinstance(candidate_region, dict) else {}, region_id)
-        table_sections.append(section)
         structured = section.get("table_structured") if isinstance(section.get("table_structured"), dict) else candidate.get("table_structured")
         rows = normalize_table_rows(section.get("rows") or [])
         row_offset = len(merged_rows)
@@ -1667,11 +1665,9 @@ def _merge_region_candidates(region_candidates: List[Dict[str, Any]], semi_analy
         "table_html": "\n".join(html_parts) if html_parts else None,
         "table_rows": merged_rows,
         "table_structured": structured,
-        "table_sections": table_sections,
         "table_debug": {
             "status": "semi_structured_merged" if merged_rows else "semi_structured_empty",
             "region_count": len(region_candidates),
-            "section_count": len(table_sections),
         },
         "table_semi_analysis": semi_analysis,
     }

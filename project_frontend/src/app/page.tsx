@@ -9,7 +9,7 @@ import WorkspaceZone from "../user/components/WorkspaceZone";
 import MatchedTemplateWorkspaceZone from "../user/components/MatchedTemplateWorkspaceZone";
 import GroundTruthEditorZone from "../user/components/GroundTruthEditorZone";
 import TemplateRequestPanel from "../user/components/TemplateRequestPanel";
-import { ROI, OCRResult, StructuredTableResult, TableSectionResult, TemplateField } from "../types/ocr";
+import { ROI, OCRResult, StructuredTableResult, TemplateField } from "../types/ocr";
 import {
   ADMIN_API_BASE_URL,
   detectTemplateDev,
@@ -798,33 +798,6 @@ const assignExportField = (fields: Record<string, unknown>, name: string, value:
   fields[name] = Array.isArray(fields[name]) ? [...fields[name], value] : [fields[name], value];
 };
 
-const normalizeTableSections = (sections: unknown): TableSectionResult[] | undefined => {
-  if (!Array.isArray(sections)) return undefined;
-  const normalized = sections
-    .filter((section): section is Record<string, unknown> => Boolean(section) && typeof section === "object")
-    .map((section, index) => ({
-      regionId: String(section.regionId || section.region_id || `region_${index + 1}`),
-      type: typeof section.type === "string" ? section.type : undefined,
-      bbox: section.bbox as TableSectionResult["bbox"],
-      confidence: typeof section.confidence === "number" ? section.confidence : undefined,
-      columns: Array.isArray(section.columns) ? (section.columns as TableSectionResult["columns"]) : undefined,
-      rows: Array.isArray(section.rows)
-        ? (section.rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
-        : undefined,
-      cells: Array.isArray(section.cells) ? (section.cells as TableSectionResult["cells"]) : undefined,
-      tableStructured:
-        section.table_structured && typeof section.table_structured === "object"
-          ? (section.table_structured as StructuredTableResult)
-          : section.tableStructured && typeof section.tableStructured === "object"
-            ? (section.tableStructured as StructuredTableResult)
-            : undefined,
-      tableHtml: (section.table_html as string | null | undefined) ?? (section.tableHtml as string | null | undefined) ?? null,
-      text: (section.text as string | null | undefined) ?? null,
-      reconstruction: section.reconstruction && typeof section.reconstruction === "object" ? (section.reconstruction as Record<string, unknown>) : undefined,
-    }));
-  return normalized.length > 0 ? normalized : undefined;
-};
-
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
 
 async function runAiProcessJob(payload: Record<string, unknown>) {
@@ -1247,7 +1220,6 @@ function HomeWorkspace() {
               const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
-              const tableSections = normalizeTableSections(resItem.table_sections || resItem.tableSections);
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
                 roiId: Number(resItem.roiId ?? roi.id),
@@ -1265,7 +1237,6 @@ function HomeWorkspace() {
                 points: roi.points,
                 tableRows: finalTableRows || undefined,
                 tableStructured: finalTableStructured,
-                tableSections,
                 tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
                 tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
               };

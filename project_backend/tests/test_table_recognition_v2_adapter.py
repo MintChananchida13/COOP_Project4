@@ -530,9 +530,9 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(cells[3]["bbox"]["x"], 11.0)
         self.assertEqual(cells[3]["bbox"]["y"], 83.0)
         self.assertEqual(cells[0]["regionId"], "region_1")
-        self.assertEqual(result["table_sections"][0]["cells"][0]["regionId"], "region_1")
+        self.assertNotIn("table_sections", result)
 
-    def test_semi_structured_sections_keep_local_columns_for_secondary_grids(self) -> None:
+    def test_semi_structured_regions_merge_into_single_table(self) -> None:
         image = np.zeros((220, 220, 3), dtype=np.uint8)
 
         class MultiTopologyModel:
@@ -565,11 +565,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        sections = result["table_sections"]
-        self.assertEqual([len(section["columns"]) for section in sections], [7, 2, 3])
-        self.assertEqual(sections[0]["regionId"], "main")
-        self.assertEqual(sections[1]["regionId"], "summary_2col")
-        self.assertEqual(sections[2]["regionId"], "summary_3col")
+        self.assertNotIn("table_sections", result)
         self.assertEqual(len(result["table_structured"]["rows"][0]), 7)
         self.assertEqual(len(result["table_structured"]["rows"][1]), 2)
         self.assertEqual(len(result["table_structured"]["rows"][2]), 3)
