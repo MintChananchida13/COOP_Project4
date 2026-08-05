@@ -341,7 +341,19 @@ def _prepare_auto_roi_box(
     neighbor_boxes: List[List[float]],
 ) -> Dict[str, Any]:
     original_box = _clip_box_to_image(box, image_width, image_height)
-    if region_type not in {"text", "table"}:
+    if region_type == "table":
+        return {
+            "box": original_box,
+            "expansion": {
+                "enabled": False,
+                "reason": "table_uses_paddle_bbox",
+                "original_box": original_box,
+                "expanded_box": original_box,
+                "final_box": original_box,
+            },
+        }
+
+    if region_type != "text":
         return {
             "box": original_box,
             "expansion": {

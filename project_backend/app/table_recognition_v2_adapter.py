@@ -468,6 +468,50 @@ def _cluster_text_cells(cells: List[Dict[str, Any]]) -> tuple[List[List[str]], L
     return (rows, source_cells)
 
 
+def _cluster_raw_ocr_geometry_cells(cells: List[Dict[str, Any]]) -> tuple[List[List[str]], List[Dict[str, Any]]]:
+    if not cells:
+        return ([], [])
+
+    median_height = float(np.median([cell["height"] for cell in cells])) if cells else 12.0
+    row_threshold = max(8.0, median_height * 0.75)
+    row_groups: List[List[Dict[str, Any]]] = []
+    for cell in sorted(cells, key=lambda item: (item["center_y"], item["x"])):
+        target_row = None
+        for row in row_groups:
+            row_center = sum(item["center_y"] for item in row) / len(row)
+            if abs(cell["center_y"] - row_center) <= row_threshold:
+                target_row = row
+                break
+        if target_row is None:
+            row_groups.append([cell])
+        else:
+            target_row.append(cell)
+
+    rows: List[List[str]] = []
+    source_cells: List[Dict[str, Any]] = []
+    for row_index, row in enumerate(row_groups):
+        sorted_row = sorted(row, key=lambda item: item["x"])
+        values: List[str] = []
+        for col_index, cell in enumerate(sorted_row):
+            text = normalize_ocr_text(cell["text"])
+            values.append(text)
+            source_cell: Dict[str, Any] = {
+                "row": row_index,
+                "col": col_index,
+                "text": text,
+                "rowSpan": 1,
+                "colSpan": 1,
+                "ocrText": text,
+                "groundTruth": text,
+                "confidence": cell.get("confidence", 0.0),
+                "bbox": cell.get("bbox"),
+            }
+            source_cells.append(source_cell)
+        rows.append(values)
+
+    return (normalize_table_rows(rows), source_cells)
+
+
 def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     phase_started = time.perf_counter()
     if image is None or image.size == 0:
@@ -613,13 +657,138 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     }
 
 
+def _recognize_raw_ocr_geometry_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
+    phase_started = time.perf_counter()
+    if image is None or image.size == 0:
+        return None
+
+    input_height, input_width = image.shape[:2]
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp.close()
+    try:
+        if not cv2.imwrite(temp.name, image):
+            return None
+        detect_started = time.perf_counter()
+        text_detection = detect_text_boxes(temp.name)
+        logger.info(
+            "Table Recognition phase timing: phase=Raw OCR Geometry text_detection elapsed=%.3fs",
+            time.perf_counter() - detect_started,
+        )
+    except (LayoutAnalysisUnavailableError, Exception) as error:
+        logger.info("Raw OCR geometry table text detection failed: %s", error)
+        return None
+    finally:
+        Path(temp.name).unlink(missing_ok=True)
+
+    regions = text_detection.get("regions") if isinstance(text_detection, dict) else []
+    if not isinstance(regions, list) or not regions:
+        return None
+
+    crops: List[np.ndarray] = []
+    valid_regions: List[Dict[str, Any]] = []
+    for region in regions:
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            x = max(0, int(float(bbox.get("x") or 0)))
+            y = max(0, int(float(bbox.get("y") or 0)))
+            width = max(1, int(float(bbox.get("width") or 1)))
+            height = max(1, int(float(bbox.get("height") or 1)))
+        except (TypeError, ValueError):
+            continue
+        width = min(width, input_width - x)
+        height = min(height, input_height - y)
+        if width <= 0 or height <= 0:
+            continue
+        crop = image[y : y + height, x : x + width]
+        if crop.size == 0:
+            continue
+        valid_regions.append(region)
+        crops.append(crop)
+
+    if not crops:
+        return None
+
+    try:
+        ocr_started = time.perf_counter()
+        recognitions = run_paddle_thai_ocr_batch(crops)
+        logger.info(
+            "Table Recognition phase timing: phase=Raw OCR Geometry OCR batch crops=%s elapsed=%.3fs",
+            len(crops),
+            time.perf_counter() - ocr_started,
+        )
+    except PaddleThaiOcrUnavailableError as error:
+        logger.info("Raw OCR geometry table OCR failed: %s", error)
+        return None
+
+    cells: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    for region, recognition in zip(valid_regions, recognitions):
+        text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
+        if not text:
+            continue
+        bbox = _region_bbox(region)
+        if not bbox:
+            continue
+        confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        confidence_values.append(confidence)
+        cells.append(
+            {
+                "text": text,
+                "confidence": confidence,
+                "bbox": bbox,
+                "x": bbox["x"],
+                "y": bbox["y"],
+                "width": bbox["width"],
+                "height": bbox["height"],
+                "center_x": bbox["x"] + bbox["width"] / 2,
+                "center_y": bbox["y"] + bbox["height"] / 2,
+            }
+        )
+
+    rows, source_cells = _cluster_raw_ocr_geometry_cells(cells)
+    if not rows or not any(str(cell).strip() for row in rows for cell in row):
+        return None
+    structured = _structured_from_rows(rows, source_cells)
+    confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+    return {
+        "text": _markdown_table(rows),
+        "confidence": float(confidence),
+        "segments": [
+            {
+                "text": cell["text"],
+                "confidence": cell["confidence"],
+                "bbox": cell["bbox"],
+            }
+            for cell in cells
+        ],
+        "attempts": [{"step": "raw_ocr_geometry_table", "row_count": len(rows), "box_count": len(cells)}],
+        "preprocessing": "raw_ocr_geometry_table",
+        "engine": "table_recognition_v2",
+        "model": _TABLE_MODEL_NAME,
+        "table_rows": rows,
+        "table_structured": structured,
+        "table_selected_method": "raw_ocr_geometry_table",
+        "table_debug": {
+            "status": "raw_ocr_geometry_table",
+            "detected_boxes": len(regions),
+            "recognized_cells": len(cells),
+            "row_count": len(rows),
+            "column_count": max((len(row) for row in rows), default=0),
+            "input_size": [int(input_width), int(input_height)],
+            "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
+        },
+    }
+
+
 def _has_usable_structured_cells(structured: Any) -> bool:
     if not isinstance(structured, dict):
         return False
     cells = structured.get("cells")
     if not isinstance(cells, list):
         return False
-    return any(isinstance(cell, dict) and not cell.get("hidden") and _cell_has_text(cell) for cell in cells)
+    return any(isinstance(cell, dict) and not cell.get("hidden") for cell in cells)
 
 
 def _has_usable_table_result(candidate: Dict[str, Any]) -> bool:
@@ -844,7 +1013,7 @@ def _calculate_table_quality(rows: List[List[str]], structured: Optional[Dict[st
     if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
         structured_cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
     visible_structured_cells = [cell for cell in structured_cells if not cell.get("hidden")]
-    has_structured_cells = any(_cell_has_text(cell) or cell.get("bbox") is not None for cell in visible_structured_cells)
+    has_structured_cells = bool(visible_structured_cells)
     merged_cells = [
         cell
         for cell in visible_structured_cells
@@ -1699,8 +1868,9 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_quality = slanext_debug.get("quality") if isinstance(slanext_debug.get("quality"), dict) else {}
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
     slanext_usable = _has_usable_table_result(slanext_candidate)
+    slanext_has_structured_grid = bool(slanext_quality.get("has_structured_cells")) and int(slanext_quality.get("row_count") or 0) > 0 and int(slanext_quality.get("column_count") or 0) > 0
 
-    if _should_try_borderless_candidate(slanext_quality, slanext_confidence):
+    if not slanext_has_structured_grid and _should_try_borderless_candidate(slanext_quality, slanext_confidence):
         try:
             geometry_started = time.perf_counter()
             fallback_result = _recognize_ocr_table_fallback(image)
@@ -1741,6 +1911,26 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     selected, selection_reason = _select_best_table_candidate(candidates)
     selected = _attach_candidate_competition(selected, candidates, selection_reason)
     selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
+    if not _has_usable_table_result(selected):
+        try:
+            raw_started = time.perf_counter()
+            raw_result = _recognize_raw_ocr_geometry_table(image)
+            logger.info(
+                "Table Recognition phase timing: phase=Raw OCR Geometry elapsed=%.3fs used=%s",
+                time.perf_counter() - raw_started,
+                bool(raw_result),
+            )
+            if raw_result:
+                ocr_inference_count += 2
+                raw_candidate = _build_table_candidate(raw_result, "raw_ocr_geometry_table")
+                selected = _attach_candidate_competition(
+                    raw_candidate,
+                    [*candidates, raw_candidate],
+                    "raw_ocr_geometry_after_unusable_structure",
+                )
+                selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
+        except Exception as error:
+            logger.warning("Raw OCR geometry table fallback failed: %s", error)
     selected_debug = selected.get("table_debug")
     if isinstance(selected_debug, dict):
         selected_debug["timing_total_seconds"] = round(time.perf_counter() - started, 3)

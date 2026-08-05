@@ -1238,9 +1238,11 @@ function HomeWorkspace() {
                 responseTableRows ||
                 parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
               const finalTableStructured = isTableRoi
-                ? rawTableRows
-                  ? structuredTableFromRows(rawTableRows, responseStructured)
-                  : responseStructured || createEmptyStructuredTable()
+                ? responseStructured?.cells?.length
+                  ? { ...responseStructured, rows: rawTableRows || responseStructured.rows || [] }
+                  : rawTableRows
+                    ? structuredTableFromRows(rawTableRows, responseStructured)
+                    : responseStructured || createEmptyStructuredTable()
                 : responseStructured;
               const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";

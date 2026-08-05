@@ -14,6 +14,7 @@ from app.table_recognition_v2_adapter import (
     _calculate_ocr_confidence,
     _calculate_table_quality,
     _postprocess_table_result,
+    _recognize_raw_ocr_geometry_table,
     _select_best_table_candidate,
     _section_from_region_candidate,
     _try_semi_structured_table,
@@ -208,6 +209,32 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_debug"]["column_count"], 2)
         detect.assert_called_once()
         recognize.assert_called_once()
+
+    def test_raw_ocr_geometry_table_returns_table_when_ocr_text_exists(self) -> None:
+        image = np.zeros((80, 200, 3), dtype=np.uint8)
+        detected_regions = [
+            {"bbox": {"x": 10, "y": 10, "width": 40, "height": 12}},
+            {"bbox": {"x": 100, "y": 11, "width": 50, "height": 12}},
+            {"bbox": {"x": 10, "y": 40, "width": 40, "height": 12}},
+        ]
+        recognitions = [
+            {"text": "A1", "confidence": 0.91},
+            {"text": "B1", "confidence": 0.81},
+            {"text": "A2", "confidence": 0.71},
+        ]
+
+        with patch("app.table_recognition_v2_adapter.detect_text_boxes", return_value={"regions": detected_regions}), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=recognitions,
+        ):
+            result = _recognize_raw_ocr_geometry_table(image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_selected_method"], "raw_ocr_geometry_table")
+        self.assertEqual(result["table_rows"], [["A1", "B1"], ["A2", ""]])
+        self.assertEqual(result["table_structured"]["cells"][0]["text"], "A1")
+        self.assertAlmostEqual(result["confidence"], (0.91 + 0.81 + 0.71) / 3)
 
     @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
     def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:
@@ -649,6 +676,27 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(len(processed["table_rows"][0]), 2)
         self.assertEqual(processed["table_rows"][9], ["", ""])
         self.assertEqual(len(processed["table_structured"]["rows"]), 10)
+
+    def test_slanext_structured_grid_is_usable_even_when_most_rows_are_empty(self) -> None:
+        cells = [
+            {"row": row, "col": col, "text": "A" if row == 0 and col == 0 else "", "rowSpan": 1, "colSpan": 1}
+            for row in range(10)
+            for col in range(2)
+        ]
+        candidate = _build_table_candidate(
+            {
+                "text": "",
+                "table_rows": [["A", ""], *[["", ""] for _ in range(9)]],
+                "table_structured": {"rows": [["A", ""], *[["", ""] for _ in range(9)]], "cells": cells},
+            },
+            "slanext",
+        )
+        quality = candidate["table_debug"]["quality"]
+
+        self.assertEqual(quality["row_count"], 10)
+        self.assertEqual(quality["column_count"], 2)
+        self.assertTrue(quality["has_structured_cells"])
+        self.assertEqual(len(candidate["table_rows"]), 10)
 
     def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)

@@ -90,6 +90,30 @@ class LayoutAnalysisRemoteRoutingTest(unittest.TestCase):
 
         load_text.assert_not_called()
 
+    def test_auto_roi_keeps_table_bbox_without_expansion(self) -> None:
+        image = np.zeros((100, 200, 3), dtype=np.uint8)
+        raw_items = [
+            {"bbox": [20, 10, 120, 60], "label": "table", "score": 0.95},
+            {"bbox": [150, 20, 170, 30], "label": "text", "score": 0.9},
+        ]
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch(
+            "app.layout_analysis_service._run_pipeline",
+            return_value=raw_items,
+        ):
+            result = analyze_layout(image, expand_text_rois=True, auto_roi_mode="text_line")
+
+        table_region = next(region for region in result["regions"] if region["type"] == "table")
+        text_region = next(region for region in result["regions"] if region["type"] == "text")
+
+        self.assertEqual(table_region["roi"]["x_ratio"], 20 / 200)
+        self.assertEqual(table_region["roi"]["y_ratio"], 10 / 100)
+        self.assertEqual(table_region["roi"]["width_ratio"], 100 / 200)
+        self.assertEqual(table_region["roi"]["height_ratio"], 50 / 100)
+        self.assertFalse(table_region["roi_expansion"]["enabled"])
+        self.assertEqual(table_region["roi_expansion"]["reason"], "table_uses_paddle_bbox")
+        self.assertLess(text_region["roi"]["x_ratio"], 150 / 200)
+
 
 if __name__ == "__main__":
     unittest.main()
