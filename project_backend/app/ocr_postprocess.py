@@ -87,8 +87,7 @@ def parse_table_html_with_bs4(html: str) -> Optional[Dict[str, Any]]:
                             }
                         )
             col_index += col_span
-        if row or tr.find_all(["th", "td"]):
-            rows.append(row)
+        rows.append(row)
 
     if not rows:
         return None

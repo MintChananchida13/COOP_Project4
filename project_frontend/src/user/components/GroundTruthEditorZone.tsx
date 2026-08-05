@@ -160,10 +160,17 @@ const parseHtmlTableStructured = (value?: string): StructuredTableResult | null 
       });
     });
 
-    const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell || "").trim()));
-    const usefulRows = nonEmptyRows.length > 0 ? nonEmptyRows : rows.filter((row) => row.length > 0);
-    if (usefulRows.length === 0) return null;
-    const columnCount = Math.max(...usefulRows.map((row) => row.length), 1);
+    const rowCountFromCells = cells.reduce(
+      (max, cell) => Math.max(max, Number(cell.row ?? 0) + Math.max(1, Number(cell.rowSpan ?? 1))),
+      0
+    );
+    const columnCountFromCells = cells.reduce(
+      (max, cell) => Math.max(max, Number(cell.col ?? 0) + Math.max(1, Number(cell.colSpan ?? 1))),
+      0
+    );
+    const usefulRows = Array.from({ length: Math.max(rows.length, rowCountFromCells) }, (_, index) => rows[index] || []);
+    if (usefulRows.length === 0 && cells.length === 0) return null;
+    const columnCount = Math.max(...usefulRows.map((row) => row.length), columnCountFromCells, 1);
     return {
       rows: usefulRows.map((row) => [...row.map((cell) => String(cell ?? "")), ...Array(columnCount - row.length).fill("")]),
       cells,
@@ -215,8 +222,8 @@ const tableRowsToMarkdown = (rows: string[][]): string => {
 };
 
 const tableRowsFromResult = (result: OCRResult & { pageIndex?: number }, value?: string): string[][] | null =>
-  normalizeTableRows(result.tableStructured?.rows) ||
   rowsFromStructuredCells(result.tableStructured) ||
+  normalizeTableRows(result.tableStructured?.rows) ||
   normalizeTableRows(result.tableRows) ||
   parseHtmlTable(result.tableHtml) ||
   parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
@@ -474,8 +481,8 @@ const structuredTableToJson = (structured: StructuredTableResult) =>
 
 const normalizeResultTableForEditor = (result: OCRResult & { pageIndex?: number }) => {
   const rows =
-    normalizeTableRows(result.tableStructured?.rows) ||
     rowsFromStructuredCells(result.tableStructured) ||
+    normalizeTableRows(result.tableStructured?.rows) ||
     normalizeTableRows(result.tableRows) ||
     parseHtmlTable(result.tableHtml) ||
     parseTableText(result.extractedText) ||
@@ -521,8 +528,8 @@ const normalizeTableSectionForEditor = (section: TableSectionResult) => {
       ? (rawSection.table_structured as StructuredTableResult)
       : undefined);
   const rows =
-    normalizeTableRows(structured?.rows) ||
     rowsFromStructuredCells(structured) ||
+    normalizeTableRows(structured?.rows) ||
     normalizeTableRows(section.rows) ||
     parseHtmlTable(section.tableHtml || rawSection.table_html || undefined);
   const text = String(section.text || "");
@@ -1252,7 +1259,7 @@ export default function GroundTruthEditorZone({
     let changed = false;
     const updated = ocrResults.map(item => {
       const isTable = item.type === "table" || item.dataType === "table";
-      const rows = normalizeTableRows(item.tableRows) || rowsFromStructuredCells(item.tableStructured);
+      const rows = rowsFromStructuredCells(item.tableStructured) || normalizeTableRows(item.tableRows);
       const structured = item.tableStructured || (isTable && rows ? structuredTableFromSnapshot({ rows, mergedCells: cloneMergedCells(item.tableMergedCells), columnWidths: [], headerRowCount: 1 }, null) : undefined);
       const structuredJson = structured ? structuredTableToJson(structured) : "";
       const shouldUseStructured =

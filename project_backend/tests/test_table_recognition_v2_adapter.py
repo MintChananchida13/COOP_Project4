@@ -217,6 +217,13 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["rows"], [["วันที่", "ยอดเงิน"], ["1 ม.ค.", "100.00"]])
         self.assertEqual(result["parser"], "beautifulsoup4+lxml")
 
+    @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
+    def test_table_html_postprocess_preserves_empty_tr_rows(self) -> None:
+        result = parse_table_html_with_bs4("<table><tr><td>A</td></tr><tr></tr><tr><td>C</td></tr></table>")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["rows"], [["A"], [""], ["C"]])
+
     @unittest.skipUnless(importlib.util.find_spec("pythainlp"), "pythainlp not installed")
     def test_ocr_text_postprocess_uses_pythainlp_normalization(self) -> None:
         self.assertEqual(normalize_ocr_text("  ทดสอบ   OCR  \n\n  ภาษาไทย  "), "ทดสอบ OCR\nภาษาไทย")
@@ -619,6 +626,29 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(processed["table_rows"], [["Header", "", ""], ["A", "", "C"], ["", "", ""]])
         self.assertEqual(len(processed["table_structured"]["cells"]), 9)
         self.assertEqual(processed["table_structured"]["cells"][0]["colSpan"], 3)
+
+    def test_postprocess_prefers_structured_cell_grid_over_short_rows(self) -> None:
+        cells = [
+            {"row": row, "col": col, "text": "A" if row == 0 and col == 0 else "", "rowSpan": 1, "colSpan": 1}
+            for row in range(10)
+            for col in range(2)
+        ]
+        result = {
+            "text": "",
+            "table_rows": [["A", ""]],
+            "table_structured": {
+                "rows": [["A", ""]],
+                "cells": cells,
+                "headerRowCount": 1,
+            },
+        }
+
+        processed = _postprocess_table_result(result)
+
+        self.assertEqual(len(processed["table_rows"]), 10)
+        self.assertEqual(len(processed["table_rows"][0]), 2)
+        self.assertEqual(processed["table_rows"][9], ["", ""])
+        self.assertEqual(len(processed["table_structured"]["rows"]), 10)
 
     def test_semi_structured_all_regions_fail_returns_none_for_whole_roi_fallback(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)

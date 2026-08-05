@@ -280,6 +280,20 @@ def _rows_from_structured_cells_preserve_grid(cells: Any) -> List[List[str]]:
     return normalize_table_rows(rows)
 
 
+def _row_grid_shape(rows: List[List[Any]]) -> tuple[int, int]:
+    if not rows:
+        return (0, 0)
+    return (len(rows), max((len(row) for row in rows if isinstance(row, list)), default=0))
+
+
+def _prefer_larger_grid_rows(primary: List[List[str]], candidate: List[List[str]]) -> List[List[str]]:
+    primary_shape = _row_grid_shape(primary)
+    candidate_shape = _row_grid_shape(candidate)
+    if candidate_shape[0] > primary_shape[0] or candidate_shape[1] > primary_shape[1]:
+        return candidate
+    return primary
+
+
 def _structured_from_html(html: str) -> Optional[Dict[str, Any]]:
     if not html:
         return None
@@ -696,7 +710,12 @@ def _extract_rows(result: Dict[str, Any]) -> List[List[str]]:
     if isinstance(structured, dict) and isinstance(structured.get("rows"), list):
         rows = structured.get("rows")
         if rows and all(isinstance(row, list) for row in rows):
-            return normalize_table_rows(rows)
+            normalized_rows = normalize_table_rows(rows)
+            if isinstance(structured.get("cells"), list):
+                cell_rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
+                if cell_rows:
+                    normalized_rows = _prefer_larger_grid_rows(normalized_rows, cell_rows)
+            return normalized_rows
     if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
         rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
         if rows:
@@ -737,12 +756,19 @@ def _postprocess_table_result(result: Dict[str, Any]) -> Dict[str, Any]:
         normalized_rows = _rows_from_html(html)
 
     structured = processed.get("table_structured")
-    if isinstance(structured, dict) and isinstance(structured.get("cells"), list) and not normalized_rows:
-        normalized_rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
+    if isinstance(structured, dict) and isinstance(structured.get("cells"), list):
+        cell_rows = _rows_from_structured_cells_preserve_grid(structured.get("cells"))
+        if cell_rows:
+            normalized_rows = _prefer_larger_grid_rows(normalized_rows, cell_rows)
     if not isinstance(structured, dict):
         structured = _extract_structured_table(processed, normalized_rows, html)
     elif normalized_rows and not isinstance(structured.get("rows"), list):
         structured = _structured_from_rows(normalized_rows, _normalize_cell_dicts(structured.get("cells")))
+    elif normalized_rows and isinstance(structured.get("rows"), list):
+        structured_rows = normalize_table_rows(structured.get("rows"))
+        if _row_grid_shape(normalized_rows) != _row_grid_shape(structured_rows):
+            structured = dict(structured)
+            structured["rows"] = normalized_rows
     elif not normalized_rows and isinstance(structured.get("cells"), list):
         normalized_rows = _rows_from_cells(structured.get("cells"))
         if normalized_rows and not isinstance(structured.get("rows"), list):
