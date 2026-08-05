@@ -452,6 +452,45 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "merged")
         self.assertEqual(result["table_selected_method"], "semi_structured_regions")
 
+    def test_semi_structured_reuses_single_loaded_model_for_all_regions(self) -> None:
+        image = np.zeros((120, 120, 3), dtype=np.uint8)
+
+        class ReusedRegionModel:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.instance_ids: list[int] = []
+
+            def predict(self, **kwargs):
+                self.calls += 1
+                self.instance_ids.append(id(self))
+                value = f"Region {self.calls}"
+                return [{"html": f"<table><tr><td>{value}</td><td>Value</td></tr></table>"}]
+
+        model = ReusedRegionModel()
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 40}},
+                {"type": "grid", "bbox": {"x": 0, "y": 40, "width": 120, "height": 40}},
+                {"type": "grid", "bbox": {"x": 0, "y": 80, "width": 120, "height": 40}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter._load_table_model", return_value=model) as load_model, patch(
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            return_value=fake_analysis,
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            result = recognize_table_v2_local(image)
+
+        load_model.assert_called_once()
+        self.assertEqual(model.calls, 3)
+        self.assertEqual(model.instance_ids, [id(model), id(model), id(model)])
+        self.assertEqual(result["table_debug"]["region_processing"], "sequential")
+        self.assertTrue(result["table_debug"]["model_reuse"]["enabled"])
+        self.assertEqual(result["table_debug"]["model_reuse"]["model_id"], id(model))
+        self.assertEqual(result["table_debug"]["model_reuse"]["model_inference_count"], 3)
+
     def test_semi_structured_keeps_region_with_content_even_when_region_shape_is_small(self) -> None:
         image = np.zeros((120, 120, 3), dtype=np.uint8)
 

@@ -1778,7 +1778,21 @@ def _try_semi_structured_table(
     semi_analysis = dict(analysis)
     semi_analysis["regions"] = merge_regions
     semi_analysis["merge_status"] = "merged" if len(region_candidates) == len(regions) else "partial"
+    semi_analysis["region_processing"] = "sequential"
+    semi_analysis["model_reuse"] = {
+        "enabled": True,
+        "model_id": id(model),
+        "model_inference_count": inference_count,
+    }
     result = _merge_region_candidates(region_candidates, semi_analysis)
+    result.setdefault("table_debug", {})
+    if isinstance(result["table_debug"], dict):
+        result["table_debug"]["region_processing"] = "sequential"
+        result["table_debug"]["model_reuse"] = {
+            "enabled": True,
+            "model_id": id(model),
+            "model_inference_count": inference_count,
+        }
     logger.info(
         "Table Recognition phase timing: phase=Region Inference complete regions=%s recognized=%s model_inferences=%s elapsed=%.3fs",
         len(regions),
