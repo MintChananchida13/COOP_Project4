@@ -648,13 +648,12 @@ const tableRowsToObjects = (rows: string[][]) => {
 const rowsFromStructuredCells = (structured?: StructuredTableResult | null): string[][] | null => {
   const cells = structured?.cells;
   if (!Array.isArray(cells) || cells.length === 0) return null;
-  const visibleCells = cells.filter(cell => !cell.hidden);
-  if (visibleCells.length === 0) return null;
-  const maxRow = Math.max(...visibleCells.map(cell => Number(cell.row ?? 0) + Math.max(1, Number(cell.rowSpan ?? 1)) - 1));
-  const maxCol = Math.max(...visibleCells.map(cell => Number(cell.col ?? 0) + Math.max(1, Number(cell.colSpan ?? 1)) - 1));
+  const maxRow = Math.max(...cells.map(cell => Number(cell.row ?? 0) + Math.max(1, Number(cell.rowSpan ?? 1)) - 1));
+  const maxCol = Math.max(...cells.map(cell => Number(cell.col ?? 0) + Math.max(1, Number(cell.colSpan ?? 1)) - 1));
   if (!Number.isFinite(maxRow) || !Number.isFinite(maxCol) || maxRow < 0 || maxCol < 0) return null;
   const rows = Array.from({ length: maxRow + 1 }, () => Array(maxCol + 1).fill(""));
-  for (const cell of visibleCells) {
+  for (const cell of cells) {
+    if (cell.hidden) continue;
     const row = Math.max(0, Number(cell.row ?? 0));
     const col = Math.max(0, Number(cell.col ?? 0));
     rows[row][col] = String(cell.groundTruth ?? cell.text ?? cell.ocrText ?? "");
@@ -770,10 +769,17 @@ const parseHtmlTableStructured = (value?: string): StructuredTableResult | null 
       });
     });
 
-    const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell || "").trim()));
-    const usefulRows = nonEmptyRows.length > 0 ? nonEmptyRows : rows.filter((row) => row.length > 0);
-    if (usefulRows.length === 0) return null;
-    const columnCount = Math.max(...usefulRows.map((row) => row.length), 1);
+    const rowCountFromCells = cells.reduce(
+      (max, cell) => Math.max(max, Number(cell.row ?? 0) + Math.max(1, Number(cell.rowSpan ?? 1))),
+      0
+    );
+    const columnCountFromCells = cells.reduce(
+      (max, cell) => Math.max(max, Number(cell.col ?? 0) + Math.max(1, Number(cell.colSpan ?? 1))),
+      0
+    );
+    const usefulRows = Array.from({ length: Math.max(rows.length, rowCountFromCells) }, (_, index) => rows[index] || []);
+    if (usefulRows.length === 0 && cells.length === 0) return null;
+    const columnCount = Math.max(...usefulRows.map((row) => row.length), columnCountFromCells, 1);
     return {
       rows: usefulRows.map((row) => [...row.map((cell) => String(cell ?? "")), ...Array(columnCount - row.length).fill("")]),
       cells,
@@ -1222,9 +1228,15 @@ function HomeWorkspace() {
                   : resItem.tableStructured && typeof resItem.tableStructured === "object"
                     ? (resItem.tableStructured as StructuredTableResult)
                     : parsedHtmlStructured || undefined;
-              const rawTableRows = Array.isArray(resItem.table_rows)
+              const responseRowsFromCells = rowsFromStructuredCells(responseStructured);
+              const responseTableRows = Array.isArray(resItem.table_rows)
                 ? resItem.table_rows.map((row: unknown) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
-                : responseStructured?.rows || rowsFromStructuredCells(responseStructured) || parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
+                : null;
+              const rawTableRows =
+                responseRowsFromCells ||
+                responseStructured?.rows ||
+                responseTableRows ||
+                parseHtmlTableRows(typeof resItem.table_html === "string" ? resItem.table_html : undefined);
               const finalTableStructured = isTableRoi
                 ? rawTableRows
                   ? structuredTableFromRows(rawTableRows, responseStructured)

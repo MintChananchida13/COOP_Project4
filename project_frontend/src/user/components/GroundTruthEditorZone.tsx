@@ -496,10 +496,13 @@ const normalizeResultTableForEditor = (result: OCRResult & { pageIndex?: number 
     };
   }
 
+  const mergedCells = result.tableMergedCells?.length
+    ? cloneMergedCells(result.tableMergedCells)
+    : mergedCellsFromStructured(result.tableStructured, rows);
   const structured = structuredTableFromSnapshot(
     {
       rows,
-      mergedCells: cloneMergedCells(result.tableMergedCells),
+      mergedCells,
       columnWidths: result.tableStructured?.colWidths || [],
       headerRowCount: result.tableStructured?.headerRowCount ?? 1,
     },
@@ -544,7 +547,7 @@ const normalizeTableSectionForEditor = (section: TableSectionResult) => {
   const nextStructured = structuredTableFromSnapshot(
     {
       rows,
-      mergedCells: [],
+      mergedCells: mergedCellsFromStructured(structured, rows),
       columnWidths: structured?.colWidths || [],
       headerRowCount: structured?.headerRowCount ?? 1,
     },

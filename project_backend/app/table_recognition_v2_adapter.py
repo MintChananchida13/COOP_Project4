@@ -1381,10 +1381,14 @@ def _geometry_table_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[
 
 def _section_from_region_candidate(candidate: Dict[str, Any], region: Dict[str, Any], region_id: str) -> Dict[str, Any]:
     structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else {}
-    source_rows = normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else []) or normalize_table_rows(candidate.get("table_rows") or [])
     source_cells = [dict(cell) for cell in (structured.get("cells") if isinstance(structured, dict) else []) or [] if isinstance(cell, dict)]
     for cell in source_cells:
         cell["regionId"] = region_id
+    source_rows = (
+        _rows_from_structured_cells_preserve_grid(source_cells)
+        or normalize_table_rows(structured.get("rows") if isinstance(structured, dict) else [])
+        or normalize_table_rows(candidate.get("table_rows") or [])
+    )
 
     geometry_table = _geometry_table_from_cells(source_cells, source_rows)
     geometry_rows = geometry_table[0] if geometry_table else None
