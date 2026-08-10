@@ -720,6 +720,43 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(max(len(row) for row in result["table_rows"]), 1)
         self.assertIn("Only Once", result["table_rows"][0][0])
 
+    def test_semi_coordinate_uses_per_cell_ocr_when_text_detection_misses_grid_text(self) -> None:
+        image = np.full((90, 180, 3), 255, dtype=np.uint8)
+        for y in [10, 45, 80]:
+            image[y:y + 2, 5:175] = 0
+        for x in [5, 60, 120, 175]:
+            image[10:82, x:x + 2] = 0
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 180, "height": 45}},
+                {"type": "grid", "bbox": {"x": 0, "y": 45, "width": 180, "height": 45}},
+            ],
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": []},
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=[
+                {"text": "A1", "confidence": 0.91},
+                {"text": "B1", "confidence": 0.92},
+                {"text": "C1", "confidence": 0.93},
+                {"text": "A2", "confidence": 0.94},
+                {"text": "B2", "confidence": 0.95},
+                {"text": "C2", "confidence": 0.96},
+            ],
+        ):
+            result = _try_semi_structured_table(image, None, 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"], [["A1", "B1", "C1"], ["A2", "B2", "C2"]])
+        self.assertEqual(result["table_debug"]["per_cell_ocr"]["filled_cells"], 6)
+        self.assertGreaterEqual(result["table_debug"]["hard_column_boundary_count"], 4)
+
     def test_semi_coordinate_does_not_call_slanext_model(self) -> None:
         regions = [{"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}}, {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}}]
         result = self._run_coordinate_semi_case(regions, [{"text": "A", "confidence": 0.9}, {"text": "B", "confidence": 0.9}])

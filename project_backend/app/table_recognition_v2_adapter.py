@@ -1218,6 +1218,89 @@ def _ocr_cells_from_text_detection(image: np.ndarray, status_prefix: str) -> tup
     return (cells, confidence_values, {"status": status_prefix, "detected_boxes": len(regions), "recognized_cells": len(cells)})
 
 
+def _ocr_cells_from_grid_boundaries(
+    image: np.ndarray,
+    rows: List[List[str]],
+    row_boundaries: List[float],
+    col_boundaries: List[float],
+    status_prefix: str,
+) -> tuple[List[List[str]], List[Dict[str, Any]], List[float], Dict[str, Any]]:
+    input_height, input_width = image.shape[:2]
+    crops: List[np.ndarray] = []
+    crop_positions: List[tuple[int, int, Dict[str, float]]] = []
+    for row_index in range(max(0, len(row_boundaries) - 1)):
+        for col_index in range(max(0, len(col_boundaries) - 1)):
+            existing = rows[row_index][col_index] if row_index < len(rows) and col_index < len(rows[row_index]) else ""
+            if str(existing).strip():
+                continue
+            left = max(0, int(round(col_boundaries[col_index])))
+            right = min(input_width, int(round(col_boundaries[col_index + 1])))
+            top = max(0, int(round(row_boundaries[row_index])))
+            bottom = min(input_height, int(round(row_boundaries[row_index + 1])))
+            if right - left <= 2 or bottom - top <= 2:
+                continue
+            inset_x = 1 if right - left > 6 else 0
+            inset_y = 1 if bottom - top > 6 else 0
+            crop = image[top + inset_y : bottom - inset_y, left + inset_x : right - inset_x]
+            if crop.size == 0:
+                continue
+            crops.append(crop)
+            crop_positions.append((
+                row_index,
+                col_index,
+                {
+                    "x": float(left),
+                    "y": float(top),
+                    "width": float(max(1, right - left)),
+                    "height": float(max(1, bottom - top)),
+                },
+            ))
+
+    if not crops:
+        return (rows, [], [], {"status": f"{status_prefix}_no_empty_grid_cells", "cell_crops": 0, "filled_cells": 0})
+
+    try:
+        recognitions = run_paddle_thai_ocr_batch(crops)
+    except Exception as error:
+        logger.info("%s per-cell OCR failed: %s", status_prefix, error)
+        return (rows, [], [], {"status": f"{status_prefix}_ocr_failed", "reason": str(error), "cell_crops": len(crops), "filled_cells": 0})
+
+    source_cells: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    filled = 0
+    for (row_index, col_index, bbox), recognition in zip(crop_positions, recognitions):
+        text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
+        if not text:
+            continue
+        confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        rows[row_index][col_index] = text
+        confidence_values.append(confidence)
+        filled += 1
+        source_cells.append({
+            "text": text,
+            "confidence": confidence,
+            "bbox": bbox,
+            "x": bbox["x"],
+            "y": bbox["y"],
+            "width": bbox["width"],
+            "height": bbox["height"],
+            "center_x": bbox["x"] + bbox["width"] / 2,
+            "center_y": bbox["y"] + bbox["height"] / 2,
+            "row": row_index,
+            "col": col_index,
+            "rowSpan": 1,
+            "colSpan": 1,
+            "ocrText": text,
+            "groundTruth": text,
+        })
+    return (
+        rows,
+        source_cells,
+        confidence_values,
+        {"status": status_prefix, "cell_crops": len(crops), "filled_cells": filled},
+    )
+
+
 def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     phase_started = time.perf_counter()
     if image is None or image.size == 0:
@@ -1232,9 +1315,6 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
         ocr_cells, confidence_values, ocr_debug = _ocr_cells_from_text_detection(image, "coordinate_based_semi")
     except (LayoutAnalysisUnavailableError, PaddleThaiOcrUnavailableError) as error:
         logger.info("Coordinate-based semi OCR failed: %s", error)
-        return None
-
-    if not ocr_cells:
         return None
 
     hard_row_boundaries = _combined_boundaries(horizontal_positions, ocr_cells, "y", input_height)
@@ -1280,6 +1360,28 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "groundTruth": text,
         })
 
+    grid_cell_debug: Dict[str, Any] = {"status": "coordinate_based_semi_per_cell_not_needed", "cell_crops": 0, "filled_cells": 0}
+    empty_cell_count = sum(1 for row in rows for value in row if not str(value).strip())
+    total_cell_count = sum(len(row) for row in rows)
+    should_run_cell_ocr = (
+        len(row_boundaries) >= 2
+        and len(col_boundaries) >= 3
+        and (
+            not ocr_cells
+            or len(ocr_cells) < max(1, min(total_cell_count or 1, col_count))
+        )
+    )
+    if should_run_cell_ocr:
+        rows, grid_source_cells, grid_confidences, grid_cell_debug = _ocr_cells_from_grid_boundaries(
+            image,
+            rows,
+            row_boundaries,
+            col_boundaries,
+            "coordinate_based_semi_per_cell",
+        )
+        source_cells.extend(grid_source_cells)
+        confidence_values.extend(grid_confidences)
+
     rows = normalize_table_rows(rows)
     if not any(str(value).strip() for row in rows for value in row):
         return None
@@ -1311,6 +1413,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "hard_column_boundary_count": len(hard_col_boundaries),
             "logical_column_boundary_count": len(col_boundaries),
             "ocr": ocr_debug,
+            "per_cell_ocr": grid_cell_debug,
             "region_processing": "coordinate_based",
             "model_reuse": {"enabled": False, "model_inference_count": 0},
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
