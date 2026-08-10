@@ -90,7 +90,7 @@ class LayoutAnalysisRemoteRoutingTest(unittest.TestCase):
 
         load_text.assert_not_called()
 
-    def test_auto_roi_keeps_table_bbox_without_expansion(self) -> None:
+    def test_auto_roi_expands_table_bbox_slightly_to_keep_edges(self) -> None:
         image = np.zeros((100, 200, 3), dtype=np.uint8)
         raw_items = [
             {"bbox": [20, 10, 120, 60], "label": "table", "score": 0.95},
@@ -106,12 +106,13 @@ class LayoutAnalysisRemoteRoutingTest(unittest.TestCase):
         table_region = next(region for region in result["regions"] if region["type"] == "table")
         text_region = next(region for region in result["regions"] if region["type"] == "text")
 
-        self.assertEqual(table_region["roi"]["x_ratio"], 20 / 200)
-        self.assertEqual(table_region["roi"]["y_ratio"], 10 / 100)
-        self.assertEqual(table_region["roi"]["width_ratio"], 100 / 200)
-        self.assertEqual(table_region["roi"]["height_ratio"], 50 / 100)
-        self.assertFalse(table_region["roi_expansion"]["enabled"])
-        self.assertEqual(table_region["roi_expansion"]["reason"], "table_uses_paddle_bbox")
+        self.assertEqual(table_region["roi"]["x_ratio"], 16 / 200)
+        self.assertEqual(table_region["roi"]["y_ratio"], 6 / 100)
+        self.assertEqual(table_region["roi"]["width_ratio"], 108 / 200)
+        self.assertEqual(table_region["roi"]["height_ratio"], 58 / 100)
+        self.assertTrue(table_region["roi_expansion"]["enabled"])
+        self.assertEqual(table_region["roi_expansion"]["reason"], "table_edge_guard_padding")
+        self.assertEqual(table_region["roi_expansion"]["padding"]["left"], 4)
         self.assertLess(text_region["roi"]["x_ratio"], 150 / 200)
 
 

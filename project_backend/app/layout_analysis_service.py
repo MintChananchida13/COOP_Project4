@@ -44,6 +44,10 @@ AUTO_ROI_EXPAND_TOP_PX = float(os.getenv("AUTO_ROI_EXPAND_TOP_PX", "8"))
 AUTO_ROI_EXPAND_BOTTOM_PX = float(os.getenv("AUTO_ROI_EXPAND_BOTTOM_PX", "8"))
 AUTO_ROI_EXPAND_LEFT_PX = float(os.getenv("AUTO_ROI_EXPAND_LEFT_PX", "8"))
 AUTO_ROI_EXPAND_RIGHT_PX = float(os.getenv("AUTO_ROI_EXPAND_RIGHT_PX", "8"))
+AUTO_ROI_TABLE_EXPAND_TOP_PX = float(os.getenv("AUTO_ROI_TABLE_EXPAND_TOP_PX", "4"))
+AUTO_ROI_TABLE_EXPAND_BOTTOM_PX = float(os.getenv("AUTO_ROI_TABLE_EXPAND_BOTTOM_PX", "4"))
+AUTO_ROI_TABLE_EXPAND_LEFT_PX = float(os.getenv("AUTO_ROI_TABLE_EXPAND_LEFT_PX", "4"))
+AUTO_ROI_TABLE_EXPAND_RIGHT_PX = float(os.getenv("AUTO_ROI_TABLE_EXPAND_RIGHT_PX", "4"))
 AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO = float(os.getenv("AUTO_ROI_MAX_NEIGHBOR_OVERLAP_RATIO", "0.15"))
 
 AutoRoiMode = Literal["text_line"]
@@ -301,6 +305,17 @@ def _expand_text_roi_box(box: List[float], image_width: int, image_height: int) 
     return _clip_box_to_image(expanded, image_width, image_height)
 
 
+def _expand_table_roi_box(box: List[float], image_width: int, image_height: int) -> List[float]:
+    left, top, right, bottom = _clip_box_to_image(box, image_width, image_height)
+    expanded = [
+        left - AUTO_ROI_TABLE_EXPAND_LEFT_PX,
+        top - AUTO_ROI_TABLE_EXPAND_TOP_PX,
+        right + AUTO_ROI_TABLE_EXPAND_RIGHT_PX,
+        bottom + AUTO_ROI_TABLE_EXPAND_BOTTOM_PX,
+    ]
+    return _clip_box_to_image(expanded, image_width, image_height)
+
+
 def _reduce_box_overlap(
     original_box: List[float],
     expanded_box: List[float],
@@ -342,14 +357,22 @@ def _prepare_auto_roi_box(
 ) -> Dict[str, Any]:
     original_box = _clip_box_to_image(box, image_width, image_height)
     if region_type == "table":
+        expanded_box = _expand_table_roi_box(original_box, image_width, image_height)
         return {
-            "box": original_box,
+            "box": expanded_box,
             "expansion": {
-                "enabled": False,
-                "reason": "table_uses_paddle_bbox",
+                "enabled": True,
+                "reason": "table_edge_guard_padding",
                 "original_box": original_box,
-                "expanded_box": original_box,
-                "final_box": original_box,
+                "expanded_box": expanded_box,
+                "final_box": expanded_box,
+                "padding": {
+                    "unit": "px",
+                    "top": AUTO_ROI_TABLE_EXPAND_TOP_PX,
+                    "bottom": AUTO_ROI_TABLE_EXPAND_BOTTOM_PX,
+                    "left": AUTO_ROI_TABLE_EXPAND_LEFT_PX,
+                    "right": AUTO_ROI_TABLE_EXPAND_RIGHT_PX,
+                },
             },
         }
 

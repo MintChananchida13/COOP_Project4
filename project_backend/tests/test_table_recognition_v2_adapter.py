@@ -703,6 +703,98 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"][:2], [["A", "B", "C", "D"], ["E", "F", "G", "H"]])
         self.assertGreaterEqual(result["table_debug"]["hard_column_boundary_count"], 3)
 
+    def test_semi_coordinate_real_header_can_span_inferred_columns_without_fake_headers(self) -> None:
+        image = np.full((120, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[50:52, 5:215] = 0
+        image[110:112, 5:215] = 0
+        image[10:112, 5:7] = 0
+        image[10:112, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 35, "y": 25, "width": 120, "height": 10}},
+            {"bbox": {"x": 20, "y": 70, "width": 35, "height": 10}},
+            {"bbox": {"x": 130, "y": 70, "width": 35, "height": 10}},
+            {"bbox": {"x": 20, "y": 92, "width": 35, "height": 10}},
+            {"bbox": {"x": 130, "y": 92, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["ข้อมูล", "ชื่อ", "สมชาย", "อายุ", "35"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        flat_text = " ".join(value for row in result["table_rows"] for value in row)
+        self.assertNotIn("Header 1", flat_text)
+        self.assertNotIn("Column 1", flat_text)
+        header = next(cell for cell in result["table_structured"]["cells"] if cell["text"] == "ข้อมูล")
+        self.assertGreaterEqual(header["colSpan"], 2)
+
+    def test_semi_coordinate_preserves_label_value_pairing_inside_each_hard_region(self) -> None:
+        image = np.full((140, 260, 3), 255, dtype=np.uint8)
+        image[10:12, 5:255] = 0
+        image[125:127, 5:255] = 0
+        image[10:127, 5:7] = 0
+        image[10:127, 130:132] = 0
+        image[10:127, 255:257] = 0
+        regions = [
+            {"bbox": {"x": 18, "y": 30, "width": 42, "height": 10}},
+            {"bbox": {"x": 78, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 148, "y": 30, "width": 40, "height": 10}},
+            {"bbox": {"x": 210, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 18, "y": 75, "width": 42, "height": 10}},
+            {"bbox": {"x": 78, "y": 75, "width": 35, "height": 10}},
+            {"bbox": {"x": 148, "y": 75, "width": 40, "height": 10}},
+            {"bbox": {"x": 210, "y": 75, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(
+            regions,
+            [{"text": value, "confidence": 0.9} for value in ["LeftA", "1", "RightA", "2", "LeftB", "3", "RightB", "4"]],
+            image,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:2], [["LeftA", "1", "RightA", "2"], ["LeftB", "3", "RightB", "4"]])
+        self.assertGreaterEqual(result["table_debug"]["hard_column_boundary_count"], 3)
+        self.assertGreaterEqual(result["table_debug"]["logical_column_boundary_count"], 5)
+
+    def test_semi_coordinate_assigns_boundary_crossing_bbox_by_dominant_overlap(self) -> None:
+        image = np.full((100, 180, 3), 255, dtype=np.uint8)
+        for y in [10, 50, 90]:
+            image[y:y + 2, 5:175] = 0
+        for x in [5, 90, 175]:
+            image[10:92, x:x + 2] = 0
+        regions = [
+            {"bbox": {"x": 16, "y": 25, "width": 30, "height": 10}},
+            {"bbox": {"x": 96, "y": 25, "width": 35, "height": 10}},
+            {"bbox": {"x": 86, "y": 65, "width": 32, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Left", "Right", "MostlyRight"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][0], ["Left", "Right"])
+        self.assertEqual(result["table_rows"][1], ["", "MostlyRight"])
+
+    def test_semi_coordinate_merges_multiple_ocr_boxes_in_same_cell_before_assignment(self) -> None:
+        image = np.full((100, 180, 3), 255, dtype=np.uint8)
+        for y in [10, 50]:
+            image[y:y + 2, 5:175] = 0
+        for x in [5, 90, 175]:
+            image[10:52, x:x + 2] = 0
+        regions = [
+            {"bbox": {"x": 15, "y": 25, "width": 25, "height": 10}},
+            {"bbox": {"x": 42, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 105, "y": 25, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["ชื่อ", "สินค้า", "100"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:1], [["ชื่อ สินค้า", "100"]])
+        self.assertEqual(
+            len([cell for cell in result["table_structured"]["cells"] if cell.get("text") == "ชื่อ สินค้า"]),
+            1,
+        )
+
     def test_semi_coordinate_does_not_split_when_internal_evidence_is_insufficient(self) -> None:
         image = np.full((90, 220, 3), 255, dtype=np.uint8)
         image[10:12, 5:215] = 0
@@ -793,6 +885,63 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
             result = recognize_table_v2_local(image)
 
         self.assertEqual(result["table_selected_method"], "coordinate_based_semi")
+
+    def test_recognize_table_v2_local_rejects_unreliable_semi_and_uses_slanext(self) -> None:
+        image = np.full((120, 160, 3), 255, dtype=np.uint8)
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 160, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 160, "height": 60}},
+            ],
+            "line_summary": {"horizontal": 4, "vertical": 4},
+        }
+        weak_semi = {
+            "text": "| A B C |\n| --- |",
+            "confidence": 0.2,
+            "segments": [{"text": "A B C", "confidence": 0.8, "bbox": {"x": 10, "y": 10, "width": 120, "height": 10}}],
+            "table_rows": [["A B C"]],
+            "table_structured": {"rows": [["A B C"]], "cells": [{"row": 0, "col": 0, "text": "A B C"}]},
+            "table_debug": {
+                "status": "coordinate_based_semi_reconstructed",
+                "hard_column_boundary_count": 4,
+                "logical_column_boundary_count": 2,
+                "ocr": {"detected_boxes": 3, "recognized_cells": 1},
+            },
+            "table_selected_method": "coordinate_based_semi",
+            "table_semi_analysis": fake_analysis,
+        }
+        slanext_result = {
+            "text": "| A | B |\n| --- | --- |",
+            "confidence": 0.9,
+            "segments": [],
+            "table_rows": [["A", "B"]],
+            "table_structured": {
+                "rows": [["A", "B"]],
+                "cells": [
+                    {"row": 0, "col": 0, "text": "A"},
+                    {"row": 0, "col": 1, "text": "B"},
+                ],
+            },
+            "table_debug": {"status": "slanext"},
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter._recognize_coordinate_based_semi_table",
+            return_value=weak_semi,
+        ), patch("app.table_recognition_v2_adapter._load_table_model", return_value=object()), patch(
+            "app.table_recognition_v2_adapter._predict_table_model",
+            return_value=object(),
+        ), patch(
+            "app.table_recognition_v2_adapter._slanext_result_from_output",
+            return_value=slanext_result,
+        ):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_selected_method"], "slanext")
+        self.assertEqual(result["table_semi_analysis"]["merge_status"], "coordinate_reconstruction_rejected")
+        self.assertIn("logical_grid_lost_hard_boundaries", result["table_semi_analysis"]["reliability"]["reasons"])
 
     def test_column_anchor_assignment_prevents_values_shifting_to_neighbor_columns(self) -> None:
         cells = []

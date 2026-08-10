@@ -632,6 +632,126 @@ def _covered_column_indices(cell: Dict[str, Any], col_boundaries: List[float], t
     ]
 
 
+def _interval_overlap(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
+    return max(0.0, min(float(end_a), float(end_b)) - max(float(start_a), float(start_b)))
+
+
+def _dominant_interval_index(
+    start: float,
+    end: float,
+    boundaries: List[float],
+    tolerance: float,
+    candidate_indices: Optional[List[int]] = None,
+) -> int:
+    if len(boundaries) <= 1:
+        return 0
+    indices = candidate_indices if candidate_indices else list(range(len(boundaries) - 1))
+    best_index = indices[0] if indices else 0
+    best_score = float("-inf")
+    center = (float(start) + float(end)) / 2.0
+    span = max(1.0, float(end) - float(start))
+    for index in indices:
+        if index < 0 or index >= len(boundaries) - 1:
+            continue
+        left = float(boundaries[index])
+        right = float(boundaries[index + 1])
+        overlap = _interval_overlap(start, end, left, right)
+        interval_center = (left + right) / 2.0
+        alignment = max(0.0, 1.0 - abs(center - interval_center) / max(span, right - left, 1.0))
+        score = (overlap / span) * 0.72 + alignment * 0.28
+        if start < left - tolerance or end > right + tolerance:
+            score -= 0.08
+        if score > best_score:
+            best_score = score
+            best_index = index
+    return max(0, min(len(boundaries) - 2, best_index))
+
+
+def _hard_region_column_indices(
+    cell: Dict[str, Any],
+    col_boundaries: List[float],
+    hard_col_boundaries: List[float],
+    tolerance: float,
+) -> List[int]:
+    if len(col_boundaries) <= 1:
+        return [0]
+    if len(hard_col_boundaries) < 2:
+        return list(range(len(col_boundaries) - 1))
+    left = float(cell.get("x") or 0.0)
+    right = left + float(cell.get("width") or 0.0)
+    hard_index = _dominant_interval_index(left, right, hard_col_boundaries, tolerance)
+    hard_left = hard_col_boundaries[hard_index]
+    hard_right = hard_col_boundaries[hard_index + 1]
+    candidates = [
+        index
+        for index in range(len(col_boundaries) - 1)
+        if hard_left - tolerance <= (col_boundaries[index] + col_boundaries[index + 1]) / 2.0 <= hard_right + tolerance
+    ]
+    return candidates or list(range(len(col_boundaries) - 1))
+
+
+def _assign_ocr_cell_to_grid(
+    cell: Dict[str, Any],
+    row_boundaries: List[float],
+    col_boundaries: List[float],
+    hard_col_boundaries: List[float],
+    x_tolerance: float,
+    y_tolerance: float,
+    row_peer_count: int = 1,
+) -> tuple[int, int]:
+    left = float(cell.get("x") or 0.0)
+    top = float(cell.get("y") or 0.0)
+    right = left + float(cell.get("width") or 0.0)
+    bottom = top + float(cell.get("height") or 0.0)
+    row_index = _dominant_interval_index(top, bottom, row_boundaries, y_tolerance)
+    col_candidates = _hard_region_column_indices(cell, col_boundaries, hard_col_boundaries, x_tolerance)
+    crossed_boundaries = [
+        index
+        for index in range(1, max(1, len(col_boundaries) - 1))
+        if _text_overlaps_boundary(cell, col_boundaries[index], "x", x_tolerance)
+        and (index - 1 in col_candidates or index in col_candidates)
+    ]
+    if row_index == 0 and row_peer_count <= 1 and crossed_boundaries:
+        return (row_index, max(0, min(crossed_boundaries) - 1))
+    col_index = _dominant_interval_index(left, right, col_boundaries, x_tolerance, col_candidates)
+    return (row_index, col_index)
+
+
+def _merge_assigned_ocr_cells(cells: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[int, int], List[Dict[str, Any]]] = {}
+    for cell in cells:
+        grouped.setdefault((int(cell["row"]), int(cell["col"])), []).append(cell)
+    merged: List[Dict[str, Any]] = []
+    for (row_index, col_index), group in grouped.items():
+        ordered = sorted(group, key=lambda item: (float(item.get("y") or 0.0), float(item.get("x") or 0.0)))
+        texts = [str(item.get("text") or "").strip() for item in ordered if str(item.get("text") or "").strip()]
+        boxes = [item.get("bbox") for item in ordered if isinstance(item.get("bbox"), dict)]
+        bbox = _merge_bboxes(boxes)
+        confidence_values = [float(item.get("confidence") or 0.0) for item in ordered]
+        base = dict(ordered[0])
+        text = normalize_ocr_text(" ".join(texts))
+        base.update({
+            "row": row_index,
+            "col": col_index,
+            "text": text,
+            "ocrText": text,
+            "groundTruth": text,
+            "confidence": sum(confidence_values) / len(confidence_values) if confidence_values else 0.0,
+        })
+        if bbox:
+            base.update({
+                "bbox": bbox,
+                "x": bbox["x"],
+                "y": bbox["y"],
+                "width": bbox["width"],
+                "height": bbox["height"],
+                "center_x": bbox["x"] + bbox["width"] / 2,
+                "center_y": bbox["y"] + bbox["height"] / 2,
+            })
+        merged.append(base)
+    return sorted(merged, key=lambda item: (int(item["row"]), int(item["col"]), float(item.get("y") or 0.0), float(item.get("x") or 0.0)))
+
+
 def _line_evidence(mask: np.ndarray, orientation: str, position: float, start: float, end: float) -> float:
     height, width = mask.shape[:2]
     if orientation == "vertical":
@@ -660,6 +780,7 @@ def _structured_from_coordinate_grid(
     col_boundaries: List[float],
     horizontal_mask: np.ndarray,
     vertical_mask: np.ndarray,
+    hard_col_boundaries: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     row_count = len(rows)
     col_count = max((len(row) for row in rows), default=0)
@@ -758,6 +879,7 @@ def _structured_from_coordinate_grid(
         "postProcessing": "coordinate_based_semi_reconstruction",
         "rowBoundaries": row_boundaries,
         "columnBoundaries": col_boundaries,
+        "hardColumnBoundaries": hard_col_boundaries or [],
     }
 
 
@@ -1335,22 +1457,37 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     rows = [["" for _ in range(col_count)] for _ in range(row_count)]
     source_cells: List[Dict[str, Any]] = []
     median_width = float(np.median([cell.get("width", 40.0) for cell in ocr_cells])) if ocr_cells else 40.0
+    median_height = float(np.median([cell.get("height", 12.0) for cell in ocr_cells])) if ocr_cells else 12.0
     x_tolerance = max(4.0, median_width * 0.12)
+    y_tolerance = max(4.0, median_height * 0.35)
+    assigned_cells: List[Dict[str, Any]] = []
+    row_peer_counts: Dict[int, int] = {}
+    for cell in ocr_cells:
+        row_index = _dominant_interval_index(
+            float(cell.get("y") or 0.0),
+            float(cell.get("y") or 0.0) + float(cell.get("height") or 0.0),
+            row_boundaries,
+            y_tolerance,
+        )
+        row_peer_counts[row_index] = row_peer_counts.get(row_index, 0) + 1
     for cell in sorted(ocr_cells, key=lambda item: (item["center_y"], item["center_x"])):
-        row_index = _interval_index(float(cell["center_y"]), row_boundaries)
-        covered_columns = _covered_column_indices(cell, col_boundaries, x_tolerance)
-        crossed_boundaries = [
-            index
-            for index in range(1, max(1, len(col_boundaries) - 1))
-            if _text_overlaps_boundary(cell, col_boundaries[index], "x", x_tolerance)
-        ]
-        if crossed_boundaries:
-            col_index = max(0, min(crossed_boundaries) - 1)
-        else:
-            col_index = min(covered_columns) if len(covered_columns) > 1 else _interval_index(float(cell["center_x"]), col_boundaries)
+        provisional_row = _dominant_interval_index(
+            float(cell.get("y") or 0.0),
+            float(cell.get("y") or 0.0) + float(cell.get("height") or 0.0),
+            row_boundaries,
+            y_tolerance,
+        )
+        row_index, col_index = _assign_ocr_cell_to_grid(
+            cell,
+            row_boundaries,
+            col_boundaries,
+            hard_col_boundaries,
+            x_tolerance,
+            y_tolerance,
+            row_peer_counts.get(provisional_row, 1),
+        )
         text = normalize_ocr_text(cell["text"])
-        rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
-        source_cells.append({
+        assigned_cells.append({
             **cell,
             "row": row_index,
             "col": col_index,
@@ -1358,7 +1495,16 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "colSpan": 1,
             "ocrText": text,
             "groundTruth": text,
+            "text": text,
         })
+    source_cells = _merge_assigned_ocr_cells(assigned_cells)
+    for cell in source_cells:
+        row_index = int(cell["row"])
+        col_index = int(cell["col"])
+        text = str(cell.get("text") or "").strip()
+        if not text:
+            continue
+        rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
 
     grid_cell_debug: Dict[str, Any] = {"status": "coordinate_based_semi_per_cell_not_needed", "cell_crops": 0, "filled_cells": 0}
     empty_cell_count = sum(1 for row in rows for value in row if not str(value).strip())
@@ -1385,12 +1531,20 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     rows = normalize_table_rows(rows)
     if not any(str(value).strip() for row in rows for value in row):
         return None
-    structured = _structured_from_coordinate_grid(rows, source_cells, row_boundaries, col_boundaries, horizontal_mask, vertical_mask)
+    structured = _structured_from_coordinate_grid(rows, source_cells, row_boundaries, col_boundaries, horizontal_mask, vertical_mask, hard_col_boundaries)
     confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
     semi_analysis = dict(analysis)
     semi_analysis["merge_status"] = "coordinate_reconstructed"
     semi_analysis["region_processing"] = "coordinate_based"
     semi_analysis["model_reuse"] = {"enabled": False, "model_inference_count": 0}
+    semi_analysis["ocr_geometry"] = {
+        "detected_boxes": int(ocr_debug.get("detected_boxes") or 0) if isinstance(ocr_debug, dict) else len(ocr_cells),
+        "recognized_cells": len(source_cells),
+        "row_boundary_count": len(row_boundaries),
+        "hard_column_boundary_count": len(hard_col_boundaries),
+        "logical_column_boundary_count": len(col_boundaries),
+        "uses_text_alignment": len(col_boundaries) > len(hard_col_boundaries) or len(row_boundaries) > len(hard_row_boundaries),
+    }
     return {
         "text": _markdown_table(rows),
         "confidence": float(confidence),
@@ -1412,6 +1566,8 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "logical_row_boundary_count": len(row_boundaries),
             "hard_column_boundary_count": len(hard_col_boundaries),
             "logical_column_boundary_count": len(col_boundaries),
+            "hard_column_boundaries": hard_col_boundaries,
+            "logical_column_boundaries": col_boundaries,
             "ocr": ocr_debug,
             "per_cell_ocr": grid_cell_debug,
             "region_processing": "coordinate_based",
@@ -1819,6 +1975,61 @@ def _should_try_borderless_candidate(quality: Dict[str, Any], final_confidence: 
         or float(quality.get("column_consistency") or 0.0) < _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD
         or float(quality.get("sparse_row_ratio") or 0.0) > _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD
     )
+
+
+def _semi_result_reliability(candidate: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
+    debug = candidate.get("table_debug") if isinstance(candidate.get("table_debug"), dict) else {}
+    quality = debug.get("quality") if isinstance(debug.get("quality"), dict) else {}
+    ocr_debug = debug.get("ocr") if isinstance(debug.get("ocr"), dict) else {}
+    per_cell_ocr = debug.get("per_cell_ocr") if isinstance(debug.get("per_cell_ocr"), dict) else {}
+    line_summary = analysis.get("line_summary") if isinstance(analysis.get("line_summary"), dict) else {}
+
+    row_count = int(quality.get("row_count") or 0)
+    column_count = int(quality.get("column_count") or 0)
+    non_empty = int(quality.get("non_empty_cell_count") or 0)
+    fill_ratio = float(quality.get("fill_ratio") or 0.0)
+    column_consistency = float(quality.get("column_consistency") or 0.0)
+    sparse_row_ratio = float(quality.get("sparse_row_ratio") or 0.0)
+    final_confidence = float(debug.get("final_confidence") or candidate.get("confidence") or 0.0)
+    detected_boxes = int(ocr_debug.get("detected_boxes") or 0)
+    recognized_cells = int(ocr_debug.get("recognized_cells") or 0) + int(per_cell_ocr.get("filled_cells") or 0)
+    hard_columns = int(debug.get("hard_column_boundary_count") or 0)
+    logical_columns = int(debug.get("logical_column_boundary_count") or 0)
+    line_verticals = int(line_summary.get("vertical") or debug.get("vertical_line_count") or 0)
+    line_horizontals = int(line_summary.get("horizontal") or debug.get("horizontal_line_count") or 0)
+
+    reasons: List[str] = []
+    if row_count <= 0 or column_count <= 0 or non_empty <= 0:
+        reasons.append("empty_reconstruction")
+    if line_verticals >= 3 and column_count <= 1:
+        reasons.append("opencv_columns_collapsed_to_one")
+    if hard_columns >= 3 and logical_columns < hard_columns:
+        reasons.append("logical_grid_lost_hard_boundaries")
+    if detected_boxes > 0 and recognized_cells < max(1, int(detected_boxes * 0.55)):
+        reasons.append("ocr_boxes_dropped")
+    if row_count >= 2 and column_count >= 2 and fill_ratio < 0.12:
+        reasons.append("low_fill_ratio")
+    if column_count >= 2 and column_consistency < 0.35 and sparse_row_ratio > 0.55:
+        reasons.append("irregular_assignment")
+    if final_confidence < 0.38:
+        reasons.append("low_final_confidence")
+
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "row_count": row_count,
+        "column_count": column_count,
+        "non_empty_cell_count": non_empty,
+        "fill_ratio": round(_clamp01(fill_ratio), 4),
+        "column_consistency": round(_clamp01(column_consistency), 4),
+        "sparse_row_ratio": round(_clamp01(sparse_row_ratio), 4),
+        "detected_boxes": detected_boxes,
+        "recognized_cells": recognized_cells,
+        "hard_column_boundary_count": hard_columns,
+        "logical_column_boundary_count": logical_columns,
+        "line_summary": {"horizontal": line_horizontals, "vertical": line_verticals},
+        "final_confidence": round(_clamp01(final_confidence), 4),
+    }
 
 
 def _candidate_has_content(candidate: Dict[str, Any]) -> bool:
@@ -2378,7 +2589,7 @@ def _whole_roi_semi_analysis(analysis: Optional[Dict[str, Any]], merge_status: s
     result.setdefault("detected", False)
     result.setdefault("confidence", 0.0)
     result.setdefault("regions", [])
-    result["merge_status"] = merge_status
+    result.setdefault("merge_status", merge_status)
     return result
 
 
@@ -2412,20 +2623,36 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         )
         semi_result = _try_semi_structured_table(image, None, started, semi_analysis)
         if semi_result:
-            semi_debug = semi_result.get("table_semi_analysis") if isinstance(semi_result.get("table_semi_analysis"), dict) else {}
-            model_inference_count = sum(1 for region in semi_debug.get("regions") or [] if isinstance(region, dict) and region.get("status") in {"recognized", "unusable_result", "failed"})
-            semi_result.setdefault("table_debug", {})
-            if isinstance(semi_result["table_debug"], dict):
-                semi_result["table_debug"]["timing_total_seconds"] = round(time.perf_counter() - started, 3)
-                semi_result["table_debug"]["model_inference_count"] = model_inference_count
-                semi_result["table_debug"]["ocr_inference_count"] = ocr_inference_count
-            logger.info(
-                "Table Recognition phase timing: phase=Total path=semi model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
-                model_inference_count,
-                ocr_inference_count,
-                time.perf_counter() - started,
-            )
-            return semi_result
+            semi_candidate = _build_table_candidate(semi_result, "coordinate_based_semi")
+            reliability = _semi_result_reliability(semi_candidate, semi_analysis if isinstance(semi_analysis, dict) else {})
+            semi_candidate.setdefault("table_debug", {})
+            if isinstance(semi_candidate["table_debug"], dict):
+                semi_candidate["table_debug"]["semi_reliability"] = reliability
+            if not reliability["passed"]:
+                logger.info(
+                    "Table Recognition phase timing: phase=Semi Quality rejected reasons=%s elapsed=%.3fs",
+                    reliability["reasons"],
+                    time.perf_counter() - grid_started,
+                )
+                semi_analysis = _whole_roi_semi_analysis(semi_analysis, merge_status="coordinate_reconstruction_rejected")
+                semi_analysis["reliability"] = reliability
+            else:
+                semi_result = _attach_candidate_competition(semi_candidate, [semi_candidate], "semi_reconstruction_passed_quality_gate")
+                semi_result.setdefault("table_semi_analysis", semi_analysis if isinstance(semi_analysis, dict) else {})
+                semi_debug = semi_result.get("table_semi_analysis") if isinstance(semi_result.get("table_semi_analysis"), dict) else {}
+                model_inference_count = sum(1 for region in semi_debug.get("regions") or [] if isinstance(region, dict) and region.get("status") in {"recognized", "unusable_result", "failed"})
+                semi_result.setdefault("table_debug", {})
+                if isinstance(semi_result["table_debug"], dict):
+                    semi_result["table_debug"]["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+                    semi_result["table_debug"]["model_inference_count"] = model_inference_count
+                    semi_result["table_debug"]["ocr_inference_count"] = ocr_inference_count
+                logger.info(
+                    "Table Recognition phase timing: phase=Total path=semi model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+                    model_inference_count,
+                    ocr_inference_count,
+                    time.perf_counter() - started,
+                )
+                return semi_result
     except Exception as error:
         logger.info("Semi-structured table analysis fell back to whole ROI: %s", error)
         semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
