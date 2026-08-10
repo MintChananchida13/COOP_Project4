@@ -276,7 +276,10 @@ def _rows_from_structured_cells_preserve_grid(cells: Any) -> List[List[str]]:
             continue
         row = int(cell.get("row") or 0)
         col = int(cell.get("col") or 0)
-        rows[row][col] = normalize_ocr_text(cell.get("groundTruth") or cell.get("text") or cell.get("ocrText") or "")
+        if cell.get("groundTruth") is not None:
+            rows[row][col] = normalize_ocr_text(cell.get("groundTruth"), cleanup_noise=False)
+        else:
+            rows[row][col] = normalize_ocr_text(cell.get("text") or cell.get("ocrText") or "")
     return normalize_table_rows(rows)
 
 
@@ -397,6 +400,203 @@ def _merge_bboxes(boxes: List[Dict[str, float]]) -> Optional[Dict[str, float]]:
     right = max(box["x"] + box["width"] for box in boxes)
     bottom = max(box["y"] + box["height"] for box in boxes)
     return {"x": left, "y": top, "width": max(1.0, right - left), "height": max(1.0, bottom - top)}
+
+
+def _cluster_positions(values: List[float], tolerance: float) -> List[float]:
+    if not values:
+        return []
+    groups: List[List[float]] = []
+    for value in sorted(values):
+        if not groups or abs(value - groups[-1][-1]) > tolerance:
+            groups.append([value])
+        else:
+            groups[-1].append(value)
+    return [sum(group) / len(group) for group in groups]
+
+
+def _line_positions_from_mask(mask: np.ndarray, orientation: str, threshold_ratio: float) -> List[float]:
+    if mask.size == 0:
+        return []
+    axis = 1 if orientation == "vertical" else 0
+    length = mask.shape[0] if orientation == "vertical" else mask.shape[1]
+    projection = np.sum(mask > 0, axis=axis) / max(1, length)
+    positions = [float(index) for index, value in enumerate(projection) if value >= threshold_ratio]
+    tolerance = max(2.0, min(mask.shape[:2]) * 0.006)
+    return _cluster_positions(positions, tolerance)
+
+
+def _semi_line_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        12,
+    )
+    height, width = gray.shape[:2]
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(8, width // 30), 1))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(8, height // 30)))
+    horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+    vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+    return (
+        cv2.dilate(horizontal, horizontal_kernel, iterations=1),
+        cv2.dilate(vertical, vertical_kernel, iterations=1),
+    )
+
+
+def _infer_boundaries_from_text(cells: List[Dict[str, Any]], axis: str, limit: int) -> List[float]:
+    if not cells:
+        return [0.0, float(limit)]
+    centers = [float(cell["center_x" if axis == "x" else "center_y"]) for cell in cells]
+    sizes = [float(cell["width" if axis == "x" else "height"]) for cell in cells]
+    tolerance = max(6.0, (float(np.median(sizes)) if sizes else 12.0) * 0.8)
+    clusters = _cluster_positions(centers, tolerance)
+    if not clusters:
+        return [0.0, float(limit)]
+    edges = [0.0]
+    for left, right in zip(clusters, clusters[1:]):
+        edges.append((left + right) / 2.0)
+    edges.append(float(limit))
+    return sorted(set(max(0.0, min(float(limit), edge)) for edge in edges))
+
+
+def _combined_boundaries(
+    line_positions: List[float],
+    text_cells: List[Dict[str, Any]],
+    axis: str,
+    limit: int,
+) -> List[float]:
+    text_boundaries = _infer_boundaries_from_text(text_cells, axis, limit)
+    min_gap = max(4.0, float(limit) * 0.012)
+    line_boundaries = [0.0, *[pos for pos in line_positions if min_gap <= pos <= float(limit) - min_gap], float(limit)]
+    if len(line_boundaries) >= 3:
+        return sorted(set(round(value, 3) for value in line_boundaries))
+    return sorted(set(round(value, 3) for value in text_boundaries))
+
+
+def _interval_index(center: float, boundaries: List[float]) -> int:
+    if len(boundaries) <= 1:
+        return 0
+    for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+        if start <= center <= end:
+            return index
+    return max(0, min(len(boundaries) - 2, min(range(len(boundaries) - 1), key=lambda idx: abs(((boundaries[idx] + boundaries[idx + 1]) / 2.0) - center))))
+
+
+def _line_evidence(mask: np.ndarray, orientation: str, position: float, start: float, end: float) -> float:
+    height, width = mask.shape[:2]
+    if orientation == "vertical":
+        x = max(0, min(width - 1, int(round(position))))
+        top = max(0, min(height - 1, int(round(start))))
+        bottom = max(top + 1, min(height, int(round(end))))
+        band = mask[top:bottom, max(0, x - 1):min(width, x + 2)]
+        return float(np.mean(band > 0)) if band.size else 0.0
+    y = max(0, min(height - 1, int(round(position))))
+    left = max(0, min(width - 1, int(round(start))))
+    right = max(left + 1, min(width, int(round(end))))
+    band = mask[max(0, y - 1):min(height, y + 2), left:right]
+    return float(np.mean(band > 0)) if band.size else 0.0
+
+
+def _text_overlaps_boundary(cell: Dict[str, Any], boundary: float, axis: str, tolerance: float) -> bool:
+    if axis == "x":
+        return float(cell["x"]) - tolerance <= boundary <= float(cell["x"] + cell["width"]) + tolerance
+    return float(cell["y"]) - tolerance <= boundary <= float(cell["y"] + cell["height"]) + tolerance
+
+
+def _structured_from_coordinate_grid(
+    rows: List[List[str]],
+    source_cells: List[Dict[str, Any]],
+    row_boundaries: List[float],
+    col_boundaries: List[float],
+    horizontal_mask: np.ndarray,
+    vertical_mask: np.ndarray,
+) -> Dict[str, Any]:
+    row_count = len(rows)
+    col_count = max((len(row) for row in rows), default=0)
+    source_by_position: Dict[tuple[int, int], List[Dict[str, Any]]] = {}
+    for cell in source_cells:
+        source_by_position.setdefault((int(cell["row"]), int(cell["col"])), []).append(cell)
+
+    cells: List[Dict[str, Any]] = []
+    hidden_positions: set[tuple[int, int]] = set()
+    median_height = float(np.median([cell.get("height", 12.0) for cell in source_cells])) if source_cells else 12.0
+    median_width = float(np.median([cell.get("width", 40.0) for cell in source_cells])) if source_cells else 40.0
+    x_tolerance = max(4.0, median_width * 0.12)
+    y_tolerance = max(4.0, median_height * 0.35)
+
+    for row_index in range(row_count):
+        for col_index in range(col_count):
+            if (row_index, col_index) in hidden_positions:
+                continue
+            texts = [cell["text"] for cell in source_by_position.get((row_index, col_index), []) if str(cell.get("text") or "").strip()]
+            text = normalize_ocr_text(" ".join(texts))
+            boxes = [cell["bbox"] for cell in source_by_position.get((row_index, col_index), []) if isinstance(cell.get("bbox"), dict)]
+            bbox = _merge_bboxes(boxes)
+            row_span = 1
+            col_span = 1
+            anchor_sources = source_by_position.get((row_index, col_index), [])
+
+            while col_index + col_span < col_count and text and anchor_sources:
+                boundary = col_boundaries[col_index + col_span]
+                evidence = _line_evidence(vertical_mask, "vertical", boundary, row_boundaries[row_index], row_boundaries[row_index + row_span])
+                crosses = any(_text_overlaps_boundary(cell, boundary, "x", x_tolerance) for cell in anchor_sources)
+                next_empty = not any(str(item.get("text") or "").strip() for item in source_by_position.get((row_index, col_index + col_span), []))
+                if evidence >= 0.12 or not (crosses or next_empty):
+                    break
+                hidden_positions.add((row_index, col_index + col_span))
+                col_span += 1
+
+            while row_index + row_span < row_count and text and anchor_sources:
+                boundary = row_boundaries[row_index + row_span]
+                evidence = _line_evidence(horizontal_mask, "horizontal", boundary, col_boundaries[col_index], col_boundaries[min(col_count, col_index + col_span)])
+                crosses = any(_text_overlaps_boundary(cell, boundary, "y", y_tolerance) for cell in anchor_sources)
+                next_empty = all(
+                    not any(str(item.get("text") or "").strip() for item in source_by_position.get((row_index + row_span, next_col), []))
+                    for next_col in range(col_index, min(col_count, col_index + col_span))
+                )
+                if evidence >= 0.12 or not (crosses or next_empty):
+                    break
+                for next_col in range(col_index, min(col_count, col_index + col_span)):
+                    hidden_positions.add((row_index + row_span, next_col))
+                row_span += 1
+
+            cell: Dict[str, Any] = {
+                "row": row_index,
+                "col": col_index,
+                "text": text,
+                "rowSpan": row_span,
+                "colSpan": col_span,
+                "ocrText": text,
+                "groundTruth": text,
+            }
+            if bbox:
+                cell["bbox"] = bbox
+            cells.append(cell)
+
+    for row_index, col_index in sorted(hidden_positions):
+        if row_index < row_count and col_index < col_count:
+            cells.append({
+                "row": row_index,
+                "col": col_index,
+                "text": "",
+                "rowSpan": 1,
+                "colSpan": 1,
+                "ocrText": "",
+                "groundTruth": "",
+                "hidden": True,
+            })
+
+    return {
+        "rows": rows,
+        "cells": sorted(cells, key=lambda item: (int(item["row"]), int(item["col"]), bool(item.get("hidden")))),
+        "headerRowCount": 1,
+        "postProcessing": "coordinate_based_semi_reconstruction",
+        "rowBoundaries": row_boundaries,
+        "columnBoundaries": col_boundaries,
+    }
 
 
 def _cluster_text_cells(cells: List[Dict[str, Any]]) -> tuple[List[List[str]], List[Dict[str, Any]]]:
@@ -779,6 +979,159 @@ def _recognize_raw_ocr_geometry_table(image: np.ndarray) -> Optional[Dict[str, A
             "input_size": [int(input_width), int(input_height)],
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
         },
+    }
+
+
+def _ocr_cells_from_text_detection(image: np.ndarray, status_prefix: str) -> tuple[List[Dict[str, Any]], List[float], Dict[str, Any]]:
+    input_height, input_width = image.shape[:2]
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp.close()
+    try:
+        if not cv2.imwrite(temp.name, image):
+            return ([], [], {"status": f"{status_prefix}_image_write_failed"})
+        text_detection = detect_text_boxes(temp.name)
+    except Exception as error:
+        logger.info("%s text detection failed: %s", status_prefix, error)
+        return ([], [], {"status": f"{status_prefix}_text_detection_failed", "reason": str(error)})
+    finally:
+        Path(temp.name).unlink(missing_ok=True)
+
+    regions = text_detection.get("regions") if isinstance(text_detection, dict) else []
+    if not isinstance(regions, list) or not regions:
+        return ([], [], {"status": f"{status_prefix}_no_text_boxes", "detected_boxes": 0})
+
+    crops: List[np.ndarray] = []
+    valid_regions: List[Dict[str, Any]] = []
+    for region in regions:
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not isinstance(bbox, dict):
+            continue
+        try:
+            x = max(0, int(float(bbox.get("x") or 0)))
+            y = max(0, int(float(bbox.get("y") or 0)))
+            width = max(1, int(float(bbox.get("width") or 1)))
+            height = max(1, int(float(bbox.get("height") or 1)))
+        except (TypeError, ValueError):
+            continue
+        width = min(width, input_width - x)
+        height = min(height, input_height - y)
+        if width <= 0 or height <= 0:
+            continue
+        crop = image[y : y + height, x : x + width]
+        if crop.size == 0:
+            continue
+        valid_regions.append(region)
+        crops.append(crop)
+
+    if not crops:
+        return ([], [], {"status": f"{status_prefix}_no_valid_crops", "detected_boxes": len(regions)})
+
+    try:
+        recognitions = run_paddle_thai_ocr_batch(crops)
+    except Exception as error:
+        logger.info("%s OCR failed: %s", status_prefix, error)
+        return ([], [], {"status": f"{status_prefix}_ocr_failed", "reason": str(error), "detected_boxes": len(regions)})
+    cells: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    for region, recognition in zip(valid_regions, recognitions):
+        text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
+        if not text:
+            continue
+        bbox = _region_bbox(region)
+        if not bbox:
+            continue
+        confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        confidence_values.append(confidence)
+        cells.append({
+            "text": text,
+            "confidence": confidence,
+            "bbox": bbox,
+            "x": bbox["x"],
+            "y": bbox["y"],
+            "width": bbox["width"],
+            "height": bbox["height"],
+            "center_x": bbox["x"] + bbox["width"] / 2,
+            "center_y": bbox["y"] + bbox["height"] / 2,
+        })
+    return (cells, confidence_values, {"status": status_prefix, "detected_boxes": len(regions), "recognized_cells": len(cells)})
+
+
+def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    phase_started = time.perf_counter()
+    if image is None or image.size == 0:
+        return None
+
+    input_height, input_width = image.shape[:2]
+    horizontal_mask, vertical_mask = _semi_line_masks(image)
+    horizontal_positions = _line_positions_from_mask(horizontal_mask, "horizontal", threshold_ratio=0.18)
+    vertical_positions = _line_positions_from_mask(vertical_mask, "vertical", threshold_ratio=0.16)
+
+    try:
+        ocr_cells, confidence_values, ocr_debug = _ocr_cells_from_text_detection(image, "coordinate_based_semi")
+    except (LayoutAnalysisUnavailableError, PaddleThaiOcrUnavailableError) as error:
+        logger.info("Coordinate-based semi OCR failed: %s", error)
+        return None
+
+    if not ocr_cells:
+        return None
+
+    row_boundaries = _combined_boundaries(horizontal_positions, ocr_cells, "y", input_height)
+    col_boundaries = _combined_boundaries(vertical_positions, ocr_cells, "x", input_width)
+    if len(row_boundaries) < 2:
+        row_boundaries = _infer_boundaries_from_text(ocr_cells, "y", input_height)
+    if len(col_boundaries) < 2:
+        col_boundaries = _infer_boundaries_from_text(ocr_cells, "x", input_width)
+    row_count = max(1, len(row_boundaries) - 1)
+    col_count = max(1, len(col_boundaries) - 1)
+    rows = [["" for _ in range(col_count)] for _ in range(row_count)]
+    source_cells: List[Dict[str, Any]] = []
+    for cell in sorted(ocr_cells, key=lambda item: (item["center_y"], item["center_x"])):
+        row_index = _interval_index(float(cell["center_y"]), row_boundaries)
+        col_index = _interval_index(float(cell["center_x"]), col_boundaries)
+        text = normalize_ocr_text(cell["text"])
+        rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
+        source_cells.append({
+            **cell,
+            "row": row_index,
+            "col": col_index,
+            "rowSpan": 1,
+            "colSpan": 1,
+            "ocrText": text,
+            "groundTruth": text,
+        })
+
+    rows = normalize_table_rows(rows)
+    if not any(str(value).strip() for row in rows for value in row):
+        return None
+    structured = _structured_from_coordinate_grid(rows, source_cells, row_boundaries, col_boundaries, horizontal_mask, vertical_mask)
+    confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+    semi_analysis = dict(analysis)
+    semi_analysis["merge_status"] = "coordinate_reconstructed"
+    semi_analysis["region_processing"] = "coordinate_based"
+    semi_analysis["model_reuse"] = {"enabled": False, "model_inference_count": 0}
+    return {
+        "text": _markdown_table(rows),
+        "confidence": float(confidence),
+        "segments": [{"text": cell["text"], "confidence": cell["confidence"], "bbox": cell["bbox"]} for cell in ocr_cells],
+        "attempts": [{"step": "coordinate_based_semi_reconstruction", "row_count": len(rows), "column_count": max((len(row) for row in rows), default=0)}],
+        "preprocessing": "coordinate_based_semi_reconstruction",
+        "engine": "table_recognition_v2",
+        "model": "coordinate_based_semi",
+        "table_rows": rows,
+        "table_structured": structured,
+        "table_selected_method": "coordinate_based_semi",
+        "table_debug": {
+            "status": "coordinate_based_semi_reconstructed",
+            "row_count": len(rows),
+            "column_count": max((len(row) for row in rows), default=0),
+            "horizontal_line_count": len(horizontal_positions),
+            "vertical_line_count": len(vertical_positions),
+            "ocr": ocr_debug,
+            "region_processing": "coordinate_based",
+            "model_reuse": {"enabled": False, "model_inference_count": 0},
+            "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
+        },
+        "table_semi_analysis": semi_analysis,
     }
 
 
@@ -1524,7 +1877,10 @@ def _geometry_table_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[
     for center_x, center_y, edges, cell in positioned:
         row_index = min(range(len(row_centers)), key=lambda index: abs(row_centers[index] - center_y))
         col_index, inferred_col_span = _span_for_bbox(edges[0], edges[2], center_x, anchors, x_tolerance)
-        text = normalize_ocr_text(cell.get("groundTruth") or cell.get("text") or cell.get("ocrText") or "")
+        if cell.get("groundTruth") is not None:
+            text = normalize_ocr_text(cell.get("groundTruth"), cleanup_noise=False)
+        else:
+            text = normalize_ocr_text(cell.get("text") or cell.get("ocrText") or "")
         if not text:
             continue
         rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
@@ -1711,93 +2067,17 @@ def _try_semi_structured_table(
         )
         return None
 
-    region_candidates: List[Dict[str, Any]] = []
-    merge_regions: List[Dict[str, Any]] = []
-    height, width = image.shape[:2]
-    inference_count = 0
-    for index, region in enumerate(regions):
-        region_id = str(region.get("regionId") or region.get("region_id") or f"region_{index + 1}")
-        if region.get("type") != "grid":
-            merge_regions.append({**region, "regionId": region_id, "status": "skipped_non_grid_region"})
-            continue
-        bbox = region.get("bbox")
-        if not isinstance(bbox, dict):
-            continue
-        try:
-            x = max(0, int(float(bbox.get("x") or 0)))
-            y = max(0, int(float(bbox.get("y") or 0)))
-            w = min(max(1, int(float(bbox.get("width") or 1))), width - x)
-            h = min(max(1, int(float(bbox.get("height") or 1))), height - y)
-        except (TypeError, ValueError):
-            continue
-        if w <= 0 or h <= 0:
-            continue
-        crop = image[y : y + h, x : x + w]
-        try:
-            region_started = time.perf_counter()
-            inference_count += 1
-            output = _predict_table_model(model, crop)
-            logger.info(
-                "Table Recognition phase timing: phase=Region Inference region=%s bbox=%s elapsed=%.3fs",
-                index,
-                bbox,
-                time.perf_counter() - region_started,
-            )
-            raw_result = _slanext_result_from_output(output, crop, started, {"index": index, "regionId": region_id, "type": region.get("type"), "bbox": bbox})
-            candidate = _build_table_candidate(raw_result, "slanext")
-            remapped = _remap_candidate_to_roi(candidate, float(x), float(y), 0)
-            quality = remapped.get("table_debug", {}).get("quality") if isinstance(remapped.get("table_debug"), dict) else {}
-            if _region_candidate_has_usable_content(remapped, quality):
-                region_candidates.append(remapped)
-                section_preview = _section_from_region_candidate(remapped, {**region, "regionId": region_id}, region_id)
-                merge_regions.append({
-                    **region,
-                    "regionId": region_id,
-                    "status": "recognized",
-                    "result": {
-                        "rows": section_preview.get("rows") or [],
-                        "columns": section_preview.get("columns") or [],
-                        "cell_count": len(section_preview.get("cells") or []),
-                        "reconstruction": section_preview.get("reconstruction"),
-                    },
-                })
-            else:
-                merge_regions.append({**region, "regionId": region_id, "status": "unusable_result"})
-        except Exception as error:
-            logger.info("Semi-structured table region %s failed: %s", index, error)
-            merge_regions.append({**region, "regionId": region_id, "status": "failed", "reason": str(error)})
-
-    if not region_candidates:
+    result = _recognize_coordinate_based_semi_table(image, analysis)
+    if not result:
         logger.info(
-            "Table Recognition phase timing: phase=Region Inference no_candidates regions=%s model_inferences=%s elapsed=%.3fs",
+            "Table Recognition phase timing: phase=Region Inference no_coordinate_result regions=%s model_inferences=0 elapsed=%.3fs",
             len(regions),
-            inference_count,
             time.perf_counter() - semi_started,
         )
         return None
-    semi_analysis = dict(analysis)
-    semi_analysis["regions"] = merge_regions
-    semi_analysis["merge_status"] = "merged" if len(region_candidates) == len(regions) else "partial"
-    semi_analysis["region_processing"] = "sequential"
-    semi_analysis["model_reuse"] = {
-        "enabled": True,
-        "model_id": id(model),
-        "model_inference_count": inference_count,
-    }
-    result = _merge_region_candidates(region_candidates, semi_analysis)
-    result.setdefault("table_debug", {})
-    if isinstance(result["table_debug"], dict):
-        result["table_debug"]["region_processing"] = "sequential"
-        result["table_debug"]["model_reuse"] = {
-            "enabled": True,
-            "model_id": id(model),
-            "model_inference_count": inference_count,
-        }
     logger.info(
-        "Table Recognition phase timing: phase=Region Inference complete regions=%s recognized=%s model_inferences=%s elapsed=%.3fs",
+        "Table Recognition phase timing: phase=Region Inference complete path=coordinate_based regions=%s model_inferences=0 elapsed=%.3fs",
         len(regions),
-        len(region_candidates),
-        inference_count,
         time.perf_counter() - semi_started,
     )
     return result
@@ -1832,7 +2112,6 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         }
 
     logger.info("Using local Table Recognition runtime")
-    model = _load_table_model()
     semi_analysis: Optional[Dict[str, Any]] = None
     try:
         grid_started = time.perf_counter()
@@ -1844,7 +2123,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             len(semi_analysis.get("regions") or []) if isinstance(semi_analysis, dict) else 0,
             time.perf_counter() - grid_started,
         )
-        semi_result = _try_semi_structured_table(image, model, started, semi_analysis)
+        semi_result = _try_semi_structured_table(image, None, started, semi_analysis)
         if semi_result:
             semi_debug = semi_result.get("table_semi_analysis") if isinstance(semi_result.get("table_semi_analysis"), dict) else {}
             model_inference_count = sum(1 for region in semi_debug.get("regions") or [] if isinstance(region, dict) and region.get("status") in {"recognized", "unusable_result", "failed"})
@@ -1865,6 +2144,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
 
     whole_started = time.perf_counter()
+    model = _load_table_model()
     model_inference_count += 1
     output = _predict_table_model(model, image)
     logger.info(

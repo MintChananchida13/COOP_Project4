@@ -255,6 +255,23 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
     def test_ocr_text_postprocess_uses_pythainlp_normalization(self) -> None:
         self.assertEqual(normalize_ocr_text("  ทดสอบ   OCR  \n\n  ภาษาไทย  "), "ทดสอบ OCR\nภาษาไทย")
 
+    def test_ocr_text_postprocess_removes_obvious_noise(self) -> None:
+        self.assertEqual(normalize_ocr_text("....."), "")
+        self.assertEqual(normalize_ocr_text("-----"), "")
+        self.assertEqual(normalize_ocr_text("P นางสาวศิรินทร์ สุวรรณ a"), "นางสาวศิรินทร์ สุวรรณ")
+        self.assertEqual(normalize_ocr_text("ชื่อ ..... นางสาวศิรินทร์"), "ชื่อ นางสาวศิรินทร์")
+
+    def test_ocr_text_postprocess_preserves_real_values(self) -> None:
+        self.assertEqual(normalize_ocr_text("1"), "1")
+        self.assertEqual(normalize_ocr_text("4"), "4")
+        self.assertEqual(normalize_ocr_text("ประเภท A"), "ประเภท A")
+        self.assertEqual(normalize_ocr_text("1.25"), "1.25")
+        self.assertEqual(normalize_ocr_text("ABC-123"), "ABC-123")
+        self.assertEqual(normalize_ocr_text("พ.ศ."), "พ.ศ.")
+
+    def test_ocr_text_postprocess_can_skip_noise_cleanup_for_ground_truth(self) -> None:
+        self.assertEqual(normalize_ocr_text("P นางสาวศิรินทร์ สุวรรณ a", cleanup_noise=False), "P นางสาวศิรินทร์ สุวรรณ a")
+
     def test_table_row_postprocess_preserves_empty_structure_rows(self) -> None:
         rows = normalize_table_rows([["หัวข้อ", "จำนวน"], ["", ""], ["รวม", "10"]])
 
@@ -419,197 +436,155 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertFalse(analysis["detected"])
 
-    def test_semi_structured_regions_are_read_with_slanext_and_merged(self) -> None:
-        image = np.zeros((120, 120, 3), dtype=np.uint8)
-
-        class RegionModel:
-            calls = 0
-
-            def predict(self, **kwargs):
-                RegionModel.calls += 1
-                value = "Top" if RegionModel.calls == 1 else "Bottom"
-                return [{"html": f"<table><tr><td>{value}</td><td>Value</td></tr><tr><td>A</td><td>B</td></tr></table>"}]
-
+    def _run_coordinate_semi_case(self, detected_regions, recognitions, image=None):
+        test_image = image if image is not None else np.full((160, 220, 3), 255, dtype=np.uint8)
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
             "regions": [
-                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 60}},
-                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 120, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": test_image.shape[1], "height": test_image.shape[0] // 2}},
+                {"type": "grid", "bbox": {"x": 0, "y": test_image.shape[0] // 2, "width": test_image.shape[1], "height": test_image.shape[0] // 2}},
             ],
         }
 
+        class ForbiddenModel:
+            def predict(self, **kwargs):
+                raise AssertionError("Semi table path must not call SLANeXt.")
+
         with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
-            "app.table_recognition_v2_adapter.cv2.imwrite",
-            return_value=True,
-        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
-            result = _try_semi_structured_table(image, RegionModel(), 0.0)
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": detected_regions},
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=recognitions,
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch("app.table_recognition_v2_adapter.Path.unlink"):
+            return _try_semi_structured_table(test_image, ForbiddenModel(), 0.0)
+
+    def test_semi_coordinate_reconstructs_with_broken_lines(self) -> None:
+        image = np.full((120, 160, 3), 255, dtype=np.uint8)
+        image[10:12, 5:155] = 0
+        image[60:62, 5:70] = 0
+        image[60:62, 90:155] = 0
+        image[110:112, 5:155] = 0
+        image[10:112, 5:7] = 0
+        image[10:112, 75:77] = 0
+        image[10:112, 155:157] = 0
+        regions = [
+            {"bbox": {"x": 12, "y": 25, "width": 30, "height": 10}},
+            {"bbox": {"x": 95, "y": 25, "width": 30, "height": 10}},
+            {"bbox": {"x": 12, "y": 78, "width": 30, "height": 10}},
+            {"bbox": {"x": 95, "y": 78, "width": 30, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["A", "B", "C", "D"]], image)
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result["table_rows"], [["Top", "Value"], ["A", "B"], ["Bottom", "Value"], ["A", "B"]])
-        self.assertTrue(result["table_semi_analysis"]["detected"])
-        self.assertEqual(result["table_semi_analysis"]["merge_status"], "merged")
-        self.assertEqual(result["table_selected_method"], "semi_structured_regions")
+        self.assertEqual(result["table_selected_method"], "coordinate_based_semi")
+        self.assertEqual(result["table_rows"][0][:2], ["A", "B"])
+        self.assertEqual(result["table_rows"][1][:2], ["C", "D"])
 
-    def test_semi_structured_reuses_single_loaded_model_for_all_regions(self) -> None:
-        image = np.zeros((120, 120, 3), dtype=np.uint8)
+    def test_semi_coordinate_handles_missing_vertical_line_segment(self) -> None:
+        regions = [
+            {"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}},
+            {"bbox": {"x": 12, "y": 70, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 70, "width": 30, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.88} for value in ["L1", "R1", "L2", "R2"]])
 
-        class ReusedRegionModel:
-            def __init__(self) -> None:
-                self.calls = 0
-                self.instance_ids: list[int] = []
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][1][:2], ["L2", "R2"])
 
-            def predict(self, **kwargs):
-                self.calls += 1
-                self.instance_ids.append(id(self))
-                value = f"Region {self.calls}"
-                return [{"html": f"<table><tr><td>{value}</td><td>Value</td></tr></table>"}]
+    def test_semi_coordinate_reconstructs_merged_header_colspan(self) -> None:
+        image = np.full((100, 160, 3), 255, dtype=np.uint8)
+        image[10:12, 5:155] = 0
+        image[45:47, 5:155] = 0
+        image[90:92, 5:155] = 0
+        image[10:92, 5:7] = 0
+        image[45:92, 75:77] = 0
+        image[10:92, 155:157] = 0
+        regions = [
+            {"bbox": {"x": 45, "y": 24, "width": 70, "height": 12}},
+            {"bbox": {"x": 12, "y": 62, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 62, "width": 30, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Header", "A", "B"]], image)
 
-        model = ReusedRegionModel()
+        self.assertIsNotNone(result)
+        assert result is not None
+        header = next(cell for cell in result["table_structured"]["cells"] if cell["text"] == "Header")
+        self.assertEqual(header["colSpan"], 2)
+
+    def test_semi_coordinate_reconstructs_merged_cell_rowspan(self) -> None:
+        image = np.full((130, 160, 3), 255, dtype=np.uint8)
+        for y in [10, 50, 90, 120]:
+            image[y:y + 2, 5:155] = 0
+        image[10:120, 5:7] = 0
+        image[10:120, 75:77] = 0
+        image[10:120, 155:157] = 0
+        image[50:90, 5:75] = 255
+        regions = [
+            {"bbox": {"x": 12, "y": 30, "width": 35, "height": 45}},
+            {"bbox": {"x": 100, "y": 30, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 70, "width": 30, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Tall", "B1", "B2"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        tall = next(cell for cell in result["table_structured"]["cells"] if cell["text"] == "Tall")
+        self.assertGreaterEqual(tall["rowSpan"], 2)
+
+    def test_semi_coordinate_infers_boundaries_from_text_alignment_and_empty_cell(self) -> None:
+        regions = [
+            {"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}},
+            {"bbox": {"x": 12, "y": 70, "width": 30, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["A1", "B1", "A2"]])
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"], [["A1", "B1"], ["A2", ""]])
+        self.assertTrue(any(cell.get("text") == "" for cell in result["table_structured"]["cells"]))
+
+    def test_semi_coordinate_does_not_call_slanext_model(self) -> None:
+        regions = [{"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}}, {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}}]
+        result = self._run_coordinate_semi_case(regions, [{"text": "A", "confidence": 0.9}, {"text": "B", "confidence": 0.9}])
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_debug"]["model_reuse"]["model_inference_count"], 0)
+
+    def test_recognize_table_v2_local_does_not_load_slanext_when_semi_succeeds(self) -> None:
+        image = np.full((120, 160, 3), 255, dtype=np.uint8)
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
             "regions": [
-                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 40}},
-                {"type": "grid", "bbox": {"x": 0, "y": 40, "width": 120, "height": 40}},
-                {"type": "grid", "bbox": {"x": 0, "y": 80, "width": 120, "height": 40}},
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 160, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 160, "height": 60}},
             ],
         }
+        detected_regions = [
+            {"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}},
+            {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}},
+        ]
 
-        with patch("app.table_recognition_v2_adapter._load_table_model", return_value=model) as load_model, patch(
-            "app.table_recognition_v2_adapter.analyze_table_regions",
-            return_value=fake_analysis,
-        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch("app.table_recognition_v2_adapter.Path.unlink"):
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": detected_regions},
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=[{"text": "A", "confidence": 0.9}, {"text": "B", "confidence": 0.9}],
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch("app.table_recognition_v2_adapter.Path.unlink"), patch(
+            "app.table_recognition_v2_adapter._load_table_model",
+            side_effect=AssertionError("Semi path must not load SLANeXt."),
+        ):
             result = recognize_table_v2_local(image)
 
-        load_model.assert_called_once()
-        self.assertEqual(model.calls, 3)
-        self.assertEqual(model.instance_ids, [id(model), id(model), id(model)])
-        self.assertEqual(result["table_debug"]["region_processing"], "sequential")
-        self.assertTrue(result["table_debug"]["model_reuse"]["enabled"])
-        self.assertEqual(result["table_debug"]["model_reuse"]["model_id"], id(model))
-        self.assertEqual(result["table_debug"]["model_reuse"]["model_inference_count"], 3)
-
-    def test_semi_structured_keeps_region_with_content_even_when_region_shape_is_small(self) -> None:
-        image = np.zeros((120, 120, 3), dtype=np.uint8)
-
-        class SmallRegionModel:
-            calls = 0
-
-            def predict(self, **kwargs):
-                SmallRegionModel.calls += 1
-                return [{"html": f"<table><tr><td>Region {SmallRegionModel.calls}</td></tr></table>"}]
-
-        fake_analysis = {
-            "detected": True,
-            "confidence": 0.91,
-            "regions": [
-                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 120, "height": 60}},
-                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 120, "height": 60}},
-            ],
-        }
-
-        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
-            "app.table_recognition_v2_adapter.cv2.imwrite",
-            return_value=True,
-        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
-            result = _try_semi_structured_table(image, SmallRegionModel(), 0.0)
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertEqual(result["table_rows"], [["Region 1"], ["Region 2"]])
-        self.assertEqual(result["table_debug"]["status"], "semi_structured_merged")
-
-    def test_semi_structured_remaps_bbox_and_preserves_spans(self) -> None:
-        image = np.zeros((160, 160, 3), dtype=np.uint8)
-
-        class BboxModel:
-            calls = 0
-
-            def predict(self, **kwargs):
-                BboxModel.calls += 1
-                label = "First" if BboxModel.calls == 1 else "Second"
-                return [
-                    {
-                        "table_rows": [[label, ""], ["A", "B"]],
-                        "table_structured": {
-                            "rows": [[label, ""], ["A", "B"]],
-                            "cells": [
-                                {"row": 0, "col": 0, "text": label, "rowSpan": 1, "colSpan": 2, "bbox": {"x": 2, "y": 3, "width": 40, "height": 10}},
-                                {"row": 1, "col": 0, "text": "A", "rowSpan": 1, "colSpan": 1, "bbox": {"x": 2, "y": 20, "width": 18, "height": 10}},
-                                {"row": 1, "col": 1, "text": "B", "rowSpan": 1, "colSpan": 1, "bbox": {"x": 24, "y": 20, "width": 18, "height": 10}},
-                            ],
-                        },
-                    }
-                ]
-
-        fake_analysis = {
-            "detected": True,
-            "confidence": 0.91,
-            "regions": [
-                {"type": "grid", "confidence": 0.91, "bbox": {"x": 5, "y": 7, "width": 120, "height": 60}},
-                {"type": "grid", "confidence": 0.91, "bbox": {"x": 9, "y": 80, "width": 120, "height": 60}},
-            ],
-        }
-
-        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
-            "app.table_recognition_v2_adapter.cv2.imwrite",
-            return_value=True,
-        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
-            result = _try_semi_structured_table(image, BboxModel(), 0.0)
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        cells = result["table_structured"]["cells"]
-        self.assertEqual(cells[0]["colSpan"], 2)
-        self.assertEqual(cells[0]["bbox"]["x"], 7.0)
-        self.assertEqual(cells[0]["bbox"]["y"], 10.0)
-        self.assertEqual(cells[3]["row"], 2)
-        self.assertEqual(cells[3]["bbox"]["x"], 11.0)
-        self.assertEqual(cells[3]["bbox"]["y"], 83.0)
-        self.assertEqual(cells[0]["regionId"], "region_1")
-        self.assertNotIn("table_sections", result)
-
-    def test_semi_structured_regions_merge_into_single_table(self) -> None:
-        image = np.zeros((220, 220, 3), dtype=np.uint8)
-
-        class MultiTopologyModel:
-            calls = 0
-
-            def predict(self, **kwargs):
-                MultiTopologyModel.calls += 1
-                if MultiTopologyModel.calls == 1:
-                    row = "".join(f"<td>M{i}</td>" for i in range(1, 8))
-                    return [{"html": f"<table><tr>{row}</tr></table>"}]
-                if MultiTopologyModel.calls == 2:
-                    return [{"html": "<table><tr><td>S1</td><td>S2</td></tr></table>"}]
-                return [{"html": "<table><tr><td>A</td><td>B</td><td>C</td></tr></table>"}]
-
-        fake_analysis = {
-            "detected": True,
-            "confidence": 0.94,
-            "regions": [
-                {"type": "grid", "regionId": "main", "bbox": {"x": 0, "y": 0, "width": 220, "height": 80}},
-                {"type": "grid", "regionId": "summary_2col", "bbox": {"x": 0, "y": 80, "width": 220, "height": 60}},
-                {"type": "grid", "regionId": "summary_3col", "bbox": {"x": 0, "y": 140, "width": 220, "height": 60}},
-            ],
-        }
-
-        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
-            "app.table_recognition_v2_adapter.cv2.imwrite",
-            return_value=True,
-        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
-            result = _try_semi_structured_table(image, MultiTopologyModel(), 0.0)
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertNotIn("table_sections", result)
-        self.assertEqual(len(result["table_structured"]["rows"][0]), 7)
-        self.assertEqual(len(result["table_structured"]["rows"][1]), 2)
-        self.assertEqual(len(result["table_structured"]["rows"][2]), 3)
-        self.assertEqual(result["table_structured"]["cells"][0]["regionId"], "main")
-        self.assertEqual(result["table_semi_analysis"]["regions"][1]["result"]["columns"][1]["col"], 1)
+        self.assertEqual(result["table_selected_method"], "coordinate_based_semi")
 
     def test_column_anchor_assignment_prevents_values_shifting_to_neighbor_columns(self) -> None:
         cells = []

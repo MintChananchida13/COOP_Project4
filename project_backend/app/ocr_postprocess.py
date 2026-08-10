@@ -4,9 +4,55 @@ from typing import Any, Dict, List, Optional
 
 
 _WHITESPACE_RE = re.compile(r"[ \t\r\f\v]+")
+_DOTTED_LINE_RE = re.compile(r"^[\s.·•…_\-=~*|/\\:;,]+$")
+_REPEATED_LINE_NOISE_RE = re.compile(r"(?<![\wก-๙])[\s.·•…_\-=~*|/\\:;,]{3,}(?![\wก-๙])")
+_PUNCTUATION_NOISE_RE = re.compile(r"^[.·•…_\-=~*|/\\:;,]{2,}$")
+_THAI_RE = re.compile(r"[ก-๙]")
+_SINGLE_ASCII_LETTER_RE = re.compile(r"^[A-Za-z]$")
+_SINGLE_LETTER_CONTEXT_WORDS = {
+    "ประเภท",
+    "type",
+    "class",
+    "grade",
+    "group",
+    "category",
+    "หมวด",
+    "กลุ่ม",
+    "ระดับ",
+}
 
 
-def normalize_ocr_text(text: Any) -> str:
+def cleanup_ocr_noise(text: str) -> str:
+    lines: List[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = _REPEATED_LINE_NOISE_RE.sub(" ", raw_line)
+        line = _WHITESPACE_RE.sub(" ", line).strip()
+        if not line:
+            continue
+        if len(line) >= 2 and _DOTTED_LINE_RE.match(line):
+            continue
+
+        has_thai = bool(_THAI_RE.search(line))
+        tokens = line.split(" ")
+        cleaned_tokens: List[str] = []
+        for token in tokens:
+            if not token:
+                continue
+            if _PUNCTUATION_NOISE_RE.match(token):
+                continue
+            if has_thai and _SINGLE_ASCII_LETTER_RE.match(token):
+                previous = cleaned_tokens[-1].strip(" :：-").lower() if cleaned_tokens else ""
+                if previous not in _SINGLE_LETTER_CONTEXT_WORDS:
+                    continue
+            cleaned_tokens.append(token)
+
+        cleaned_line = _WHITESPACE_RE.sub(" ", " ".join(cleaned_tokens)).strip()
+        if cleaned_line:
+            lines.append(cleaned_line)
+    return "\n".join(lines).strip()
+
+
+def normalize_ocr_text(text: Any, cleanup_noise: bool = True) -> str:
     value = unicodedata.normalize("NFKC", str(text or ""))
     try:
         from pythainlp.util import normalize as thai_normalize  # type: ignore
@@ -15,7 +61,8 @@ def normalize_ocr_text(text: Any) -> str:
     except Exception:
         pass
     lines = [_WHITESPACE_RE.sub(" ", line).strip() for line in value.splitlines()]
-    return "\n".join(line for line in lines if line).strip()
+    normalized = "\n".join(line for line in lines if line).strip()
+    return cleanup_ocr_noise(normalized) if cleanup_noise else normalized
 
 
 def _read_span(value: Any) -> int:
