@@ -16,7 +16,6 @@ import {
   fetchTemplateBundle,
   type DetectionDevResult,
 } from "../admin/adminApi";
-import { InlineState } from "../shared/ui";
 import AuthGate from "../auth/AuthGate";
 import { AuthSession, clearAuthSession, readAuthSession } from "../auth/session";
 
@@ -855,7 +854,7 @@ function HomeWorkspace() {
   const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; completedPages?: number } | null>(null);
   const [classificationStatus, setClassificationStatus] = useState<string>("");
   const [templateDetectionNotice, setTemplateDetectionNotice] = useState<TemplateDetectionNotice | null>(null);
-  const [operationNotice, setOperationNotice] = useState<{ tone: NoticeTone; title: string; message: string } | null>(null);
+  const [, setOperationNotice] = useState<{ tone: NoticeTone; title: string; message: string } | null>(null);
   const [isTemplateDecisionOpen, setIsTemplateDecisionOpen] = useState<boolean>(false);
   const [templateDecisionStatus, setTemplateDecisionStatus] = useState<string>("");
   const [exportJson, setExportJson] = useState<string>("");
@@ -2196,65 +2195,6 @@ function HomeWorkspace() {
       </p>
     </section>
   );
-  const getUserFlowStatus = (): { tone: NoticeTone; title: string; message: string } => {
-    if (currentStep === "upload") {
-      return {
-        tone: "info",
-        title: "เริ่มงานเอกสาร",
-        message: "อัปโหลดรูปภาพหรือ PDF เพื่อเริ่มตรวจขอบเขตเอกสาร",
-      };
-    }
-
-    if (currentStep === "adjust") {
-      return {
-        tone: "info",
-        title: "ตรวจขอบเขตเอกสาร",
-        message: "ปรับกรอบให้ครอบเฉพาะเอกสาร จากนั้นยืนยันเพื่อค้นหา Template และโหลด ROI",
-      };
-    }
-
-    if (currentStep === "studio") {
-      if (isLoading) {
-        return {
-          tone: "info",
-          title: "กำลังอ่านข้อมูล",
-          message: ocrProgress
-            ? `กำลังประมวลผลหน้า ${ocrProgress.currentPage}/${ocrProgress.totalPages}`
-            : "ระบบกำลังอ่านข้อมูลจาก ROI ที่เลือก",
-        };
-      }
-
-      if (matchedTemplate) {
-        return {
-          tone: "success",
-          title: "พร้อมอ่านข้อมูลจาก Template",
-          message: `พบ Template "${matchedTemplate.name}" แล้ว เลือก Field ที่ต้องการและกดอ่านข้อมูลที่เลือก`,
-        };
-      }
-
-      if (templateDetectionNotice) {
-        return {
-          tone: "warning",
-          title: "ใช้ Custom OCR",
-          message: "ระบบไม่พบ Template ที่มั่นใจพอ สามารถกำหนด ROI เองและอ่านข้อมูลต่อได้",
-        };
-      }
-
-      return {
-        tone: "info",
-        title: "กำหนด ROI",
-        message: "เลือกหรือวาด ROI สำหรับข้อมูลที่ต้องการ OCR",
-      };
-    }
-
-    return {
-      tone: "success",
-      title: "ใช้ค่าล่าสุดอัตโนมัติ",
-      message: "แก้ไขข้อความ ตาราง หรือชื่อ Field แล้ว Export จะใช้ค่าปัจจุบันทันที",
-    };
-  };
-
-  const userFlowStatus = getUserFlowStatus();
   const exportPreviewPayload = exportJson || exportText ? buildExportPayload() : null;
   const exportFieldCount =
     exportPreviewPayload?.pages.reduce((sum, page) => sum + Object.keys(page.fields).length, 0) ?? 0;
@@ -2269,7 +2209,6 @@ function HomeWorkspace() {
               <h1 className="ui-page-title mt-1 text-slate-950">ระบบอ่านเอกสารด้วย OCR</h1>
               <p className="ui-body mt-1 text-slate-500">
                 อัปโหลดเอกสาร ตรวจขอบเขต ค้นหา Template เลือก Field ที่ต้องการอ่าน และตรวจสอบผล OCR ก่อนนำออกใช้งาน
-                {imagesList.length > 0 && ` หน้า ${currentIndex + 1}/${imagesList.length}`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -2300,11 +2239,6 @@ function HomeWorkspace() {
         </div>
 
         {currentStep !== "upload" && renderUserWorkflowGuide()}
-
-        <InlineState tone={userFlowStatus.tone} title={userFlowStatus.title} message={userFlowStatus.message} />
-        {operationNotice && (
-          <InlineState tone={operationNotice.tone} title={operationNotice.title} message={operationNotice.message} />
-        )}
 
         <div className="hidden text-center py-2">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">

@@ -157,7 +157,6 @@ export default function WorkspaceCustomEditor({
   onIndexChange,
   hideOcrActions = false,
   readOnly = false,
-  hideStepProgress = false,
   hideRightPanel = false,
   hideFooter = false,
   hideFooterActions = false,
@@ -854,36 +853,6 @@ export default function WorkspaceCustomEditor({
   };
   return (
     <div className={rootClassName}>
-      
-      {/* Step progress bar */}
-      {!hideStepProgress && <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
-          <div className="flex items-center gap-2.5 z-10 relative bg-white pr-4">
-            <div className="w-7 h-7 rounded-full bg-green-100 border border-green-300 text-green-600 font-bold text-xs flex items-center justify-center">✓</div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-slate-500">เตรียมภาพ</p>
-              <p className="text-[10px] text-slate-400 font-medium">ปรับภาพและครอปเอกสาร</p>
-            </div>
-          </div>
-          <div className="absolute top-3.5 left-0 right-0 h-[2px] bg-slate-200 -z-0 hidden md:block"></div>
-          <div className="flex items-center gap-2.5 z-10 relative bg-white px-4">
-            <div className="w-7 h-7 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center ring-4 ring-blue-100">2</div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-slate-800">กำหนด ROI</p>
-              <p className="text-[10px] text-slate-400 font-medium">ลากกรอบพื้นที่สำหรับ OCR</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 z-10 relative bg-white pl-4">
-            <div className="w-7 h-7 rounded-full bg-white border-2 border-slate-300 text-slate-400 font-bold text-xs flex items-center justify-center">3</div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-slate-400">ตรวจผล OCR</p>
-              <p className="text-[10px] text-slate-400 font-medium">แก้ไขและยืนยันผลลัพธ์</p>
-            </div>
-          </div>
-        </div>
-      </div>}
-
-
       {/* Main canvas row */}
       <div className={`relative grid min-h-0 ${workspaceHeightClassName} ${hideRightPanel ? "grid-cols-[64px_minmax(0,1fr)]" : "grid-cols-[64px_minmax(0,1fr)_320px] xl:grid-cols-[64px_minmax(0,1fr)_minmax(320px,360px)]"} gap-5 items-stretch overflow-hidden`}>
         
