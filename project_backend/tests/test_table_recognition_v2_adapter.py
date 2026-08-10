@@ -549,6 +549,177 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"], [["A1", "B1"], ["A2", ""]])
         self.assertTrue(any(cell.get("text") == "" for cell in result["table_structured"]["cells"]))
 
+    def test_semi_coordinate_splits_multiple_logical_rows_without_horizontal_lines(self) -> None:
+        image = np.full((180, 240, 3), 255, dtype=np.uint8)
+        image[10:12, 5:235] = 0
+        image[165:167, 5:235] = 0
+        image[10:167, 5:7] = 0
+        image[10:167, 80:82] = 0
+        image[10:167, 160:162] = 0
+        image[10:167, 235:237] = 0
+        regions = []
+        recognitions = []
+        for index, code in enumerate(["IC-0001", "IC-0003", "IC-0004", "IC-0005"]):
+            y = 30 + index * 28
+            regions.extend([
+                {"bbox": {"x": 12, "y": y, "width": 45, "height": 10}},
+                {"bbox": {"x": 92, "y": y, "width": 45, "height": 10}},
+                {"bbox": {"x": 178, "y": y, "width": 22, "height": 10}},
+            ])
+            recognitions.extend([
+                {"text": code, "confidence": 0.9},
+                {"text": f"Item {index + 1}", "confidence": 0.9},
+                {"text": str(index + 1), "confidence": 0.9},
+            ])
+        result = self._run_coordinate_semi_case(regions, recognitions, image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual([row[0] for row in result["table_rows"][:4]], ["IC-0001", "IC-0003", "IC-0004", "IC-0005"])
+
+    def test_semi_coordinate_splits_summary_rows_without_horizontal_separators(self) -> None:
+        image = np.full((140, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[125:127, 5:215] = 0
+        image[10:127, 5:7] = 0
+        image[10:127, 130:132] = 0
+        image[10:127, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 20, "y": 35, "width": 40, "height": 10}},
+            {"bbox": {"x": 150, "y": 35, "width": 35, "height": 10}},
+            {"bbox": {"x": 20, "y": 70, "width": 40, "height": 10}},
+            {"bbox": {"x": 150, "y": 70, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Total", "100", "VAT", "7"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:2], [["Total", "100"], ["VAT", "7"]])
+
+    def test_semi_coordinate_preserves_merged_footer_colspan(self) -> None:
+        image = np.full((100, 240, 3), 255, dtype=np.uint8)
+        image[10:12, 5:235] = 0
+        image[55:57, 5:235] = 0
+        image[90:92, 5:235] = 0
+        image[10:92, 5:7] = 0
+        for x in [40, 75, 110, 145, 180, 210]:
+            image[10:55, x:x + 2] = 0
+        image[10:92, 235:237] = 0
+        regions = [
+            {"bbox": {"x": 10, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 45, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 82, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 118, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 152, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 185, "y": 25, "width": 20, "height": 10}},
+            {"bbox": {"x": 214, "y": 25, "width": 15, "height": 10}},
+            {"bbox": {"x": 45, "y": 70, "width": 145, "height": 10}},
+        ]
+        recognitions = [{"text": f"H{index}", "confidence": 0.9} for index in range(7)] + [{"text": "Footer total", "confidence": 0.9}]
+        result = self._run_coordinate_semi_case(regions, recognitions, image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        footer = next(cell for cell in result["table_structured"]["cells"] if cell["text"] == "Footer total")
+        self.assertGreaterEqual(footer["colSpan"], 2)
+
+    def test_semi_coordinate_infers_internal_columns_without_vertical_lines(self) -> None:
+        image = np.full((120, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[110:112, 5:215] = 0
+        image[10:112, 5:7] = 0
+        image[10:112, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 20, "y": 25, "width": 35, "height": 10}},
+            {"bbox": {"x": 120, "y": 25, "width": 45, "height": 10}},
+            {"bbox": {"x": 20, "y": 65, "width": 35, "height": 10}},
+            {"bbox": {"x": 120, "y": 65, "width": 45, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Code", "Name", "IC-1", "Mouse"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:2], [["Code", "Name"], ["IC-1", "Mouse"]])
+        self.assertGreaterEqual(result["table_debug"]["logical_column_boundary_count"], 3)
+
+    def test_semi_coordinate_repeated_label_value_alignment_infers_subcolumn(self) -> None:
+        image = np.full((140, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[125:127, 5:215] = 0
+        image[10:127, 5:7] = 0
+        image[10:127, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 18, "y": 25, "width": 40, "height": 10}},
+            {"bbox": {"x": 135, "y": 25, "width": 35, "height": 10}},
+            {"bbox": {"x": 18, "y": 65, "width": 40, "height": 10}},
+            {"bbox": {"x": 135, "y": 65, "width": 35, "height": 10}},
+            {"bbox": {"x": 18, "y": 95, "width": 40, "height": 10}},
+            {"bbox": {"x": 135, "y": 95, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Total", "100", "VAT", "7", "Net", "107"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:3], [["Total", "100"], ["VAT", "7"], ["Net", "107"]])
+
+    def test_semi_coordinate_multiline_cell_does_not_create_fake_column(self) -> None:
+        image = np.full((150, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[135:137, 5:215] = 0
+        image[10:137, 5:7] = 0
+        image[10:137, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 25, "y": 35, "width": 120, "height": 10}},
+            {"bbox": {"x": 25, "y": 65, "width": 110, "height": 10}},
+            {"bbox": {"x": 25, "y": 95, "width": 130, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Line one", "Line two", "Line three"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(max(len(row) for row in result["table_rows"]), 1)
+
+    def test_semi_coordinate_combines_hard_and_inferred_boundaries(self) -> None:
+        image = np.full((130, 260, 3), 255, dtype=np.uint8)
+        image[10:12, 5:255] = 0
+        image[120:122, 5:255] = 0
+        image[10:122, 5:7] = 0
+        image[10:122, 130:132] = 0
+        image[10:122, 255:257] = 0
+        regions = [
+            {"bbox": {"x": 18, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 76, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 155, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 212, "y": 30, "width": 35, "height": 10}},
+            {"bbox": {"x": 18, "y": 75, "width": 35, "height": 10}},
+            {"bbox": {"x": 76, "y": 75, "width": 35, "height": 10}},
+            {"bbox": {"x": 155, "y": 75, "width": 35, "height": 10}},
+            {"bbox": {"x": 212, "y": 75, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["A", "B", "C", "D", "E", "F", "G", "H"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:2], [["A", "B", "C", "D"], ["E", "F", "G", "H"]])
+        self.assertGreaterEqual(result["table_debug"]["hard_column_boundary_count"], 3)
+
+    def test_semi_coordinate_does_not_split_when_internal_evidence_is_insufficient(self) -> None:
+        image = np.full((90, 220, 3), 255, dtype=np.uint8)
+        image[10:12, 5:215] = 0
+        image[80:82, 5:215] = 0
+        image[10:82, 5:7] = 0
+        image[10:82, 215:217] = 0
+        regions = [
+            {"bbox": {"x": 25, "y": 35, "width": 35, "height": 10}},
+            {"bbox": {"x": 140, "y": 35, "width": 35, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": "Only", "confidence": 0.9}, {"text": "Once", "confidence": 0.9}], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(max(len(row) for row in result["table_rows"]), 1)
+        self.assertIn("Only Once", result["table_rows"][0][0])
+
     def test_semi_coordinate_does_not_call_slanext_model(self) -> None:
         regions = [{"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}}, {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}}]
         result = self._run_coordinate_semi_case(regions, [{"text": "A", "confidence": 0.9}, {"text": "B", "confidence": 0.9}])

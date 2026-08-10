@@ -417,12 +417,18 @@ def _cluster_positions(values: List[float], tolerance: float) -> List[float]:
 def _line_positions_from_mask(mask: np.ndarray, orientation: str, threshold_ratio: float) -> List[float]:
     if mask.size == 0:
         return []
-    axis = 1 if orientation == "vertical" else 0
+    axis = 0 if orientation == "vertical" else 1
     length = mask.shape[0] if orientation == "vertical" else mask.shape[1]
     projection = np.sum(mask > 0, axis=axis) / max(1, length)
     positions = [float(index) for index, value in enumerate(projection) if value >= threshold_ratio]
     tolerance = max(2.0, min(mask.shape[:2]) * 0.006)
     return _cluster_positions(positions, tolerance)
+
+
+def _line_boundaries(line_positions: List[float], limit: int) -> List[float]:
+    if len(line_positions) >= 2:
+        return sorted(set(round(max(0.0, min(float(limit), value)), 3) for value in line_positions))
+    return [0.0, float(limit)]
 
 
 def _semi_line_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -470,10 +476,137 @@ def _combined_boundaries(
 ) -> List[float]:
     text_boundaries = _infer_boundaries_from_text(text_cells, axis, limit)
     min_gap = max(4.0, float(limit) * 0.012)
-    line_boundaries = [0.0, *[pos for pos in line_positions if min_gap <= pos <= float(limit) - min_gap], float(limit)]
-    if len(line_boundaries) >= 3:
+    filtered_line_positions = [pos for pos in line_positions if min_gap <= pos <= float(limit) - min_gap]
+    line_boundaries = _line_boundaries(filtered_line_positions, limit)
+    if len(line_boundaries) >= 3 and len(line_boundaries) >= max(3, int(len(text_boundaries) * 0.6)):
         return sorted(set(round(value, 3) for value in line_boundaries))
     return sorted(set(round(value, 3) for value in text_boundaries))
+
+
+def _row_boundaries_with_logical_subrows(
+    hard_boundaries: List[float],
+    text_cells: List[Dict[str, Any]],
+    image_height: int,
+) -> List[float]:
+    if not text_cells:
+        return hard_boundaries if len(hard_boundaries) >= 2 else [0.0, float(image_height)]
+    median_height = float(np.median([cell.get("height", 12.0) for cell in text_cells])) if text_cells else 12.0
+    y_tolerance = max(6.0, median_height * 0.65)
+    min_gap = max(3.0, median_height * 0.45)
+    source_boundaries = hard_boundaries if len(hard_boundaries) >= 2 else [0.0, float(image_height)]
+    boundaries: List[float] = [float(source_boundaries[0])]
+    for band_top, band_bottom in zip(source_boundaries, source_boundaries[1:]):
+        band_cells = [
+            cell
+            for cell in text_cells
+            if float(band_top) <= float(cell["center_y"]) <= float(band_bottom)
+        ]
+        centers = _cluster_positions([float(cell["center_y"]) for cell in band_cells], y_tolerance)
+        inner_boundaries: List[float] = []
+        if len(centers) > 1:
+            for upper, lower in zip(centers, centers[1:]):
+                boundary = (upper + lower) / 2.0
+                if boundary - float(band_top) >= min_gap and float(band_bottom) - boundary >= min_gap:
+                    inner_boundaries.append(boundary)
+        boundaries.extend(inner_boundaries)
+        boundaries.append(float(band_bottom))
+    merged = _cluster_positions(boundaries, max(2.0, min_gap * 0.5))
+    return sorted(set(round(max(0.0, min(float(image_height), value)), 3) for value in merged))
+
+
+def _column_boundaries_with_logical_subcolumns(
+    hard_boundaries: List[float],
+    text_cells: List[Dict[str, Any]],
+    row_boundaries: List[float],
+    image_width: int,
+) -> List[float]:
+    if not text_cells:
+        return hard_boundaries if len(hard_boundaries) >= 2 else [0.0, float(image_width)]
+    median_width = float(np.median([cell.get("width", 40.0) for cell in text_cells])) if text_cells else 40.0
+    source_boundaries = hard_boundaries if len(hard_boundaries) >= 2 else [0.0, float(image_width)]
+    min_gap = max(6.0, median_width * 0.75)
+    final_boundaries: List[float] = [float(source_boundaries[0])]
+
+    for band_left, band_right in zip(source_boundaries, source_boundaries[1:]):
+        band_width = max(1.0, float(band_right) - float(band_left))
+        band_cells = [
+            cell
+            for cell in text_cells
+            if float(band_left) <= float(cell["center_x"]) <= float(band_right)
+        ]
+        proposals: List[tuple[float, int]] = []
+        row_center_values: Dict[int, List[float]] = {}
+        for row_index in range(max(1, len(row_boundaries) - 1)):
+            row_top = row_boundaries[row_index]
+            row_bottom = row_boundaries[row_index + 1]
+            row_cells = sorted(
+                [cell for cell in band_cells if float(row_top) <= float(cell["center_y"]) <= float(row_bottom)],
+                key=lambda item: float(item["center_x"]),
+            )
+            centers = [float(cell["center_x"]) for cell in row_cells]
+            if centers:
+                row_center_values[row_index] = centers
+            for left, right in zip(row_cells, row_cells[1:]):
+                gap = float(right["center_x"]) - float(left["center_x"])
+                if gap >= max(min_gap, band_width * 0.08):
+                    proposals.append(((float(left["center_x"]) + float(right["center_x"])) / 2.0, row_index))
+
+        centers = [center for values in row_center_values.values() for center in values]
+        center_clusters = _cluster_positions(centers, max(median_width * 0.55, band_width * 0.035))
+        repeated_center_count = 0
+        for center in center_clusters:
+            supporting_rows = {
+                row_index
+                for row_index, values in row_center_values.items()
+                if any(abs(value - center) <= max(median_width * 0.55, band_width * 0.035) for value in values)
+            }
+            if len(supporting_rows) >= 2:
+                repeated_center_count += 1
+
+        inferred: List[float] = []
+        proposal_tolerance = max(median_width * 0.65, band_width * 0.035)
+        proposal_centers = _cluster_positions([proposal for proposal, _ in proposals], proposal_tolerance)
+        for proposal_center in proposal_centers:
+            supporting_rows = {row_index for proposal, row_index in proposals if abs(proposal - proposal_center) <= proposal_tolerance}
+            spanning_rows = {
+                row_index
+                for row_index in range(max(1, len(row_boundaries) - 1))
+                for cell in band_cells
+                if float(row_boundaries[row_index]) <= float(cell["center_y"]) <= float(row_boundaries[row_index + 1])
+                and _text_overlaps_boundary(cell, proposal_center, "x", max(median_width * 0.35, band_width * 0.02))
+                and float(cell.get("width") or 0.0) >= median_width * 1.35
+            }
+            has_repeated_pattern = (
+                len(supporting_rows) >= 2
+                or (len(supporting_rows) >= 1 and repeated_center_count >= 1)
+                or len(supporting_rows | spanning_rows) >= 2
+            )
+            if has_repeated_pattern and float(band_left) + min_gap <= proposal_center <= float(band_right) - min_gap:
+                inferred.append(proposal_center)
+
+        center_gap_tolerance = max(median_width * 0.55, band_width * 0.035)
+        for left_center, right_center in zip(center_clusters, center_clusters[1:]):
+            left_rows = {
+                row_index
+                for row_index, values in row_center_values.items()
+                if any(abs(value - left_center) <= center_gap_tolerance for value in values)
+            }
+            right_rows = {
+                row_index
+                for row_index, values in row_center_values.items()
+                if any(abs(value - right_center) <= center_gap_tolerance for value in values)
+            }
+            if len(left_rows | right_rows) < 2 or max(len(left_rows), len(right_rows)) < 2:
+                continue
+            boundary = (left_center + right_center) / 2.0
+            if float(band_left) + min_gap <= boundary <= float(band_right) - min_gap:
+                inferred.append(boundary)
+
+        final_boundaries.extend(inferred)
+        final_boundaries.append(float(band_right))
+
+    merged = _cluster_positions(final_boundaries, max(2.0, median_width * 0.2))
+    return sorted(set(round(max(0.0, min(float(image_width), value)), 3) for value in merged))
 
 
 def _interval_index(center: float, boundaries: List[float]) -> int:
@@ -483,6 +616,20 @@ def _interval_index(center: float, boundaries: List[float]) -> int:
         if start <= center <= end:
             return index
     return max(0, min(len(boundaries) - 2, min(range(len(boundaries) - 1), key=lambda idx: abs(((boundaries[idx] + boundaries[idx + 1]) / 2.0) - center))))
+
+
+def _covered_column_indices(cell: Dict[str, Any], col_boundaries: List[float], tolerance: float) -> List[int]:
+    bbox = cell.get("bbox")
+    if not isinstance(bbox, dict):
+        return []
+    left = float(bbox.get("x") or 0.0)
+    right = left + float(bbox.get("width") or 0.0)
+    return [
+        index
+        for index in range(max(0, len(col_boundaries) - 1))
+        if left <= ((col_boundaries[index] + col_boundaries[index + 1]) / 2.0) + tolerance
+        and right >= ((col_boundaries[index] + col_boundaries[index + 1]) / 2.0) - tolerance
+    ]
 
 
 def _line_evidence(mask: np.ndarray, orientation: str, position: float, start: float, end: float) -> float:
@@ -527,6 +674,19 @@ def _structured_from_coordinate_grid(
     x_tolerance = max(4.0, median_width * 0.12)
     y_tolerance = max(4.0, median_height * 0.35)
 
+    def span_from_source_boxes(position_cells: List[Dict[str, Any]], start_col: int) -> int:
+        covered: List[int] = []
+        for source_cell in position_cells:
+            covered.extend(_covered_column_indices(source_cell, col_boundaries, x_tolerance))
+        if not covered:
+            return 1
+        unique_covered = sorted(set(covered))
+        if len(unique_covered) <= 1:
+            return 1
+        if min(unique_covered) != start_col:
+            return 1
+        return max(1, max(unique_covered) - start_col + 1)
+
     for row_index in range(row_count):
         for col_index in range(col_count):
             if (row_index, col_index) in hidden_positions:
@@ -536,8 +696,10 @@ def _structured_from_coordinate_grid(
             boxes = [cell["bbox"] for cell in source_by_position.get((row_index, col_index), []) if isinstance(cell.get("bbox"), dict)]
             bbox = _merge_bboxes(boxes)
             row_span = 1
-            col_span = 1
             anchor_sources = source_by_position.get((row_index, col_index), [])
+            col_span = span_from_source_boxes(anchor_sources, col_index) if text else 1
+            for hidden_col in range(col_index + 1, min(col_count, col_index + col_span)):
+                hidden_positions.add((row_index, hidden_col))
 
             while col_index + col_span < col_count and text and anchor_sources:
                 boundary = col_boundaries[col_index + col_span]
@@ -1075,8 +1237,15 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     if not ocr_cells:
         return None
 
-    row_boundaries = _combined_boundaries(horizontal_positions, ocr_cells, "y", input_height)
-    col_boundaries = _combined_boundaries(vertical_positions, ocr_cells, "x", input_width)
+    hard_row_boundaries = _combined_boundaries(horizontal_positions, ocr_cells, "y", input_height)
+    row_boundaries = _row_boundaries_with_logical_subrows(hard_row_boundaries, ocr_cells, input_height)
+    min_col_gap = max(4.0, float(input_width) * 0.012)
+    hard_col_boundaries = _line_boundaries(
+        [pos for pos in vertical_positions if min_col_gap <= pos <= float(input_width) - min_col_gap],
+        input_width,
+    )
+    hard_col_boundaries = sorted(set(round(value, 3) for value in hard_col_boundaries))
+    col_boundaries = _column_boundaries_with_logical_subcolumns(hard_col_boundaries, ocr_cells, row_boundaries, input_width)
     if len(row_boundaries) < 2:
         row_boundaries = _infer_boundaries_from_text(ocr_cells, "y", input_height)
     if len(col_boundaries) < 2:
@@ -1085,9 +1254,20 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     col_count = max(1, len(col_boundaries) - 1)
     rows = [["" for _ in range(col_count)] for _ in range(row_count)]
     source_cells: List[Dict[str, Any]] = []
+    median_width = float(np.median([cell.get("width", 40.0) for cell in ocr_cells])) if ocr_cells else 40.0
+    x_tolerance = max(4.0, median_width * 0.12)
     for cell in sorted(ocr_cells, key=lambda item: (item["center_y"], item["center_x"])):
         row_index = _interval_index(float(cell["center_y"]), row_boundaries)
-        col_index = _interval_index(float(cell["center_x"]), col_boundaries)
+        covered_columns = _covered_column_indices(cell, col_boundaries, x_tolerance)
+        crossed_boundaries = [
+            index
+            for index in range(1, max(1, len(col_boundaries) - 1))
+            if _text_overlaps_boundary(cell, col_boundaries[index], "x", x_tolerance)
+        ]
+        if crossed_boundaries:
+            col_index = max(0, min(crossed_boundaries) - 1)
+        else:
+            col_index = min(covered_columns) if len(covered_columns) > 1 else _interval_index(float(cell["center_x"]), col_boundaries)
         text = normalize_ocr_text(cell["text"])
         rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
         source_cells.append({
@@ -1126,6 +1306,10 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "column_count": max((len(row) for row in rows), default=0),
             "horizontal_line_count": len(horizontal_positions),
             "vertical_line_count": len(vertical_positions),
+            "hard_row_boundary_count": len(hard_row_boundaries),
+            "logical_row_boundary_count": len(row_boundaries),
+            "hard_column_boundary_count": len(hard_col_boundaries),
+            "logical_column_boundary_count": len(col_boundaries),
             "ocr": ocr_debug,
             "region_processing": "coordinate_based",
             "model_reuse": {"enabled": False, "model_inference_count": 0},
