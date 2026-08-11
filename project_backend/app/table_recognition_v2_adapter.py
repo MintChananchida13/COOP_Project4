@@ -2746,6 +2746,50 @@ def _whole_roi_semi_analysis(analysis: Optional[Dict[str, Any]], merge_status: s
     return result
 
 
+def _forced_whole_roi_semi_analysis(image: np.ndarray, previous_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    height, width = image.shape[:2]
+    base = _whole_roi_semi_analysis(previous_analysis, merge_status="forced_after_empty_slanext")
+    base.update(
+        {
+            "detected": True,
+            "confidence": max(0.72, float(base.get("confidence") or 0.0)),
+            "reason": "forced_after_empty_slanext",
+            "regions": [
+                {
+                    "type": "grid",
+                    "bbox": {"x": 0, "y": 0, "width": int(width), "height": int(height)},
+                    "confidence": max(0.72, float(base.get("confidence") or 0.0)),
+                    "forced": True,
+                }
+            ],
+            "forced": True,
+        }
+    )
+    return base
+
+
+def _try_forced_semi_after_empty_slanext(
+    image: np.ndarray,
+    previous_analysis: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    forced_analysis = _forced_whole_roi_semi_analysis(image, previous_analysis)
+    result = _recognize_coordinate_based_semi_table(image, forced_analysis)
+    if not result:
+        return None
+    candidate = _build_table_candidate(result, "coordinate_based_semi_forced")
+    reliability = _semi_result_reliability(candidate, forced_analysis)
+    candidate.setdefault("table_debug", {})
+    if isinstance(candidate["table_debug"], dict):
+        candidate["table_debug"]["semi_reliability"] = reliability
+        candidate["table_debug"]["forced_after_empty_slanext"] = True
+    candidate.setdefault("table_semi_analysis", forced_analysis)
+    if isinstance(candidate["table_semi_analysis"], dict):
+        candidate["table_semi_analysis"]["reliability"] = reliability
+    if not reliability["passed"]:
+        return candidate
+    return _attach_candidate_competition(candidate, [candidate], "forced_semi_after_empty_slanext")
+
+
 def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     started = time.perf_counter()
     model_inference_count = 0
@@ -2826,6 +2870,42 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
     slanext_usable = _has_usable_table_result(slanext_candidate)
     slanext_has_structured_grid = bool(slanext_quality.get("has_structured_cells")) and int(slanext_quality.get("row_count") or 0) > 0 and int(slanext_quality.get("column_count") or 0) > 0
+
+    if not slanext_usable:
+        try:
+            forced_started = time.perf_counter()
+            forced_semi_candidate = _try_forced_semi_after_empty_slanext(image, semi_analysis)
+            logger.info(
+                "Table Recognition phase timing: phase=Forced Semi after empty SLANeXt elapsed=%.3fs used=%s",
+                time.perf_counter() - forced_started,
+                bool(forced_semi_candidate),
+            )
+            if forced_semi_candidate:
+                candidates.append(forced_semi_candidate)
+                forced_debug = forced_semi_candidate.get("table_debug") if isinstance(forced_semi_candidate.get("table_debug"), dict) else {}
+                forced_reliability = forced_debug.get("semi_reliability") if isinstance(forced_debug.get("semi_reliability"), dict) else {}
+                if bool(forced_reliability.get("passed")) and _has_usable_table_result(forced_semi_candidate):
+                    selected = _attach_candidate_competition(
+                        forced_semi_candidate,
+                        candidates,
+                        "forced_semi_after_empty_slanext",
+                    )
+                    selected.setdefault("table_semi_analysis", forced_semi_candidate.get("table_semi_analysis") or _forced_whole_roi_semi_analysis(image, semi_analysis))
+                    selected_debug = selected.get("table_debug")
+                    if isinstance(selected_debug, dict):
+                        selected_debug["status"] = "coordinate_based_semi_forced"
+                        selected_debug["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+                        selected_debug["model_inference_count"] = model_inference_count
+                        selected_debug["ocr_inference_count"] = ocr_inference_count
+                    logger.info(
+                        "Table Recognition phase timing: phase=Total path=forced_semi model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+                        model_inference_count,
+                        ocr_inference_count,
+                        time.perf_counter() - started,
+                    )
+                    return selected
+        except Exception as error:
+            logger.info("Forced Semi Table after empty SLANeXt failed: %s", error)
 
     if not slanext_has_structured_grid and _should_try_borderless_candidate(slanext_quality, slanext_confidence):
         try:

@@ -39,6 +39,14 @@ export interface OCRResult {
   tableSections?: TableSectionResult[];
   tableHtml?: string;
   tableDebug?: Record<string, unknown>;
+  tableExport?: TableExportConfig;
+}
+
+export type TableExportMode = 'structure' | 'key_value';
+
+export interface TableExportConfig {
+  mode: TableExportMode;
+  selectedColumns?: number[];
 }
 
 export interface StructuredTableCell {

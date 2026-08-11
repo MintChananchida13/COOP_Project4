@@ -175,7 +175,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertEqual(result["table_rows"], [["A", "B"]])
 
-    def test_borderless_table_fallback_clusters_text_boxes_when_slanet_is_empty(self) -> None:
+    def test_forced_semi_clusters_text_boxes_when_slanet_is_empty(self) -> None:
         image = np.zeros((120, 260, 3), dtype=np.uint8)
         fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EmptyTableRecognitionPipelineV2)
         detected_regions = [
@@ -205,7 +205,8 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertEqual(result["table_rows"], [["Name", "Amount"], ["Alice", "100"]])
         self.assertEqual(result["table_structured"]["rows"], [["Name", "Amount"], ["Alice", "100"]])
-        self.assertTrue(result["table_debug"]["borderless_fallback_used"])
+        self.assertEqual(result["table_selected_method"], "coordinate_based_semi_forced")
+        self.assertTrue(result["table_debug"]["forced_after_empty_slanext"])
         self.assertEqual(result["table_debug"]["column_count"], 2)
         detect.assert_called_once()
         recognize.assert_called_once()
@@ -1139,6 +1140,58 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"], [["A", "B"]])
         self.assertEqual(result["table_semi_analysis"]["merge_status"], "whole_roi_fallback")
         self.assertFalse(result["table_semi_analysis"]["detected"])
+
+    def test_forced_semi_runs_when_slanext_has_no_usable_table(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EmptyTableRecognitionPipelineV2)
+        forced_result = {
+            "text": "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            "confidence": 0.86,
+            "segments": [{"text": "A", "confidence": 0.9, "bbox": {"x": 10, "y": 10, "width": 20, "height": 10}}],
+            "attempts": [{"step": "coordinate_based_semi_reconstruction"}],
+            "preprocessing": "coordinate_based_semi_reconstruction",
+            "engine": "table_recognition_v2",
+            "model": "coordinate_based_semi",
+            "table_rows": [["A", "B"], ["1", "2"]],
+            "table_structured": {
+                "rows": [["A", "B"], ["1", "2"]],
+                "cells": [
+                    {"row": 0, "col": 0, "text": "A", "confidence": 0.9},
+                    {"row": 0, "col": 1, "text": "B", "confidence": 0.9},
+                    {"row": 1, "col": 0, "text": "1", "confidence": 0.9},
+                    {"row": 1, "col": 1, "text": "2", "confidence": 0.9},
+                ],
+            },
+            "table_debug": {
+                "status": "coordinate_based_semi_reconstructed",
+                "ocr": {"detected_boxes": 4, "recognized_cells": 4},
+                "hard_column_boundary_count": 2,
+                "logical_column_boundary_count": 3,
+                "assignment": {
+                    "average_row_overlap": 1.0,
+                    "average_column_overlap": 1.0,
+                    "empty_column_ratio": 0.0,
+                    "hard_region_violation_count": 0,
+                },
+            },
+            "table_semi_analysis": {"detected": True, "confidence": 0.72, "regions": [], "forced": True},
+        }
+
+        with patch.dict(sys.modules, {"paddleocr": fake_paddleocr}), patch(
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            return_value={"detected": False, "confidence": 0.0, "regions": [], "reason": "normal"},
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
+            "app.table_recognition_v2_adapter.Path.unlink"
+        ), patch("app.table_recognition_v2_adapter._recognize_coordinate_based_semi_table", return_value=forced_result), patch(
+            "app.table_recognition_v2_adapter._recognize_ocr_table_fallback"
+        ) as fallback:
+            result = recognize_table_v2_local(image)
+
+        fallback.assert_not_called()
+        self.assertEqual(result["table_selected_method"], "coordinate_based_semi_forced")
+        self.assertEqual(result["table_debug"]["status"], "coordinate_based_semi_forced")
+        self.assertTrue(result["table_debug"]["forced_after_empty_slanext"])
+        self.assertEqual(result["table_rows"], [["A", "B"], ["1", "2"]])
 
     def test_ocr_table_fallback_is_selected_when_slanext_has_no_usable_table(self) -> None:
         image = np.zeros((120, 260, 3), dtype=np.uint8)

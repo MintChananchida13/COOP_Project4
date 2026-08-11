@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { ArrowLeft, ZoomIn, ZoomOut, Maximize2, CheckCircle, Edit3, ChevronLeft, ChevronRight, Table, Image as ImageIcon, FileText, Eye, EyeOff, Undo2, Redo2, Columns3 } from 'lucide-react';
-import { ROI, OCRResult, StructuredTableResult, TableMergedCell } from '../../types/ocr';
+import { ROI, OCRResult, StructuredTableResult, TableExportConfig, TableMergedCell } from '../../types/ocr';
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0 text-slate-400" />;
@@ -227,6 +227,29 @@ const tableRowsFromResult = (result: OCRResult & { pageIndex?: number }, value?:
   normalizeTableRows(result.tableRows) ||
   parseHtmlTable(result.tableHtml) ||
   parseTableText(value ?? result.extractedText ?? getRawOcrText(result));
+
+const getTableExportConfig = (result: OCRResult & { pageIndex?: number }, rows: string[][]): TableExportConfig => {
+  const headerCount = rows[0]?.length || 0;
+  const allColumns = Array.from({ length: headerCount }, (_, index) => index);
+  const rawSelected = Array.isArray(result.tableExport?.selectedColumns)
+    ? result.tableExport.selectedColumns
+    : allColumns;
+  return {
+    mode: result.tableExport?.mode === "key_value" ? "key_value" : "structure",
+    selectedColumns: rawSelected.filter((index) => index >= 0 && index < headerCount),
+  };
+};
+
+const buildKeyValuePreviewRows = (rows: string[][], selectedColumns: number[]) => {
+  const headers = rows[0] || [];
+  return rows.slice(1).map((row, rowIndex) => ({
+    label: `Row ${rowIndex + 1}`,
+    pairs: selectedColumns.map((colIndex) => ({
+      key: headers[colIndex] || `Column ${colIndex + 1}`,
+      value: row[colIndex] ?? "",
+    })),
+  }));
+};
 
 type TableSelection = {
   startRow: number;
@@ -1778,6 +1801,23 @@ export default function GroundTruthEditorZone({
                       {currentPageResultGroups.table.map(({ res, matchedRoi, fieldType }) => {
                         const isSelected = activeFieldId === res.id;
                         const normalizedTable = normalizeResultTableForEditor(res);
+                        const editableRows = normalizedTable.rows || [["Column 1"], [""]];
+                        const tableExportConfig = getTableExportConfig(res, editableRows);
+                        const headerColumns = editableRows[0] || [];
+                        const selectedColumns = tableExportConfig.selectedColumns || [];
+                        const keyValuePreviewRows = buildKeyValuePreviewRows(editableRows, selectedColumns);
+                        const updateTableExport = (nextConfig: TableExportConfig) =>
+                          setOcrResults((previous) =>
+                            previous.map((item) =>
+                              item.id === res.id ? { ...item, tableExport: nextConfig } : item
+                            )
+                          );
+                        const toggleTableExportColumn = (columnIndex: number) => {
+                          const nextColumns = selectedColumns.includes(columnIndex)
+                            ? selectedColumns.filter((index) => index !== columnIndex)
+                            : [...selectedColumns, columnIndex].sort((left, right) => left - right);
+                          updateTableExport({ mode: "key_value", selectedColumns: nextColumns });
+                        };
                         return (
                           <article
                             key={res.id}
@@ -1816,13 +1856,105 @@ export default function GroundTruthEditorZone({
                             <div onClick={(e) => e.stopPropagation()}>
                               <EditableTableResult
                                 value={normalizedTable.value}
-                                rows={normalizedTable.rows}
+                                rows={editableRows}
                                 mergedCells={res.tableMergedCells}
                                 structured={normalizedTable.structured}
                                 onChange={(nextValue, nextRows, nextMergedCells, nextStructured) =>
                                   setOcrResults(p => p.map(item => item.id === res.id ? { ...item, extractedText: nextValue, tableRows: nextRows, tableMergedCells: nextMergedCells, tableStructured: nextStructured, tableSections: undefined } : item))
                                 }
                               />
+
+                              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Table Export</p>
+                                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                                      เลือกรูปแบบผลลัพธ์เฉพาะตารางนี้ โดยไม่แก้ข้อมูลต้นฉบับ
+                                    </p>
+                                  </div>
+                                  <div className="inline-flex w-fit rounded-lg border border-slate-200 bg-white p-1">
+                                    {(["structure", "key_value"] as const).map((mode) => (
+                                      <button
+                                        key={mode}
+                                        type="button"
+                                        onClick={() =>
+                                          updateTableExport({
+                                            mode,
+                                            selectedColumns: mode === "key_value" ? selectedColumns : tableExportConfig.selectedColumns,
+                                          })
+                                        }
+                                        className={`rounded-md px-3 py-1.5 text-[11px] font-black transition-colors ${
+                                          tableExportConfig.mode === mode
+                                            ? "bg-indigo-600 text-white shadow-sm"
+                                            : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                                        }`}
+                                      >
+                                        {mode === "structure" ? "Structure" : "Key-Value"}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                {tableExportConfig.mode === "key_value" && (
+                                  <div className="mt-3 space-y-3">
+                                    <div>
+                                      <p className="mb-2 text-[10px] font-black uppercase tracking-wide text-slate-500">Columns จากแถวแรก</p>
+                                      {headerColumns.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                          {headerColumns.map((header, columnIndex) => (
+                                            <label
+                                              key={`${res.id}-export-column-${columnIndex}`}
+                                              className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+                                                selectedColumns.includes(columnIndex)
+                                                  ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                                                  : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedColumns.includes(columnIndex)}
+                                                onChange={() => toggleTableExportColumn(columnIndex)}
+                                                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                              />
+                                              <span className="max-w-[180px] truncate">{header || `Column ${columnIndex + 1}`}</span>
+                                            </label>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
+                                          ยังไม่มี header ในแถวแรกสำหรับสร้าง Key-Value
+                                        </p>
+                                      )}
+                                    </div>
+
+                                    <div>
+                                      <p className="mb-2 text-[10px] font-black uppercase tracking-wide text-slate-500">Preview</p>
+                                      <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white p-2">
+                                        {keyValuePreviewRows.length === 0 ? (
+                                          <p className="px-2 py-1 text-[11px] font-semibold text-slate-400">ไม่มี row ข้อมูลสำหรับ Preview</p>
+                                        ) : selectedColumns.length === 0 ? (
+                                          <p className="px-2 py-1 text-[11px] font-semibold text-slate-400">ยังไม่ได้เลือก column สำหรับ Export</p>
+                                        ) : (
+                                          keyValuePreviewRows.map((previewRow) => (
+                                            <div key={`${res.id}-${previewRow.label}`} className="border-b border-slate-100 px-2 py-1.5 last:border-b-0">
+                                              <p className="text-[11px] font-black text-slate-700">{previewRow.label}</p>
+                                              <div className="mt-1 space-y-0.5">
+                                                {previewRow.pairs.map((pair, pairIndex) => (
+                                                  <p key={`${previewRow.label}-${pair.key}-${pairIndex}`} className="break-words text-[11px] font-medium text-slate-600">
+                                                    <span className="font-bold text-slate-800">{pair.key}</span>
+                                                    <span className="px-1 text-slate-400">:</span>
+                                                    <span>{pair.value || "-"}</span>
+                                                  </p>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ))
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </article>
                         );

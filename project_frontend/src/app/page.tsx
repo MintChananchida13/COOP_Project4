@@ -644,6 +644,41 @@ const tableRowsToObjects = (rows: string[][]) => {
   );
 };
 
+const getTableExportConfigForRows = (result: OCRResult & { pageIndex?: number }, rows: string[][]) => {
+  const headerCount = rows[0]?.length || 0;
+  const allColumns = Array.from({ length: headerCount }, (_, index) => index);
+  const rawSelected = Array.isArray(result.tableExport?.selectedColumns)
+    ? result.tableExport.selectedColumns
+    : allColumns;
+  return {
+    mode: result.tableExport?.mode === "key_value" ? "key_value" : "structure",
+    selectedColumns: rawSelected.filter((index) => index >= 0 && index < headerCount),
+  };
+};
+
+const tableRowsToKeyValueRecords = (rows: string[][], selectedColumns: number[]) => {
+  const headers = rows[0] || [];
+  return rows.slice(1).map((row, rowIndex) => ({
+    row: rowIndex + 1,
+    values: Object.fromEntries(
+      selectedColumns.map((columnIndex) => [
+        headers[columnIndex] || `Column ${columnIndex + 1}`,
+        row[columnIndex] ?? "",
+      ])
+    ),
+  }));
+};
+
+const tableRowsToKeyValueDisplayRows = (rows: string[][], selectedColumns: number[]) => {
+  const records = tableRowsToKeyValueRecords(rows, selectedColumns);
+  return [
+    ["Row", "Key", "Value"],
+    ...records.flatMap((record) =>
+      Object.entries(record.values).map(([key, value]) => [`Row ${record.row}`, key, String(value ?? "")])
+    ),
+  ];
+};
+
 const rowsFromStructuredCells = (structured?: StructuredTableResult | null): string[][] | null => {
   const cells = structured?.cells;
   if (!Array.isArray(cells) || cells.length === 0) return null;
@@ -1449,11 +1484,24 @@ function HomeWorkspace() {
       const rawValue = result.extractedText || "";
 
       if (fieldType === "table") {
-        if (result.tableStructured?.cells?.length) {
+        const structured = getStructuredTableForExport(result);
+        const rows = structured?.rows || parseExportTable(rawValue) || [];
+        const tableExportConfig = getTableExportConfigForRows(result, rows);
+        if (tableExportConfig.mode === "key_value") {
           addField(page, fieldName, {
-            headerRowCount: result.tableStructured.headerRowCount ?? 1,
-            colWidths: result.tableStructured.colWidths ?? [],
-            cells: result.tableStructured.cells
+            mode: "key_value",
+            keys: tableExportConfig.selectedColumns.map((columnIndex) => rows[0]?.[columnIndex] || `Column ${columnIndex + 1}`),
+            records: tableRowsToKeyValueRecords(rows, tableExportConfig.selectedColumns),
+          });
+          return;
+        }
+
+        if (structured?.cells?.length) {
+          addField(page, fieldName, {
+            mode: "structure",
+            headerRowCount: structured.headerRowCount ?? 1,
+            colWidths: structured.colWidths ?? [],
+            cells: structured.cells
               .filter((cell) => !cell.hidden)
               .map((cell) => ({
                 row: cell.row,
@@ -1468,8 +1516,7 @@ function HomeWorkspace() {
           });
           return;
         }
-        const tableRows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(rawValue);
-        addField(page, fieldName, tableRows ? { rows: tableRows } : rawValue);
+        addField(page, fieldName, rows.length > 0 ? { mode: "structure", rows } : rawValue);
         return;
       }
 
@@ -1518,7 +1565,7 @@ function HomeWorkspace() {
     return "text";
   };
 
-  const getStructuredTableForExport = (result: OCRResult & { pageIndex?: number }) => {
+  const getStructuredTableForExport = (result: OCRResult & { pageIndex?: number }): StructuredTableResult | null => {
     if (result.tableStructured?.cells?.length) return result.tableStructured;
     const rows = Array.isArray(result.tableRows) && result.tableRows.length > 0 ? result.tableRows : parseExportTable(result.extractedText || "");
     if (!rows) return null;
@@ -1540,8 +1587,26 @@ function HomeWorkspace() {
     };
   };
 
+  const getTableDisplayRowsForExport = (result: OCRResult & { pageIndex?: number }) => {
+    const structured = getStructuredTableForExport(result);
+    const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
+    const tableExportConfig = getTableExportConfigForRows(result, rows);
+    if (tableExportConfig.mode !== "key_value") return rows;
+    return tableRowsToKeyValueDisplayRows(rows, tableExportConfig.selectedColumns);
+  };
+
   const renderHtmlTable = (result: OCRResult & { pageIndex?: number }) => {
     const structured = getStructuredTableForExport(result);
+    const rows = structured?.rows || parseExportTable(result.extractedText || "") || [];
+    const tableExportConfig = getTableExportConfigForRows(result, rows);
+    if (tableExportConfig.mode === "key_value") {
+      const displayRows = tableRowsToKeyValueDisplayRows(rows, tableExportConfig.selectedColumns);
+      const rowsHtml = displayRows.map((row, rowIndex) => {
+        const tag = rowIndex === 0 ? "th" : "td";
+        return `<tr>${row.map((cell) => `<${tag}>${escapeHtml(cell)}</${tag}>`).join("")}</tr>`;
+      }).join("");
+      return `<table>${rowsHtml}</table>`;
+    }
     if (!structured?.cells?.length) return `<p>${escapeHtml(result.extractedText)}</p>`;
     const headerRows = structured.headerRowCount ?? 1;
     const cellsByPosition = new Map(structured.cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
@@ -1720,8 +1785,7 @@ function HomeWorkspace() {
         tableRows.push(xlsxRow(tableRowIndex, [result.fieldName], 2));
         tableRowIndex += 1;
       }
-      const structured = getStructuredTableForExport(result);
-      const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
+      const rows = getTableDisplayRowsForExport(result);
       rows.forEach((row, rowOffset) => {
         tableRows.push(xlsxRow(tableRowIndex, row, rowOffset === 0 ? 2 : 1));
         tableRowIndex += 1;
@@ -1905,6 +1969,16 @@ function HomeWorkspace() {
   const requestExport = (type: ExportFormat) => {
     setIsExportMenuOpen(false);
     void runExport(type);
+  };
+
+  const handleOpenDefaultExport = () => {
+    setExportFormat("word");
+    setExportContent({
+      text: availableExportContent.text,
+      tables: availableExportContent.tables,
+      images: availableExportContent.images,
+    });
+    setIsExportMenuOpen(true);
   };
 
   const handleOpenExportJson = () => {
@@ -2413,7 +2487,7 @@ function HomeWorkspace() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => setIsExportMenuOpen(true)}
+                  onClick={handleOpenDefaultExport}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
                 >
                   Export
