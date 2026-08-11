@@ -658,6 +658,7 @@ const getTableExportConfigForRows = (
     selectedColumns: rawSelected.filter((index) => index >= 0 && index < headerCount),
     includeDataRows: result.tableExport?.includeDataRows !== false,
     includeSummary: result.tableExport?.includeSummary !== false,
+    showRowNumber: result.tableExport?.showRowNumber !== false,
   };
 };
 
@@ -807,15 +808,19 @@ const tableRowsToKeyValueDisplayRows = (
   selectedColumns: number[],
   structured?: StructuredTableResult | null,
   includeDataRows = true,
-  includeSummary = true
+  includeSummary = true,
+  showRowNumber = true
 ) => {
   const records = tableRowsToKeyValueRecords(rows, selectedColumns, structured, includeDataRows);
   const summaryPairs = includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
-  const dataRows = records.flatMap((record, recordIndex) => [
-    ["ลำดับที่", String(recordIndex + 1)],
-    ...Object.entries(record.values).map(([key, value]) => [key, String(value ?? "")]),
-    ["", ""],
-  ]);
+  const dataRows = records.flatMap((record, recordIndex) => {
+    const valueRows = Object.entries(record.values).map(([key, value]) => [key, String(value ?? "")]);
+    return [
+      ...(showRowNumber ? [["แถวที่", String(recordIndex + 1)]] : []),
+      ...valueRows,
+      ["", ""],
+    ];
+  });
   const summaryRows = summaryPairs.length > 0
     ? [["ส่วนสรุป", ""], ...summaryPairs.map((pair) => [pair.key, pair.value])]
     : [];
@@ -1636,6 +1641,7 @@ function HomeWorkspace() {
             keys: tableExportConfig.selectedColumns.map((columnIndex) => rows[0]?.[columnIndex] || `Column ${columnIndex + 1}`),
             includeDataRows: tableExportConfig.includeDataRows,
             includeSummary: tableExportConfig.includeSummary,
+            showRowNumber: tableExportConfig.showRowNumber,
             records: tableRowsToKeyValueRecords(rows, tableExportConfig.selectedColumns, structured, tableExportConfig.includeDataRows),
             summary: tableExportConfig.includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [],
           });
@@ -1743,7 +1749,8 @@ function HomeWorkspace() {
       tableExportConfig.selectedColumns,
       structured,
       tableExportConfig.includeDataRows,
-      tableExportConfig.includeSummary
+      tableExportConfig.includeSummary,
+      tableExportConfig.showRowNumber
     );
   };
 
@@ -1761,7 +1768,7 @@ function HomeWorkspace() {
       const summaryPairs = tableExportConfig.includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
       const recordHtml = records.map((record, recordIndex) => {
         const lines = [
-          `<p><strong>ลำดับที่</strong> : ${recordIndex + 1}</p>`,
+          ...(tableExportConfig.showRowNumber ? [`<p><strong>แถวที่</strong> : ${recordIndex + 1}</p>`] : []),
           ...Object.entries(record.values).map(([key, value]) => `<p><strong>${escapeHtml(key)}</strong> : ${escapeHtml(value)}</p>`),
         ].join("");
         return `<div class="kv-record">${lines}</div>`;
@@ -2376,6 +2383,16 @@ function HomeWorkspace() {
                         <span className="block text-xs font-black text-blue-950">ส่วนตารางเนื้อหา</span>
                         <span className="mt-0.5 block text-[10px] font-semibold text-blue-700">ใช้ data rows สร้าง Row N -&gt; key : value</span>
                       </span>
+                    </label>
+                    <label className="mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-blue-100 bg-white px-2.5 py-1.5 text-[11px] font-bold text-blue-800">
+                      <input
+                        type="checkbox"
+                        checked={config.showRowNumber}
+                        onChange={() => patchConfig({ showRowNumber: !config.showRowNumber })}
+                        disabled={!config.includeDataRows}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                      />
+                      แสดงแถวที่
                     </label>
                     <p className="mb-2 mt-3 text-[10px] font-black uppercase tracking-wide text-slate-500">Column จาก row แรก</p>
                     {headerColumns.length > 0 ? (

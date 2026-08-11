@@ -49,6 +49,7 @@ export interface TableExportConfig {
   selectedColumns?: number[];
   includeDataRows?: boolean;
   includeSummary?: boolean;
+  showRowNumber?: boolean;
 }
 
 export interface StructuredTableCell {
