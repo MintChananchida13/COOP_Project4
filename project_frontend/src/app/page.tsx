@@ -811,13 +811,15 @@ const tableRowsToKeyValueDisplayRows = (
 ) => {
   const records = tableRowsToKeyValueRecords(rows, selectedColumns, structured, includeDataRows);
   const summaryPairs = includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
-  return [
-    ["Row", "Key", "Value"],
-    ...records.flatMap((record) =>
-      Object.entries(record.values).map(([key, value]) => [`Row ${record.row}`, key, String(value ?? "")])
-    ),
-    ...(summaryPairs.length > 0 ? [["Summary", "", ""], ...summaryPairs.map((pair) => ["Summary", pair.key, pair.value])] : []),
-  ];
+  const dataRows = records.flatMap((record, recordIndex) => [
+    ["ลำดับที่", String(recordIndex + 1)],
+    ...Object.entries(record.values).map(([key, value]) => [key, String(value ?? "")]),
+    ["", ""],
+  ]);
+  const summaryRows = summaryPairs.length > 0
+    ? [["ส่วนสรุป", ""], ...summaryPairs.map((pair) => [pair.key, pair.value])]
+    : [];
+  return [...dataRows, ...summaryRows];
 };
 
 const rowsFromStructuredCells = (structured?: StructuredTableResult | null): string[][] | null => {
@@ -1750,18 +1752,24 @@ function HomeWorkspace() {
     const rows = structured?.rows || parseExportTable(result.extractedText || "") || [];
     const tableExportConfig = getTableExportConfigForRows(result, rows);
     if (tableExportConfig.mode === "key_value") {
-      const displayRows = tableRowsToKeyValueDisplayRows(
+      const records = tableRowsToKeyValueRecords(
         rows,
         tableExportConfig.selectedColumns,
         structured,
-        tableExportConfig.includeDataRows,
-        tableExportConfig.includeSummary
+        tableExportConfig.includeDataRows
       );
-      const rowsHtml = displayRows.map((row, rowIndex) => {
-        const tag = rowIndex === 0 ? "th" : "td";
-        return `<tr>${row.map((cell) => `<${tag}>${escapeHtml(cell)}</${tag}>`).join("")}</tr>`;
+      const summaryPairs = tableExportConfig.includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
+      const recordHtml = records.map((record, recordIndex) => {
+        const lines = [
+          `<p><strong>ลำดับที่</strong> : ${recordIndex + 1}</p>`,
+          ...Object.entries(record.values).map(([key, value]) => `<p><strong>${escapeHtml(key)}</strong> : ${escapeHtml(value)}</p>`),
+        ].join("");
+        return `<div class="kv-record">${lines}</div>`;
       }).join("");
-      return `<table>${rowsHtml}</table>`;
+      const summaryHtml = summaryPairs.length > 0
+        ? `<div class="kv-summary"><h4>ส่วนสรุป</h4>${summaryPairs.map((pair) => `<p><strong>${escapeHtml(pair.key)}</strong> : ${escapeHtml(pair.value)}</p>`).join("")}</div>`
+        : "";
+      return recordHtml || summaryHtml ? `<div class="kv-table">${recordHtml}${summaryHtml}</div>` : "<p>-</p>";
     }
     if (!structured?.cells?.length) return `<p>${escapeHtml(result.extractedText)}</p>`;
     const headerRows = structured.headerRowCount ?? 1;
@@ -1856,7 +1864,7 @@ function HomeWorkspace() {
     }).join("");
 
     const title = options.showDocumentTitle ? `<h1>${escapeHtml(matchedTemplate?.name || "OCR Export")}</h1>` : "";
-    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}</style></head><body>${title}${body || "<p>No content selected</p>"}</body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;font-size:12pt}h1{font-size:18pt}h2{font-size:13pt;margin-top:18px}table{border-collapse:collapse;margin:8px 0 16px;width:100%}td,th{border:1px solid #999;padding:6px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5f9}.kv-record{border-bottom:1px solid #e5e7eb;margin:0 0 10px;padding:0 0 8px}.kv-record p,.kv-summary p{margin:3px 0}.kv-summary{background:#f8fafc;border:1px solid #e5e7eb;margin-top:10px;padding:8px}.kv-summary h4{margin:0 0 6px;font-size:11pt}</style></head><body>${title}${body || "<p>No content selected</p>"}</body></html>`;
   };
 
   const buildExcelHtml = async (
@@ -1903,7 +1911,7 @@ function HomeWorkspace() {
       const header = `<tr>${options.showFieldNames ? "<th>Field</th>" : ""}<th>Image</th><th>Filename</th><th>Page</th></tr>`;
       sections.push(`<h3>Images</h3><table>${header}${rows || `<tr><td colspan="${options.showFieldNames ? 4 : 3}">No image fields</td></tr>`}</table>`);
     }
-    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}h1{font-size:18pt;text-align:left}h3{font-size:12pt;margin-top:16px;text-align:left}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap;text-align:left;mso-number-format:"\\@";}th{background:#e2e8f0;font-weight:bold}img{display:block}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}h1{font-size:18pt;text-align:left}h3{font-size:12pt;margin-top:16px;text-align:left}table{border-collapse:collapse;margin-bottom:18px}td,th{border:1px solid #999;padding:5px;vertical-align:top;white-space:pre-wrap;text-align:left;mso-number-format:"\\@";}th{background:#e2e8f0;font-weight:bold}img{display:block}.kv-record{border-bottom:1px solid #e5e7eb;margin:0 0 10px;padding:0 0 8px}.kv-record p,.kv-summary p{margin:3px 0}.kv-summary{background:#f8fafc;border:1px solid #e5e7eb;margin-top:10px;padding:8px}.kv-summary h4{margin:0 0 6px;font-size:11pt}</style></head><body>${sections.join("") || "<p>No content selected</p>"}</body></html>`;
   };
 
   const buildExcelXlsxBlob = async (
@@ -2299,15 +2307,32 @@ function HomeWorkspace() {
     );
   };
 
+  const tableResultsForExport = exportPreviewResults.filter((result) => getResultFieldType(result) === "table");
+  const tableExportMode =
+    tableResultsForExport.length > 0 && tableResultsForExport.every((result) => {
+      const structured = getStructuredTableForExport(result);
+      const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
+      return getTableExportConfigForRows(result, rows).mode === "key_value";
+    })
+      ? "key_value"
+      : "structure";
+  const showTableExportConfigPanel = exportContent.tables && tableExportMode === "key_value" && tableResultsForExport.length > 0;
+
+  const setAllTableExportMode = (mode: TableExportConfig["mode"]) => {
+    setOcrResults((previous) =>
+      previous.map((result) => {
+        if (getResultFieldType(result) !== "table") return result;
+        const structured = getStructuredTableForExport(result);
+        const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
+        const config = getTableExportConfigForRows(result, rows);
+        return { ...result, tableExport: { ...config, mode } };
+      })
+    );
+  };
+
   const renderTableExportConfigPanel = () => {
-    const tableResults = exportPreviewResults.filter((result) => getResultFieldType(result) === "table");
-    if (!exportContent.tables || tableResults.length === 0) {
-      return (
-        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-xs font-bold text-slate-500">
-          เลือก Tables ในข้อมูลที่ต้องการส่งออก เพื่อกำหนดรูปแบบตาราง
-        </div>
-      );
-    }
+    const tableResults = tableResultsForExport;
+    if (!showTableExportConfigPanel) return null;
 
     return (
       <div className="space-y-3">
@@ -2316,7 +2341,6 @@ function HomeWorkspace() {
           const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
           const config = getTableExportConfigForRows(result, rows);
           const headerColumns = rows[0] || [];
-          const records = tableRowsToKeyValueRecords(rows, config.selectedColumns, structured, config.includeDataRows);
           const summaryPairs = tableRowsToSummaryKeyValuePairs(rows, structured);
           const patchConfig = (patch: Partial<TableExportConfig>) =>
             updateTableExportConfig(result.id, { ...config, ...patch });
@@ -2339,25 +2363,7 @@ function HomeWorkspace() {
                 </span>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {(["structure", "key_value"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => patchConfig({ mode })}
-                    className={`rounded-lg border px-3 py-2 text-[11px] font-black transition-colors ${
-                      config.mode === mode
-                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    {mode === "structure" ? "Structure" : "Key-Value"}
-                  </button>
-                ))}
-              </div>
-
-              {config.mode === "key_value" && (
-                <div className="mt-3 space-y-3">
+              <div className="mt-3 space-y-3">
                   <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
                     <label className="flex cursor-pointer items-start gap-2">
                       <input
@@ -2373,11 +2379,11 @@ function HomeWorkspace() {
                     </label>
                     <p className="mb-2 mt-3 text-[10px] font-black uppercase tracking-wide text-slate-500">Column จาก row แรก</p>
                     {headerColumns.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
+                      <div className="space-y-2">
                         {headerColumns.map((header, columnIndex) => (
                           <label
                             key={`${result.id}-export-column-${columnIndex}`}
-                            className={`inline-flex max-w-full cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+                            className={`flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
                               config.selectedColumns.includes(columnIndex)
                                 ? "border-indigo-200 bg-indigo-50 text-indigo-700"
                                 : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
@@ -2399,32 +2405,6 @@ function HomeWorkspace() {
                         ยังไม่มี header ใน row แรกสำหรับสร้าง Key-Value
                       </p>
                     )}
-
-                    <p className="mb-2 mt-3 text-[10px] font-black uppercase tracking-wide text-slate-500">Preview ส่วนตารางเนื้อหา</p>
-                    <div className="max-h-56 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
-                      {!config.includeDataRows ? (
-                        <p className="px-2 py-1 text-[11px] font-semibold text-slate-400">ไม่ได้เลือกส่งออกส่วนตารางเนื้อหา</p>
-                      ) : config.selectedColumns.length === 0 ? (
-                        <p className="px-2 py-1 text-[11px] font-semibold text-slate-400">ยังไม่ได้เลือก column สำหรับ export</p>
-                      ) : records.length === 0 ? (
-                        <p className="px-2 py-1 text-[11px] font-semibold text-slate-400">ไม่มี data row สำหรับ Preview</p>
-                      ) : (
-                        records.map((record) => (
-                          <div key={`${result.id}-record-${record.row}`} className="border-b border-slate-200 px-2 py-1.5 last:border-b-0">
-                            <p className="text-[11px] font-black text-slate-700">Row {record.row}</p>
-                            <div className="mt-1 space-y-0.5">
-                              {Object.entries(record.values).map(([key, value]) => (
-                                <p key={`${result.id}-${record.row}-${key}`} className="break-words text-[11px] font-medium text-slate-600">
-                                  <span className="font-bold text-slate-800">{key}</span>
-                                  <span className="px-1 text-slate-400">:</span>
-                                  <span>{String(value || "-")}</span>
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
                   </div>
 
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">
@@ -2458,8 +2438,7 @@ function HomeWorkspace() {
                       )}
                     </div>
                   </div>
-                </div>
-              )}
+              </div>
             </section>
           );
         })}
@@ -2883,8 +2862,8 @@ function HomeWorkspace() {
             />
             {isExportMenuOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                <section className="flex max-h-[90vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-                  <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+                <section className="flex h-[min(860px,90vh)] w-[min(1280px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="flex h-[88px] shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Preview</h2>
                       <p className="mt-1 text-xs font-semibold text-slate-500">
@@ -2900,7 +2879,11 @@ function HomeWorkspace() {
                     </button>
                   </div>
 
-                  <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[280px_340px_minmax(0,1fr)]">
+                  <div className={`grid min-h-0 flex-1 gap-0 overflow-hidden ${
+                    showTableExportConfigPanel
+                      ? "lg:grid-cols-[280px_340px_minmax(0,1fr)]"
+                      : "lg:grid-cols-[280px_minmax(0,1fr)]"
+                  }`}>
                     <aside className="space-y-5 overflow-auto border-b border-slate-200 bg-slate-50 p-5 lg:border-b-0 lg:border-r">
                       <div>
                         <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">รูปแบบไฟล์</p>
@@ -2931,15 +2914,35 @@ function HomeWorkspace() {
                             </div>
                           )}
                           {exportContentChoices.map(({ key, label }) => (
-                            <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
-                              <input
-                                type="checkbox"
-                                checked={exportContent[key]}
-                                onChange={() => toggleExportContent(key)}
-                                className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                              />
-                              {label}
-                            </label>
+                            <div key={key} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={exportContent[key]}
+                                  onChange={() => toggleExportContent(key)}
+                                  className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                                />
+                                {label}
+                              </label>
+                              {key === "tables" && exportContent.tables && (
+                                <div className="mt-2 grid grid-cols-2 gap-2 pl-6">
+                                  {(["structure", "key_value"] as const).map((mode) => (
+                                    <button
+                                      key={mode}
+                                      type="button"
+                                      onClick={() => setAllTableExportMode(mode)}
+                                      className={`rounded-lg border px-2 py-1.5 text-[10px] font-black transition-colors ${
+                                        tableExportMode === mode
+                                          ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                          : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                                      }`}
+                                    >
+                                      {mode === "structure" ? "Structure" : "Key-Value"}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -2965,16 +2968,18 @@ function HomeWorkspace() {
                       </div>
                     </aside>
 
-                    <aside className="min-h-0 overflow-auto border-b border-slate-200 bg-white p-5 lg:border-b-0 lg:border-r">
-                      <div className="mb-3">
-                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Table Export</p>
-                        <h3 className="mt-1 text-sm font-black text-slate-950">Structure / Key-Value</h3>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          แสดงเมื่อเลือก Tables และใช้ row แรกเป็น key สำหรับ Key-Value
-                        </p>
-                      </div>
-                      {renderTableExportConfigPanel()}
-                    </aside>
+                    {showTableExportConfigPanel && (
+                      <aside className="min-h-0 overflow-auto border-b border-slate-200 bg-white p-5 lg:border-b-0 lg:border-r">
+                        <div className="mb-3">
+                          <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Table Export</p>
+                          <h3 className="mt-1 text-sm font-black text-slate-950">Key-Value Columns</h3>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            เลือกส่วนตารางเนื้อหา ส่วนสรุป และ column ที่ต้องการ export
+                          </p>
+                        </div>
+                        {renderTableExportConfigPanel()}
+                      </aside>
+                    )}
 
                     <div className="min-h-0 overflow-auto bg-slate-100 p-5">
                       <div className="mb-3 flex items-center justify-between gap-3">
@@ -2990,7 +2995,7 @@ function HomeWorkspace() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex h-[72px] shrink-0 flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
 
                     <button
                       type="button"
