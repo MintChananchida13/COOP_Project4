@@ -47,6 +47,7 @@ export type TableExportMode = 'structure' | 'key_value';
 export interface TableExportConfig {
   mode: TableExportMode;
   selectedColumns?: number[];
+  selectedRows?: number[];
   includeDataRows?: boolean;
   includeSummary?: boolean;
   showRowNumber?: boolean;

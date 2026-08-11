@@ -653,22 +653,37 @@ const getEffectiveHeaderRowCount = (rows: string[][], structured?: StructuredTab
 
   for (let rowIndex = 0; rowIndex < effectiveHeaderRowCount; rowIndex += 1) {
     const parentCells = cells.filter((cell) => cell.row === rowIndex && (cell.colSpan ?? 1) > 1);
-    for (const parentCell of parentCells) {
-      const nextRowIndex = rowIndex + 1;
-      if (nextRowIndex >= rows.length) continue;
-      const startCol = Math.max(0, Number(parentCell.col ?? 0));
-      const endCol = startCol + Math.max(1, Number(parentCell.colSpan ?? 1));
+    if (parentCells.length === 0) continue;
+
+    const nextRowIndex = rowIndex + 1;
+    if (nextRowIndex >= rows.length) continue;
+
+    const parentRanges = parentCells.map((cell) => {
+      const startCol = Math.max(0, Number(cell.col ?? 0));
+      return {
+        startCol,
+        endCol: startCol + Math.max(1, Number(cell.colSpan ?? 1)),
+      };
+    });
+    const isInsideParentRange = (colIndex: number) =>
+      parentRanges.some((range) => colIndex >= range.startCol && colIndex < range.endCol);
+    const childTextCount = parentRanges.reduce((count, range) => {
       const childCells = cells.filter((cell) => {
         if (cell.row !== nextRowIndex) return false;
         const col = Math.max(0, Number(cell.col ?? 0));
-        return col >= startCol && col < endCol && hasMeaningfulTableText(cell.groundTruth ?? cell.text ?? cell.ocrText);
+        return col >= range.startCol && col < range.endCol && hasMeaningfulTableText(cell.groundTruth ?? cell.text ?? cell.ocrText);
       });
       const rowChildTexts = (rows[nextRowIndex] || [])
-        .slice(startCol, endCol)
+        .slice(range.startCol, range.endCol)
         .filter(hasMeaningfulTableText);
-      if (childCells.length > 0 || rowChildTexts.length > 0) {
-        effectiveHeaderRowCount = Math.max(effectiveHeaderRowCount, nextRowIndex + 1);
-      }
+      return count + Math.max(childCells.length, rowChildTexts.length);
+    }, 0);
+    const outsideTextCount = (rows[nextRowIndex] || []).filter((cell, colIndex) =>
+      !isInsideParentRange(colIndex) && hasMeaningfulTableText(cell)
+    ).length;
+
+    if (childTextCount >= 2 && outsideTextCount === 0) {
+      effectiveHeaderRowCount = Math.max(effectiveHeaderRowCount, nextRowIndex + 1);
     }
   }
 
@@ -723,7 +738,7 @@ const getTableExportConfigForRows = (
   result: OCRResult & { pageIndex?: number },
   rows: string[][],
   structured?: StructuredTableResult | null
-): TableExportConfig & { selectedColumns: number[]; includeDataRows: boolean; includeSummary: boolean; showRowNumber: boolean } => {
+): TableExportConfig & { selectedColumns: number[]; selectedRows?: number[]; includeDataRows: boolean; includeSummary: boolean; showRowNumber: boolean } => {
   const headerCount = resolveTableHeaderKeys(rows, structured).length;
   const allColumns = Array.from({ length: headerCount }, (_, index) => index);
   const rawSelected = Array.isArray(result.tableExport?.selectedColumns)
@@ -732,6 +747,7 @@ const getTableExportConfigForRows = (
   return {
     mode: result.tableExport?.mode === "key_value" ? "key_value" : "structure",
     selectedColumns: rawSelected.filter((index) => index >= 0 && index < headerCount),
+    selectedRows: Array.isArray(result.tableExport?.selectedRows) ? result.tableExport.selectedRows : undefined,
     includeDataRows: result.tableExport?.includeDataRows !== false,
     includeSummary: result.tableExport?.includeSummary !== false,
     showRowNumber: result.tableExport?.showRowNumber !== false,
@@ -926,16 +942,19 @@ const tableRowsToKeyValueRecords = (
   rows: string[][],
   selectedColumns: number[],
   structured?: StructuredTableResult | null,
-  includeDataRows = true
+  includeDataRows = true,
+  selectedRows?: number[]
 ) => {
   if (!includeDataRows) return [];
   const headers = resolveTableHeaderKeys(rows, structured);
   const headerRowCount = getEffectiveHeaderRowCount(rows, structured);
   const rowKinds = classifyTableRowsForKeyValue(rows, structured);
   const summaryRegion = detectTableSummaryRegion(rows, structured);
+  const selectedRowSet = Array.isArray(selectedRows) ? new Set(selectedRows) : null;
   return rows.slice(headerRowCount).map((row, rowOffset) => {
     const rowIndex = headerRowCount + rowOffset;
     return {
+      rowIndex,
       row: rowIndex + 1,
       rowType: summaryRegion.rows.has(rowIndex) ? "summary" : rowKinds[rowIndex],
       values: Object.fromEntries(
@@ -945,8 +964,16 @@ const tableRowsToKeyValueRecords = (
         ])
       ),
     };
-  }).filter((record) => record.rowType === "data");
+  }).filter((record) => record.rowType === "data" && (!selectedRowSet || selectedRowSet.has(record.rowIndex)));
 };
+
+const getTableKeyValueDataRows = (rows: string[][], structured?: StructuredTableResult | null) =>
+  tableRowsToKeyValueRecords(
+    rows,
+    resolveTableHeaderKeys(rows, structured).map((_, index) => index),
+    structured,
+    true
+  ).map((record) => ({ rowIndex: record.rowIndex, label: `แถวที่ ${record.row}` }));
 
 const tableRowsToSummaryKeyValuePairs = (rows: string[][], structured?: StructuredTableResult | null) =>
   detectTableSummaryRegion(rows, structured).pairs.map((pair) => ({
@@ -961,9 +988,10 @@ const tableRowsToKeyValueDisplayRows = (
   structured?: StructuredTableResult | null,
   includeDataRows = true,
   includeSummary = true,
-  showRowNumber = true
+  showRowNumber = true,
+  selectedRows?: number[]
 ) => {
-  const records = tableRowsToKeyValueRecords(rows, selectedColumns, structured, includeDataRows);
+  const records = tableRowsToKeyValueRecords(rows, selectedColumns, structured, includeDataRows, selectedRows);
   const summaryPairs = includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
   const dataRows = records.flatMap((record, recordIndex) => {
     const valueRows = Object.entries(record.values).map(([key, value]) => [key, String(value ?? "")]);
@@ -1200,6 +1228,7 @@ function HomeWorkspace() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("word");
   const [exportContent, setExportContent] = useState<ExportContentOptions>({ text: true, tables: true, images: true });
   const [exportOptions, setExportOptions] = useState<ExportDisplayOptions>({ showFieldNames: true, showDocumentTitle: true });
+  const [openTableExportDropdown, setOpenTableExportDropdown] = useState<string | null>(null);
   const [excelExportMode, setExcelExportMode] = useState<"fields" | "tables" | "fields_tables">("fields_tables");
   const [textPreviewCopyStatus, setTextPreviewCopyStatus] = useState<string>("");
   const [matchedTemplate, setMatchedTemplate] = useState<{
@@ -1209,6 +1238,7 @@ function HomeWorkspace() {
     decisionReason?: string | null;
     alignmentStatus?: string | null;
   } | null>(null);
+  const tableExportDropdownRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const session = readAuthSession();
@@ -1223,6 +1253,23 @@ function HomeWorkspace() {
     clearAuthSession();
     router.replace("/login");
   };
+
+  useEffect(() => {
+    if (!openTableExportDropdown) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (tableExportDropdownRef.current?.contains(event.target as Node)) return;
+      setOpenTableExportDropdown(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenTableExportDropdown(null);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openTableExportDropdown]);
 
   const handleUploadSuccess = (urls: string[], sourceFileName?: string, sourceFileType?: "pdf" | "image", sourceFile?: File) => {
     setUploadedSourceFileId(`user_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
@@ -1795,7 +1842,8 @@ function HomeWorkspace() {
             includeDataRows: tableExportConfig.includeDataRows,
             includeSummary: tableExportConfig.includeSummary,
             showRowNumber: tableExportConfig.showRowNumber,
-            records: tableRowsToKeyValueRecords(rows, tableExportConfig.selectedColumns, structured, tableExportConfig.includeDataRows),
+            selectedRows: tableExportConfig.selectedRows,
+            records: tableRowsToKeyValueRecords(rows, tableExportConfig.selectedColumns, structured, tableExportConfig.includeDataRows, tableExportConfig.selectedRows),
             summary: tableExportConfig.includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [],
           });
           return;
@@ -1903,7 +1951,8 @@ function HomeWorkspace() {
       structured,
       tableExportConfig.includeDataRows,
       tableExportConfig.includeSummary,
-      tableExportConfig.showRowNumber
+      tableExportConfig.showRowNumber,
+      tableExportConfig.selectedRows
     );
   };
 
@@ -1916,7 +1965,8 @@ function HomeWorkspace() {
         rows,
         tableExportConfig.selectedColumns,
         structured,
-        tableExportConfig.includeDataRows
+        tableExportConfig.includeDataRows,
+        tableExportConfig.selectedRows
       );
       const summaryPairs = tableExportConfig.includeSummary ? tableRowsToSummaryKeyValuePairs(rows, structured) : [];
       const recordHtml = records.map((record, recordIndex) => {
@@ -2527,19 +2577,44 @@ function HomeWorkspace() {
     if (!showTableExportConfigPanel) return null;
 
     return (
-      <div className="space-y-3">
+      <div ref={tableExportDropdownRef} className="space-y-3">
         {tableResults.map((result) => {
           const structured = getStructuredTableForExport(result);
           const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
           const config = getTableExportConfigForRows(result, rows, structured);
           const headerColumns = resolveTableHeaderKeys(rows, structured);
+          const dataRowOptions = getTableKeyValueDataRows(rows, structured);
+          const selectedRowIndexes = Array.isArray(config.selectedRows) ? config.selectedRows : dataRowOptions.map((row) => row.rowIndex);
+          const selectedColumnIndexes = config.selectedColumns;
+          const rowDropdownKey = `${result.id}:rows`;
+          const columnDropdownKey = `${result.id}:columns`;
+          const rowStatus =
+            selectedRowIndexes.length === dataRowOptions.length
+              ? `ทุกแถว (${dataRowOptions.length})`
+              : `เลือก ${selectedRowIndexes.length}/${dataRowOptions.length} แถว`;
+          const columnStatus =
+            selectedColumnIndexes.length === headerColumns.length
+              ? `ทุกคอลัมน์ (${headerColumns.length})`
+              : `เลือก ${selectedColumnIndexes.length}/${headerColumns.length} คอลัมน์`;
           const summaryPairs = tableRowsToSummaryKeyValuePairs(rows, structured);
           const patchConfig = (patch: Partial<TableExportConfig>) =>
             updateTableExportConfig(result.id, { ...config, ...patch });
+          const setAllRowsSelected = (checked: boolean) => {
+            patchConfig({ mode: "key_value", selectedRows: checked ? dataRowOptions.map((row) => row.rowIndex) : [] });
+          };
+          const setAllColumnsSelected = (checked: boolean) => {
+            patchConfig({ mode: "key_value", selectedColumns: checked ? headerColumns.map((_, index) => index) : [] });
+          };
+          const toggleRow = (rowIndex: number) => {
+            const nextRows = selectedRowIndexes.includes(rowIndex)
+              ? selectedRowIndexes.filter((index) => index !== rowIndex)
+              : [...selectedRowIndexes, rowIndex].sort((left, right) => left - right);
+            patchConfig({ mode: "key_value", selectedRows: nextRows });
+          };
           const toggleColumn = (columnIndex: number) => {
-            const nextColumns = config.selectedColumns.includes(columnIndex)
-              ? config.selectedColumns.filter((index) => index !== columnIndex)
-              : [...config.selectedColumns, columnIndex].sort((left, right) => left - right);
+            const nextColumns = selectedColumnIndexes.includes(columnIndex)
+              ? selectedColumnIndexes.filter((index) => index !== columnIndex)
+              : [...selectedColumnIndexes, columnIndex].sort((left, right) => left - right);
             patchConfig({ mode: "key_value", selectedColumns: nextColumns });
           };
 
@@ -2579,34 +2654,81 @@ function HomeWorkspace() {
                       />
                       แสดงแถวที่
                     </label>
-                    <p className="mb-2 mt-3 text-[10px] font-black uppercase tracking-wide text-slate-500">Column จาก row แรก</p>
-                    {headerColumns.length > 0 ? (
-                      <div className="space-y-2">
-                        {headerColumns.map((header, columnIndex) => (
-                          <label
-                            key={`${result.id}-export-column-${columnIndex}`}
-                            className={`flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
-                              config.selectedColumns.includes(columnIndex)
-                                ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                                : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={config.selectedColumns.includes(columnIndex)}
-                              onChange={() => toggleColumn(columnIndex)}
-                              disabled={!config.includeDataRows}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="truncate">{header || `Column ${columnIndex + 1}`}</span>
-                          </label>
-                        ))}
+                    <div className="mt-3 grid gap-2">
+                      <div className="relative">
+                        <button
+                          type="button"
+                          disabled={!config.includeDataRows}
+                          onClick={() => setOpenTableExportDropdown((current) => current === rowDropdownKey ? null : rowDropdownKey)}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-[11px] font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <span>Row</span>
+                          <span className="truncate text-slate-500">{rowStatus}</span>
+                        </button>
+                        {openTableExportDropdown === rowDropdownKey && (
+                          <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
+                            <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={selectedRowIndexes.length === dataRowOptions.length}
+                                onChange={(event) => setAllRowsSelected(event.target.checked)}
+                                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                              />
+                              เลือกทั้งหมด
+                            </label>
+                            <div className="my-1 border-t border-slate-100" />
+                            {dataRowOptions.map((row) => (
+                              <label key={`${result.id}-row-${row.rowIndex}`} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRowIndexes.includes(row.rowIndex)}
+                                  onChange={() => toggleRow(row.rowIndex)}
+                                  className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                                />
+                                {row.label}
+                              </label>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
-                        ยังไม่มี header ใน row แรกสำหรับสร้าง Key-Value
-                      </p>
-                    )}
+
+                      <div className="relative">
+                        <button
+                          type="button"
+                          disabled={!config.includeDataRows}
+                          onClick={() => setOpenTableExportDropdown((current) => current === columnDropdownKey ? null : columnDropdownKey)}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-[11px] font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <span>Column</span>
+                          <span className="truncate text-slate-500">{columnStatus}</span>
+                        </button>
+                        {openTableExportDropdown === columnDropdownKey && (
+                          <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
+                            <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={selectedColumnIndexes.length === headerColumns.length}
+                                onChange={(event) => setAllColumnsSelected(event.target.checked)}
+                                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                              />
+                              เลือกทั้งหมด
+                            </label>
+                            <div className="my-1 border-t border-slate-100" />
+                            {headerColumns.map((header, columnIndex) => (
+                              <label key={`${result.id}-export-column-${columnIndex}`} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedColumnIndexes.includes(columnIndex)}
+                                  onChange={() => toggleColumn(columnIndex)}
+                                  className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                                />
+                                <span className="truncate">{header || `Column ${columnIndex + 1}`}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">

@@ -706,9 +706,7 @@ const EditableTableResult = ({
   const updateCell = (rowIndex: number, cellIndex: number, nextValue: string) => {
     const nextRows = rows.map(row => [...row]);
     nextRows[rowIndex][cellIndex] = nextValue;
-    const nextColumnWidths = [...columnWidths];
-    nextColumnWidths[cellIndex] = getAutoFitColumnWidth(nextRows, cellIndex, headerRowCount);
-    commitSnapshot({ rows: nextRows, mergedCells: merged, columnWidths: nextColumnWidths, headerRowCount });
+    commitSnapshot({ rows: nextRows, mergedCells: merged, columnWidths, headerRowCount });
   };
 
   const insertRow = (where: "above" | "below") => {
@@ -899,6 +897,10 @@ const EditableTableResult = ({
     const merge = getMergeAtAnchor(merged, rowIndex, cellIndex);
     const selected = isCellInSelection(rowIndex, cellIndex, selection);
     const Tag = rowIndex < headerRowCount ? "th" : "td";
+    const isHeaderCell = rowIndex < headerRowCount;
+    const isSubHeaderCell = isHeaderCell && rowIndex > 0;
+    const isMergedCell = Boolean(merge && ((merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1));
+    const centerCellContent = isHeaderCell || isMergedCell;
     const columnSpan = merge?.colSpan ?? 1;
     const cellWidth = columnWidths
       .slice(cellIndex, cellIndex + columnSpan)
@@ -909,8 +911,12 @@ const EditableTableResult = ({
         rowSpan={merge?.rowSpan}
         colSpan={merge?.colSpan}
         style={{ width: cellWidth, minWidth: cellWidth }}
-        className={`h-auto border p-1.5 align-top ${
-          selected ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400" : rowIndex < headerRowCount ? "border-slate-300 bg-slate-100" : "border-slate-300 bg-white"
+        className={`h-auto border p-1.5 ${centerCellContent ? "align-middle" : "align-top"} ${
+          selected
+            ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400"
+            : isHeaderCell || isMergedCell
+              ? "border-slate-300 bg-slate-100"
+              : "border-slate-300 bg-white"
         }`}
         onMouseDown={(event) => startDragSelection(event, rowIndex, cellIndex)}
         onMouseEnter={() => extendDragSelection(rowIndex, cellIndex)}
@@ -931,10 +937,12 @@ const EditableTableResult = ({
             updateCell(rowIndex, cellIndex, event.target.value);
           }}
           className={`block min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
-            rowIndex < headerRowCount ? "bg-white/80 font-black" : "bg-transparent font-medium"
+            centerCellContent ? "text-center align-middle" : "text-left"
+          } ${
+            isHeaderCell || isMergedCell ? "bg-white/80 font-black" : "bg-transparent font-medium"
           }`}
           rows={merge ? Math.max(1, merge.rowSpan) : 1}
-          placeholder={rowIndex < headerRowCount ? `Header ${rowIndex + 1}.${cellIndex + 1}` : ""}
+          placeholder={isHeaderCell ? `${isSubHeaderCell ? "Sub Header" : "Header"} ${rowIndex + 1}.${cellIndex + 1}` : ""}
           spellCheck={false}
           translate="no"
         />
