@@ -692,6 +692,15 @@ const classifyTableRowsForKeyValue = (
       .filter((cell) => !cell.hidden && ((cell.colSpan ?? 1) > 1 || (cell.rowSpan ?? 1) > 1))
       .map((cell) => cell.row)
   );
+  const spanScoreByRow = new Map<number, number>();
+  (structured?.cells || [])
+    .filter((cell) => !cell.hidden)
+    .forEach((cell) => {
+      const spanScore = Math.max(1, cell.colSpan ?? 1) * Math.max(1, cell.rowSpan ?? 1) - 1;
+      if (spanScore > 0) {
+        spanScoreByRow.set(cell.row, (spanScoreByRow.get(cell.row) || 0) + spanScore);
+      }
+    });
   const lastDataIndex = rows.length - 1;
 
   return rows.map((row, rowIndex) => {
@@ -723,53 +732,116 @@ const detectTableSummaryRegion = (
   const emptyResult: TableSummaryRegion = { detected: false, rows: new Set(), columns: new Set(), pairs: [] };
   const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
   const maxColumns = Math.max(...rows.map((row) => row.length), 1);
-  if (rows.length <= headerRowCount + 2 || maxColumns < 2) return emptyResult;
+  if (rows.length <= headerRowCount + 1 || maxColumns < 2) return emptyResult;
 
   const populatedCounts = rows.map((row) => row.filter(hasMeaningfulTableText).length);
-  const bodyCounts = populatedCounts.slice(headerRowCount).filter((count) => count > 0);
-  const typicalDataCount = medianNumber(bodyCounts);
-  const tailStart = Math.max(headerRowCount, Math.floor(rows.length * 0.6), rows.length - 6);
   const spannedRows = new Set(
     (structured?.cells || [])
       .filter((cell) => !cell.hidden && ((cell.colSpan ?? 1) > 1 || (cell.rowSpan ?? 1) > 1))
       .map((cell) => cell.row)
   );
-
-  const candidates = Array.from({ length: Math.max(0, maxColumns - 1) }, (_, labelCol) => {
-    const valueCol = labelCol + 1;
-    const pairs = rows
-      .map((row, rowIndex) => ({
-        row: rowIndex,
-        key: String(row[labelCol] ?? "").trim(),
-        value: String(row[valueCol] ?? "").trim(),
-      }))
-      .filter((pair) => pair.row >= tailStart && hasMeaningfulTableText(pair.key) && hasMeaningfulTableText(pair.value));
-    const rowsWithPair = pairs.map((pair) => pair.row);
-    const sparseRows = rowsWithPair.filter((rowIndex) => populatedCounts[rowIndex] <= Math.max(2, Math.ceil(Math.max(typicalDataCount, 1) * 0.65))).length;
-    const spanRows = rowsWithPair.filter((rowIndex) => spannedRows.has(rowIndex)).length;
-    const repeatedEvidence = pairs.length >= 2;
-    const nearRightEvidence = labelCol >= Math.floor(maxColumns * 0.45);
-    const sparseEvidence = sparseRows >= Math.max(1, Math.ceil(pairs.length * 0.5));
-    const spanEvidence = spanRows > 0;
-    const compactRegionEvidence = pairs.length > 0 && pairs.every((pair) => {
-      const populatedIndexes = rows[pair.row]
-        .map((cell, index) => (hasMeaningfulTableText(cell) ? index : -1))
-        .filter((index) => index >= 0);
-      return populatedIndexes.filter((index) => index >= labelCol && index <= valueCol).length >= 2;
+  const spanScoreByRow = new Map<number, number>();
+  (structured?.cells || [])
+    .filter((cell) => !cell.hidden)
+    .forEach((cell) => {
+      const spanScore = Math.max(1, cell.colSpan ?? 1) * Math.max(1, cell.rowSpan ?? 1) - 1;
+      if (spanScore > 0) {
+        spanScoreByRow.set(cell.row, (spanScoreByRow.get(cell.row) || 0) + spanScore);
+      }
     });
-    const evidence = [repeatedEvidence, nearRightEvidence, sparseEvidence, spanEvidence, compactRegionEvidence].filter(Boolean).length;
-    return { labelCol, valueCol, pairs, evidence };
+
+  const transitionStarts = rows
+    .map((_, rowIndex) => rowIndex)
+    .filter((rowIndex) => {
+      if (rowIndex <= headerRowCount || populatedCounts[rowIndex] === 0) return false;
+      const previousDataCounts = populatedCounts
+        .slice(headerRowCount, rowIndex)
+        .filter((count) => count > 0)
+        .slice(-5);
+      const previousTypicalCount = medianNumber(previousDataCounts);
+      const currentCount = populatedCounts[rowIndex];
+      return (
+        previousTypicalCount >= 3 &&
+        currentCount <= Math.max(2, Math.floor(previousTypicalCount * 0.6)) &&
+        previousTypicalCount - currentCount >= 2
+      );
+    });
+
+  const candidates = transitionStarts.flatMap((startRow) => {
+    const previousDataCounts = populatedCounts
+      .slice(headerRowCount, startRow)
+      .filter((count) => count > 0)
+      .slice(-5);
+    const previousTypicalCount = medianNumber(previousDataCounts);
+    const previousSpanScores = Array.from({ length: startRow - headerRowCount }, (_, index) => headerRowCount + index)
+      .filter((rowIndex) => populatedCounts[rowIndex] > 0)
+      .slice(-5)
+      .map((rowIndex) => spanScoreByRow.get(rowIndex) || 0);
+    const previousTypicalSpanScore = medianNumber(previousSpanScores);
+    const sparseLimit = Math.max(2, Math.floor(previousTypicalCount * 0.65));
+    const candidateRows: number[] = [];
+    for (let rowIndex = startRow; rowIndex < rows.length; rowIndex += 1) {
+      const populated = populatedCounts[rowIndex];
+      if (populated === 0) continue;
+      if (populated > sparseLimit && candidateRows.length > 0) break;
+      if (populated <= sparseLimit) candidateRows.push(rowIndex);
+    }
+
+    return Array.from({ length: Math.max(0, maxColumns - 1) }, (_, labelCol) =>
+      Array.from({ length: maxColumns - labelCol - 1 }, (_, offset) => {
+        const valueCol = labelCol + offset + 1;
+        const pairs = candidateRows
+          .map((rowIndex) => ({
+            row: rowIndex,
+            key: String(rows[rowIndex]?.[labelCol] ?? "").trim(),
+            value: String(rows[rowIndex]?.[valueCol] ?? "").trim(),
+          }))
+          .filter((pair) => hasMeaningfulTableText(pair.key) && hasMeaningfulTableText(pair.value));
+        const transitionEvidence = pairs.length > 0;
+        const nearTailEvidence = startRow >= Math.max(headerRowCount, Math.floor(rows.length * 0.55)) || startRow >= rows.length - 4;
+        const labelValueEvidence = pairs.length >= 1;
+        const continuityEvidence = pairs.length >= 2;
+        const spanEvidence = pairs.some((pair) => spannedRows.has(pair.row));
+        const spanStructureChangeEvidence = pairs.some((pair) => (spanScoreByRow.get(pair.row) || 0) > previousTypicalSpanScore);
+        const stableColumnsEvidence = pairs.every((pair) => hasMeaningfulTableText(rows[pair.row]?.[labelCol]) && hasMeaningfulTableText(rows[pair.row]?.[valueCol]));
+        const compactRegionEvidence = pairs.every((pair) => {
+          const populatedIndexes = rows[pair.row]
+            .map((cell, index) => (hasMeaningfulTableText(cell) ? index : -1))
+            .filter((index) => index >= 0);
+          const regionIndexes = populatedIndexes.filter((index) => index >= labelCol && index <= valueCol);
+          const leftIndexes = populatedIndexes.filter((index) => index < labelCol);
+          return regionIndexes.length >= 2 && leftIndexes.length <= 1;
+        });
+        const evidence = [
+          transitionEvidence,
+          nearTailEvidence,
+          labelValueEvidence,
+          continuityEvidence,
+          spanEvidence,
+          spanStructureChangeEvidence,
+          stableColumnsEvidence,
+          compactRegionEvidence,
+        ].filter(Boolean).length;
+        return { labelCol, valueCol, pairs, evidence, startRow, previousTypicalCount };
+      })
+    ).flat();
   });
 
   const best = candidates
-    .filter((candidate) => candidate.pairs.length >= 2 && candidate.evidence >= 3)
-    .sort((left, right) => right.evidence - left.evidence || right.pairs.length - left.pairs.length || right.labelCol - left.labelCol)[0];
+    .filter((candidate) => candidate.pairs.length >= 1 && candidate.evidence >= 4)
+    .sort((left, right) =>
+      right.evidence - left.evidence ||
+      right.pairs.length - left.pairs.length ||
+      right.previousTypicalCount - left.previousTypicalCount ||
+      right.valueCol - left.valueCol ||
+      right.labelCol - left.labelCol
+    )[0];
   if (!best) return emptyResult;
 
   return {
     detected: true,
     rows: new Set(best.pairs.map((pair) => pair.row)),
-    columns: new Set([best.labelCol, best.valueCol]),
+    columns: new Set(Array.from({ length: best.valueCol - best.labelCol + 1 }, (_, index) => best.labelCol + index)),
     pairs: best.pairs,
   };
 };
@@ -1932,65 +2004,97 @@ function HomeWorkspace() {
     const imageByResult = new Map(imageCrops.map((crop) => [crop.resultId, crop]));
     const encoder = new TextEncoder();
     const files: { name: string; bytes: Uint8Array }[] = [];
-    const sheetNames = ["Text", "Tables", "Images"];
+    const sheetDefs: { name: string; xml: string; relXml?: string; drawingXml?: string; drawingRelsXml?: string }[] = [];
 
     const worksheet = (rows: string, beforeSheetData = "", afterSheetData = "") =>
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="18"/>${beforeSheetData}<sheetData>${rows}</sheetData>${afterSheetData}</worksheet>`;
 
-    const textRows = [
-      ...(options.showDocumentTitle ? [xlsxRow(0, [matchedTemplate?.name || "OCR Export"], 2)] : []),
-      xlsxRow(options.showDocumentTitle ? 2 : 0, options.showFieldNames ? ["Field", "Ground Truth"] : ["Ground Truth"], 2),
-      ...textResults.map((result, index) =>
-        xlsxRow((options.showDocumentTitle ? 3 : 1) + index, options.showFieldNames ? [result.fieldName, result.extractedText] : [result.extractedText])
-      ),
-    ].join("");
-
-    const tableRows: string[] = [];
-    let tableRowIndex = 0;
-    if (options.showDocumentTitle) {
-      tableRows.push(xlsxRow(tableRowIndex, [matchedTemplate?.name || "OCR Export"], 2));
-      tableRowIndex += 2;
+    if (textResults.length > 0) {
+      const textRows = [
+        ...(options.showDocumentTitle ? [xlsxRow(0, [matchedTemplate?.name || "OCR Export"], 2)] : []),
+        xlsxRow(options.showDocumentTitle ? 2 : 0, options.showFieldNames ? ["Field", "Ground Truth"] : ["Ground Truth"], 2),
+        ...textResults.map((result, index) =>
+          xlsxRow((options.showDocumentTitle ? 3 : 1) + index, options.showFieldNames ? [result.fieldName, result.extractedText] : [result.extractedText])
+        ),
+      ].join("");
+      sheetDefs.push({
+        name: "Text",
+        xml: worksheet(textRows, `<cols><col min="1" max="1" width="28" customWidth="1"/><col min="2" max="2" width="64" customWidth="1"/></cols>`),
+      });
     }
-    tableResults.forEach((result) => {
-      if (options.showFieldNames) {
-        tableRows.push(xlsxRow(tableRowIndex, [result.fieldName], 2));
-        tableRowIndex += 1;
+
+    if (tableResults.length > 0) {
+      const tableRows: string[] = [];
+      let tableRowIndex = 0;
+      if (options.showDocumentTitle) {
+        tableRows.push(xlsxRow(tableRowIndex, [matchedTemplate?.name || "OCR Export"], 2));
+        tableRowIndex += 2;
       }
-      const rows = getTableDisplayRowsForExport(result);
-      rows.forEach((row, rowOffset) => {
-        tableRows.push(xlsxRow(tableRowIndex, row, rowOffset === 0 ? 2 : 1));
+      tableResults.forEach((result) => {
+        if (options.showFieldNames) {
+          tableRows.push(xlsxRow(tableRowIndex, [result.fieldName], 2));
+          tableRowIndex += 1;
+        }
+        const rows = getTableDisplayRowsForExport(result);
+        rows.forEach((row, rowOffset) => {
+          tableRows.push(xlsxRow(tableRowIndex, row, rowOffset === 0 ? 2 : 1));
+          tableRowIndex += 1;
+        });
         tableRowIndex += 1;
       });
-      tableRowIndex += 1;
-    });
+      sheetDefs.push({
+        name: "Tables",
+        xml: worksheet(tableRows.join(""), `<cols><col min="1" max="20" width="22" customWidth="1"/></cols>`),
+      });
+    }
 
-    const imageRows: string[] = [];
-    let imageRowIndex = 0;
-    imageRows.push(xlsxRow(imageRowIndex, options.showFieldNames ? ["Field", "Image", "Filename", "Page"] : ["Image", "Filename", "Page"], 2));
-    imageRowIndex += 1;
-    imageResults.forEach((result) => {
-      const crop = imageByResult.get(result.id);
-      const displaySize = crop ? fitExcelImageSize(crop.width, crop.height) : null;
-      const rowHeight = displaySize ? Math.ceil(displaySize.height * 0.75 + 10) : 28;
-      const rowValues = options.showFieldNames
-        ? [result.fieldName, crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
-        : [crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
-      imageRows.push(`<row r="${imageRowIndex + 1}" ht="${rowHeight}" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
+    if (imageResults.length > 0) {
+      const imageRows: string[] = [];
+      let imageRowIndex = 0;
+      imageRows.push(xlsxRow(imageRowIndex, options.showFieldNames ? ["Field", "Image", "Filename", "Page"] : ["Image", "Filename", "Page"], 2));
       imageRowIndex += 1;
-    });
+      imageResults.forEach((result) => {
+        const crop = imageByResult.get(result.id);
+        const displaySize = crop ? fitExcelImageSize(crop.width, crop.height) : null;
+        const rowHeight = displaySize ? Math.ceil(displaySize.height * 0.75 + 10) : 28;
+        const rowValues = options.showFieldNames
+          ? [result.fieldName, crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1]
+          : [crop ? "" : "Image crop unavailable", crop?.filename || result.fieldName || "image", crop?.page ?? Math.max(0, result.pageIndex ?? 0) + 1];
+        imageRows.push(`<row r="${imageRowIndex + 1}" ht="${rowHeight}" customHeight="1">${rowValues.map((value, colIndex) => xlsxCell(imageRowIndex, colIndex, value)).join("")}</row>`);
+        imageRowIndex += 1;
+      });
+
+      const imageDrawingRel = imageCrops.length > 0 ? `<drawing r:id="rId1"/>` : "";
+      sheetDefs.push({
+        name: "Images",
+        xml: worksheet(imageRows.join(""), `<cols><col min="1" max="1" width="${options.showFieldNames ? 28 : 30}" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/><col min="3" max="4" width="24" customWidth="1"/></cols>`, imageDrawingRel),
+        relXml: imageCrops.length > 0
+          ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`
+          : undefined,
+      });
+    }
+
+    if (sheetDefs.length === 0) {
+      sheetDefs.push({
+        name: "Export",
+        xml: worksheet(xlsxRow(0, ["No content selected"], 2)),
+      });
+    }
 
     files.push(
-      { name: "[Content_Types].xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`) },
+      { name: "[Content_Types].xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheetDefs.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}${imageCrops.length > 0 ? `<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` : ""}</Types>`) },
       { name: "_rels/.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
-      { name: "xl/workbook.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetNames.map((name, index) => `<sheet name="${name}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets></workbook>`) },
-      { name: "xl/_rels/workbook.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) },
-      { name: "xl/styles.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="1" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>`) },
-      { name: "xl/worksheets/sheet1.xml", bytes: encoder.encode(worksheet(textRows, `<cols><col min="1" max="1" width="28" customWidth="1"/><col min="2" max="2" width="64" customWidth="1"/></cols>`)) },
-      { name: "xl/worksheets/sheet2.xml", bytes: encoder.encode(worksheet(tableRows.join(""), `<cols><col min="1" max="20" width="22" customWidth="1"/></cols>`)) }
+      { name: "xl/workbook.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetDefs.map((sheet, index) => `<sheet name="${xmlEscape(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets></workbook>`) },
+      { name: "xl/_rels/workbook.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetDefs.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheetDefs.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) },
+      { name: "xl/styles.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="1" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>`) }
     );
+    sheetDefs.forEach((sheet, index) => {
+      files.push({ name: `xl/worksheets/sheet${index + 1}.xml`, bytes: encoder.encode(sheet.xml) });
+      if (sheet.relXml) {
+        files.push({ name: `xl/worksheets/_rels/sheet${index + 1}.xml.rels`, bytes: encoder.encode(sheet.relXml) });
+      }
+    });
 
-    const imageDrawingRel = imageCrops.length > 0 ? `<drawing r:id="rId1"/>` : "";
-    files.push({ name: "xl/worksheets/sheet3.xml", bytes: encoder.encode(worksheet(imageRows.join(""), `<cols><col min="1" max="1" width="${options.showFieldNames ? 28 : 30}" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/><col min="3" max="4" width="24" customWidth="1"/></cols>`, imageDrawingRel)) });
     if (imageCrops.length > 0) {
       files.push(
         { name: "xl/worksheets/_rels/sheet3.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`) },
