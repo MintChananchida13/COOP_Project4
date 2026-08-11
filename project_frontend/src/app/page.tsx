@@ -646,8 +646,37 @@ const tableRowsToObjects = (rows: string[][]) => {
 
 const normalizeHeaderPart = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
 
+const getEffectiveHeaderRowCount = (rows: string[][], structured?: StructuredTableResult | null) => {
+  const baseHeaderRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const cells = (structured?.cells || []).filter((cell) => !cell.hidden);
+  let effectiveHeaderRowCount = Math.min(rows.length || 1, baseHeaderRowCount);
+
+  for (let rowIndex = 0; rowIndex < effectiveHeaderRowCount; rowIndex += 1) {
+    const parentCells = cells.filter((cell) => cell.row === rowIndex && (cell.colSpan ?? 1) > 1);
+    for (const parentCell of parentCells) {
+      const nextRowIndex = rowIndex + 1;
+      if (nextRowIndex >= rows.length) continue;
+      const startCol = Math.max(0, Number(parentCell.col ?? 0));
+      const endCol = startCol + Math.max(1, Number(parentCell.colSpan ?? 1));
+      const childCells = cells.filter((cell) => {
+        if (cell.row !== nextRowIndex) return false;
+        const col = Math.max(0, Number(cell.col ?? 0));
+        return col >= startCol && col < endCol && hasMeaningfulTableText(cell.groundTruth ?? cell.text ?? cell.ocrText);
+      });
+      const rowChildTexts = (rows[nextRowIndex] || [])
+        .slice(startCol, endCol)
+        .filter(hasMeaningfulTableText);
+      if (childCells.length > 0 || rowChildTexts.length > 0) {
+        effectiveHeaderRowCount = Math.max(effectiveHeaderRowCount, nextRowIndex + 1);
+      }
+    }
+  }
+
+  return effectiveHeaderRowCount;
+};
+
 const resolveTableHeaderKeys = (rows: string[][], structured?: StructuredTableResult | null) => {
-  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const headerRowCount = getEffectiveHeaderRowCount(rows, structured);
   const columnCount = Math.max(...rows.map((row) => row.length), 1);
   const headerGrid: string[][] = Array.from({ length: headerRowCount }, () => Array(columnCount).fill(""));
 
@@ -729,7 +758,7 @@ const classifyTableRowsForKeyValue = (
   rows: string[][],
   structured?: StructuredTableResult | null
 ): TableRowKind[] => {
-  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const headerRowCount = getEffectiveHeaderRowCount(rows, structured);
   const populatedCounts = rows.map((row) => row.filter(hasMeaningfulTableText).length);
   const bodyCounts = populatedCounts.slice(headerRowCount).filter((count) => count > 0);
   const typicalDataCount = medianNumber(bodyCounts);
@@ -777,7 +806,7 @@ const detectTableSummaryRegion = (
   structured?: StructuredTableResult | null
 ): TableSummaryRegion => {
   const emptyResult: TableSummaryRegion = { detected: false, rows: new Set(), columns: new Set(), pairs: [] };
-  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const headerRowCount = getEffectiveHeaderRowCount(rows, structured);
   const maxColumns = Math.max(...rows.map((row) => row.length), 1);
   if (rows.length <= headerRowCount + 1 || maxColumns < 2) return emptyResult;
 
@@ -901,7 +930,7 @@ const tableRowsToKeyValueRecords = (
 ) => {
   if (!includeDataRows) return [];
   const headers = resolveTableHeaderKeys(rows, structured);
-  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const headerRowCount = getEffectiveHeaderRowCount(rows, structured);
   const rowKinds = classifyTableRowsForKeyValue(rows, structured);
   const summaryRegion = detectTableSummaryRegion(rows, structured);
   return rows.slice(headerRowCount).map((row, rowOffset) => {
