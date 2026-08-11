@@ -644,11 +644,58 @@ const tableRowsToObjects = (rows: string[][]) => {
   );
 };
 
+const normalizeHeaderPart = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+
+const resolveTableHeaderKeys = (rows: string[][], structured?: StructuredTableResult | null) => {
+  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const headerGrid: string[][] = Array.from({ length: headerRowCount }, () => Array(columnCount).fill(""));
+
+  if (structured?.cells?.length) {
+    structured.cells
+      .filter((cell) => !cell.hidden && cell.row < headerRowCount)
+      .forEach((cell) => {
+        const text = normalizeHeaderPart(cell.groundTruth ?? cell.text ?? cell.ocrText);
+        if (!text) return;
+        const startRow = Math.max(0, Number(cell.row ?? 0));
+        const startCol = Math.max(0, Number(cell.col ?? 0));
+        const rowSpan = Math.max(1, Number(cell.rowSpan ?? 1));
+        const colSpan = Math.max(1, Number(cell.colSpan ?? 1));
+        for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+          const targetRow = startRow + rowOffset;
+          if (targetRow >= headerRowCount) continue;
+          for (let colOffset = 0; colOffset < colSpan; colOffset += 1) {
+            const targetCol = startCol + colOffset;
+            if (targetCol < columnCount) headerGrid[targetRow][targetCol] = text;
+          }
+        }
+      });
+  }
+
+  for (let rowIndex = 0; rowIndex < headerRowCount; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    for (let colIndex = 0; colIndex < columnCount; colIndex += 1) {
+      if (!headerGrid[rowIndex][colIndex]) {
+        headerGrid[rowIndex][colIndex] = normalizeHeaderPart(row[colIndex]);
+      }
+    }
+  }
+
+  return Array.from({ length: columnCount }, (_, colIndex) => {
+    const parts = headerGrid
+      .map((row) => row[colIndex])
+      .filter(Boolean)
+      .filter((part, index, array) => array.indexOf(part) === index);
+    return parts.join(" ") || `Column ${colIndex + 1}`;
+  });
+};
+
 const getTableExportConfigForRows = (
   result: OCRResult & { pageIndex?: number },
-  rows: string[][]
-): TableExportConfig & { selectedColumns: number[]; includeDataRows: boolean; includeSummary: boolean } => {
-  const headerCount = rows[0]?.length || 0;
+  rows: string[][],
+  structured?: StructuredTableResult | null
+): TableExportConfig & { selectedColumns: number[]; includeDataRows: boolean; includeSummary: boolean; showRowNumber: boolean } => {
+  const headerCount = resolveTableHeaderKeys(rows, structured).length;
   const allColumns = Array.from({ length: headerCount }, (_, index) => index);
   const rawSelected = Array.isArray(result.tableExport?.selectedColumns)
     ? result.tableExport.selectedColumns
@@ -853,19 +900,23 @@ const tableRowsToKeyValueRecords = (
   includeDataRows = true
 ) => {
   if (!includeDataRows) return [];
-  const headers = rows[0] || [];
+  const headers = resolveTableHeaderKeys(rows, structured);
+  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
   const rowKinds = classifyTableRowsForKeyValue(rows, structured);
   const summaryRegion = detectTableSummaryRegion(rows, structured);
-  return rows.slice(1).map((row, rowOffset) => ({
-    row: rowOffset + 1,
-    rowType: summaryRegion.rows.has(rowOffset + 1) ? "summary" : rowKinds[rowOffset + 1],
-    values: Object.fromEntries(
-      selectedColumns.map((columnIndex) => [
-        headers[columnIndex] || `Column ${columnIndex + 1}`,
-        row[columnIndex] ?? "",
-      ])
-    ),
-  })).filter((record) => record.rowType === "data");
+  return rows.slice(headerRowCount).map((row, rowOffset) => {
+    const rowIndex = headerRowCount + rowOffset;
+    return {
+      row: rowIndex + 1,
+      rowType: summaryRegion.rows.has(rowIndex) ? "summary" : rowKinds[rowIndex],
+      values: Object.fromEntries(
+        selectedColumns.map((columnIndex) => [
+          headers[columnIndex] || `Column ${columnIndex + 1}`,
+          row[columnIndex] ?? "",
+        ])
+      ),
+    };
+  }).filter((record) => record.rowType === "data");
 };
 
 const tableRowsToSummaryKeyValuePairs = (rows: string[][], structured?: StructuredTableResult | null) =>
@@ -1706,11 +1757,12 @@ function HomeWorkspace() {
       if (fieldType === "table") {
         const structured = getStructuredTableForExport(result);
         const rows = structured?.rows || parseExportTable(rawValue) || [];
-        const tableExportConfig = getTableExportConfigForRows(result, rows);
+        const tableExportConfig = getTableExportConfigForRows(result, rows, structured);
+        const resolvedHeaders = resolveTableHeaderKeys(rows, structured);
         if (tableExportConfig.mode === "key_value") {
           addField(page, fieldName, {
             mode: "key_value",
-            keys: tableExportConfig.selectedColumns.map((columnIndex) => rows[0]?.[columnIndex] || `Column ${columnIndex + 1}`),
+            keys: tableExportConfig.selectedColumns.map((columnIndex) => resolvedHeaders[columnIndex] || `Column ${columnIndex + 1}`),
             includeDataRows: tableExportConfig.includeDataRows,
             includeSummary: tableExportConfig.includeSummary,
             showRowNumber: tableExportConfig.showRowNumber,
@@ -1814,7 +1866,7 @@ function HomeWorkspace() {
   const getTableDisplayRowsForExport = (result: OCRResult & { pageIndex?: number }) => {
     const structured = getStructuredTableForExport(result);
     const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
-    const tableExportConfig = getTableExportConfigForRows(result, rows);
+    const tableExportConfig = getTableExportConfigForRows(result, rows, structured);
     if (tableExportConfig.mode !== "key_value") return rows;
     return tableRowsToKeyValueDisplayRows(
       rows,
@@ -1829,7 +1881,7 @@ function HomeWorkspace() {
   const renderHtmlTable = (result: OCRResult & { pageIndex?: number }) => {
     const structured = getStructuredTableForExport(result);
     const rows = structured?.rows || parseExportTable(result.extractedText || "") || [];
-    const tableExportConfig = getTableExportConfigForRows(result, rows);
+    const tableExportConfig = getTableExportConfigForRows(result, rows, structured);
     if (tableExportConfig.mode === "key_value") {
       const records = tableRowsToKeyValueRecords(
         rows,
@@ -2423,7 +2475,7 @@ function HomeWorkspace() {
     tableResultsForExport.length > 0 && tableResultsForExport.every((result) => {
       const structured = getStructuredTableForExport(result);
       const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
-      return getTableExportConfigForRows(result, rows).mode === "key_value";
+      return getTableExportConfigForRows(result, rows, structured).mode === "key_value";
     })
       ? "key_value"
       : "structure";
@@ -2435,7 +2487,7 @@ function HomeWorkspace() {
         if (getResultFieldType(result) !== "table") return result;
         const structured = getStructuredTableForExport(result);
         const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
-        const config = getTableExportConfigForRows(result, rows);
+        const config = getTableExportConfigForRows(result, rows, structured);
         return { ...result, tableExport: { ...config, mode } };
       })
     );
@@ -2450,8 +2502,8 @@ function HomeWorkspace() {
         {tableResults.map((result) => {
           const structured = getStructuredTableForExport(result);
           const rows = structured?.rows || parseExportTable(result.extractedText || "") || [[""]];
-          const config = getTableExportConfigForRows(result, rows);
-          const headerColumns = rows[0] || [];
+          const config = getTableExportConfigForRows(result, rows, structured);
+          const headerColumns = resolveTableHeaderKeys(rows, structured);
           const summaryPairs = tableRowsToSummaryKeyValuePairs(rows, structured);
           const patchConfig = (patch: Partial<TableExportConfig>) =>
             updateTableExportConfig(result.id, { ...config, ...patch });
