@@ -240,16 +240,138 @@ const getTableExportConfig = (result: OCRResult & { pageIndex?: number }, rows: 
   };
 };
 
-const buildKeyValuePreviewRows = (rows: string[][], selectedColumns: number[]) => {
+type TableRowKind = "header" | "data" | "summary" | "empty";
+type TableSummaryRegion = {
+  detected: boolean;
+  rows: Set<number>;
+  columns: Set<number>;
+  pairs: { row: number; key: string; value: string }[];
+};
+
+const hasMeaningfulTableText = (value: unknown) => /[A-Za-z0-9ก-๙]/.test(String(value ?? "").trim());
+
+const medianNumber = (values: number[]) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)] || 0;
+};
+
+const classifyTableRowsForKeyValue = (
+  rows: string[][],
+  structured?: StructuredTableResult | null
+): TableRowKind[] => {
+  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const populatedCounts = rows.map((row) => row.filter(hasMeaningfulTableText).length);
+  const bodyCounts = populatedCounts.slice(headerRowCount).filter((count) => count > 0);
+  const typicalDataCount = medianNumber(bodyCounts);
+  const maxColumns = Math.max(...rows.map((row) => row.length), 1);
+  const spannedRows = new Set(
+    (structured?.cells || [])
+      .filter((cell) => !cell.hidden && ((cell.colSpan ?? 1) > 1 || (cell.rowSpan ?? 1) > 1))
+      .map((cell) => cell.row)
+  );
+  const lastDataIndex = rows.length - 1;
+
+  return rows.map((row, rowIndex) => {
+    if (rowIndex < headerRowCount) return "header";
+    const populated = populatedCounts[rowIndex] || 0;
+    if (populated === 0) return "empty";
+
+    const populatedIndexes = row
+      .map((cell, index) => (hasMeaningfulTableText(cell) ? index : -1))
+      .filter((index) => index >= 0);
+    const isNearEnd = rowIndex >= Math.max(headerRowCount, Math.floor(rows.length * 0.65)) || rowIndex >= lastDataIndex - 2;
+    const isSparse = typicalDataCount >= 3 && populated <= Math.max(1, Math.floor(typicalDataCount * 0.6));
+    const hasSpan = spannedRows.has(rowIndex);
+    const looksLabelValue =
+      populated >= 2 &&
+      populated <= Math.max(2, Math.ceil(maxColumns * 0.45)) &&
+      populatedIndexes.length >= 2 &&
+      populatedIndexes[populatedIndexes.length - 1] - populatedIndexes[0] >= Math.max(1, Math.floor(maxColumns * 0.45));
+    const differsFromData = typicalDataCount > 0 && Math.abs(populated - typicalDataCount) >= Math.max(2, Math.ceil(typicalDataCount * 0.4));
+    const evidence = [isNearEnd, isSparse || differsFromData, hasSpan, looksLabelValue].filter(Boolean).length;
+    return evidence >= 2 ? "summary" : "data";
+  });
+};
+
+const detectTableSummaryRegion = (
+  rows: string[][],
+  structured?: StructuredTableResult | null
+): TableSummaryRegion => {
+  const emptyResult: TableSummaryRegion = { detected: false, rows: new Set(), columns: new Set(), pairs: [] };
+  const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+  const maxColumns = Math.max(...rows.map((row) => row.length), 1);
+  if (rows.length <= headerRowCount + 2 || maxColumns < 2) return emptyResult;
+
+  const populatedCounts = rows.map((row) => row.filter(hasMeaningfulTableText).length);
+  const bodyCounts = populatedCounts.slice(headerRowCount).filter((count) => count > 0);
+  const typicalDataCount = medianNumber(bodyCounts);
+  const tailStart = Math.max(headerRowCount, Math.floor(rows.length * 0.6), rows.length - 6);
+  const spannedRows = new Set(
+    (structured?.cells || [])
+      .filter((cell) => !cell.hidden && ((cell.colSpan ?? 1) > 1 || (cell.rowSpan ?? 1) > 1))
+      .map((cell) => cell.row)
+  );
+
+  const candidates = Array.from({ length: Math.max(0, maxColumns - 1) }, (_, labelCol) => {
+    const valueCol = labelCol + 1;
+    const pairs = rows
+      .map((row, rowIndex) => ({
+        row: rowIndex,
+        key: String(row[labelCol] ?? "").trim(),
+        value: String(row[valueCol] ?? "").trim(),
+      }))
+      .filter((pair) => pair.row >= tailStart && hasMeaningfulTableText(pair.key) && hasMeaningfulTableText(pair.value));
+    const rowsWithPair = pairs.map((pair) => pair.row);
+    const sparseRows = rowsWithPair.filter((rowIndex) => populatedCounts[rowIndex] <= Math.max(2, Math.ceil(Math.max(typicalDataCount, 1) * 0.65))).length;
+    const spanRows = rowsWithPair.filter((rowIndex) => spannedRows.has(rowIndex)).length;
+    const repeatedEvidence = pairs.length >= 2;
+    const nearRightEvidence = labelCol >= Math.floor(maxColumns * 0.45);
+    const sparseEvidence = sparseRows >= Math.max(1, Math.ceil(pairs.length * 0.5));
+    const spanEvidence = spanRows > 0;
+    const compactRegionEvidence = pairs.length > 0 && pairs.every((pair) => {
+      const populatedIndexes = rows[pair.row]
+        .map((cell, index) => (hasMeaningfulTableText(cell) ? index : -1))
+        .filter((index) => index >= 0);
+      return populatedIndexes.filter((index) => index >= labelCol && index <= valueCol).length >= 2;
+    });
+    const evidence = [repeatedEvidence, nearRightEvidence, sparseEvidence, spanEvidence, compactRegionEvidence].filter(Boolean).length;
+    return { labelCol, valueCol, pairs, evidence };
+  });
+
+  const best = candidates
+    .filter((candidate) => candidate.pairs.length >= 2 && candidate.evidence >= 3)
+    .sort((left, right) => right.evidence - left.evidence || right.pairs.length - left.pairs.length || right.labelCol - left.labelCol)[0];
+  if (!best) return emptyResult;
+
+  return {
+    detected: true,
+    rows: new Set(best.pairs.map((pair) => pair.row)),
+    columns: new Set([best.labelCol, best.valueCol]),
+    pairs: best.pairs,
+  };
+};
+
+const buildKeyValuePreviewRows = (
+  rows: string[][],
+  selectedColumns: number[],
+  structured?: StructuredTableResult | null
+) => {
   const headers = rows[0] || [];
-  return rows.slice(1).map((row, rowIndex) => ({
-    label: `Row ${rowIndex + 1}`,
+  const rowKinds = classifyTableRowsForKeyValue(rows, structured);
+  const summaryRegion = detectTableSummaryRegion(rows, structured);
+  return rows.slice(1).map((row, rowOffset) => ({
+    label: `Row ${rowOffset + 1}`,
+    kind: summaryRegion.rows.has(rowOffset + 1) ? "summary" : rowKinds[rowOffset + 1],
     pairs: selectedColumns.map((colIndex) => ({
       key: headers[colIndex] || `Column ${colIndex + 1}`,
       value: row[colIndex] ?? "",
     })),
-  }));
+  })).filter((row) => row.kind === "data");
 };
+
+const buildSummaryPreviewPairs = (rows: string[][], structured?: StructuredTableResult | null) =>
+  detectTableSummaryRegion(rows, structured).pairs;
 
 type TableSelection = {
   startRow: number;
@@ -1805,7 +1927,8 @@ export default function GroundTruthEditorZone({
                         const tableExportConfig = getTableExportConfig(res, editableRows);
                         const headerColumns = editableRows[0] || [];
                         const selectedColumns = tableExportConfig.selectedColumns || [];
-                        const keyValuePreviewRows = buildKeyValuePreviewRows(editableRows, selectedColumns);
+                        const keyValuePreviewRows = buildKeyValuePreviewRows(editableRows, selectedColumns, normalizedTable.structured);
+                        const summaryPreviewPairs = buildSummaryPreviewPairs(editableRows, normalizedTable.structured);
                         const updateTableExport = (nextConfig: TableExportConfig) =>
                           setOcrResults((previous) =>
                             previous.map((item) =>
@@ -1951,6 +2074,20 @@ export default function GroundTruthEditorZone({
                                           ))
                                         )}
                                       </div>
+                                      {summaryPreviewPairs.length > 0 && (
+                                        <div className="mt-2 rounded-lg border border-emerald-100 bg-emerald-50 p-2">
+                                          <p className="mb-1.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">Summary Region</p>
+                                          <div className="space-y-1">
+                                            {summaryPreviewPairs.map((pair, pairIndex) => (
+                                              <p key={`${res.id}-summary-${pair.row}-${pairIndex}`} className="break-words text-[11px] font-medium text-emerald-900">
+                                                <span className="font-bold">{pair.key}</span>
+                                                <span className="px-1 text-emerald-500">:</span>
+                                                <span>{pair.value || "-"}</span>
+                                              </p>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 )}
