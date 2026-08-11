@@ -596,6 +596,47 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         assert result is not None
         self.assertEqual(result["table_rows"][:2], [["Total", "100"], ["VAT", "7"]])
 
+    def test_semi_coordinate_splits_tight_subrows_by_vertical_overlap(self) -> None:
+        image = np.full((90, 180, 3), 255, dtype=np.uint8)
+        image[10:12, 5:175] = 0
+        image[80:82, 5:175] = 0
+        image[10:82, 5:7] = 0
+        image[10:82, 90:92] = 0
+        image[10:82, 175:177] = 0
+        regions = [
+            {"bbox": {"x": 16, "y": 25, "width": 32, "height": 4}},
+            {"bbox": {"x": 106, "y": 25, "width": 24, "height": 4}},
+            {"bbox": {"x": 16, "y": 31, "width": 32, "height": 4}},
+            {"bbox": {"x": 106, "y": 31, "width": 24, "height": 4}},
+            {"bbox": {"x": 16, "y": 37, "width": 32, "height": 4}},
+            {"bbox": {"x": 106, "y": 37, "width": 24, "height": 4}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["A1", "B1", "A2", "B2", "A3", "B3"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:3], [["A1", "B1"], ["A2", "B2"], ["A3", "B3"]])
+
+    def test_semi_coordinate_infers_subcolumns_from_bbox_edge_gaps(self) -> None:
+        image = np.full((140, 240, 3), 255, dtype=np.uint8)
+        image[10:12, 5:235] = 0
+        image[125:127, 5:235] = 0
+        image[10:127, 5:7] = 0
+        image[10:127, 235:237] = 0
+        regions = [
+            {"bbox": {"x": 18, "y": 28, "width": 80, "height": 10}},
+            {"bbox": {"x": 130, "y": 28, "width": 34, "height": 10}},
+            {"bbox": {"x": 18, "y": 65, "width": 22, "height": 10}},
+            {"bbox": {"x": 130, "y": 65, "width": 34, "height": 10}},
+            {"bbox": {"x": 18, "y": 96, "width": 72, "height": 10}},
+            {"bbox": {"x": 130, "y": 96, "width": 34, "height": 10}},
+        ]
+        result = self._run_coordinate_semi_case(regions, [{"text": value, "confidence": 0.9} for value in ["Long label", "100", "Tax", "7", "Net amount", "107"]], image)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["table_rows"][:3], [["Long label", "100"], ["Tax", "7"], ["Net amount", "107"]])
+
     def test_semi_coordinate_preserves_merged_footer_colspan(self) -> None:
         image = np.full((100, 240, 3), 255, dtype=np.uint8)
         image[10:12, 5:235] = 0

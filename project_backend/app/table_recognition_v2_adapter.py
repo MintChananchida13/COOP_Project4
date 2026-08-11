@@ -496,12 +496,32 @@ def _row_boundaries_with_logical_subrows(
     source_boundaries = hard_boundaries if len(hard_boundaries) >= 2 else [0.0, float(image_height)]
     boundaries: List[float] = [float(source_boundaries[0])]
     for band_top, band_bottom in zip(source_boundaries, source_boundaries[1:]):
-        band_cells = [
+        band_cells = sorted([
             cell
             for cell in text_cells
             if float(band_top) <= float(cell["center_y"]) <= float(band_bottom)
+        ], key=lambda item: float(item["center_y"]))
+        center_groups: List[List[Dict[str, Any]]] = []
+        for cell in band_cells:
+            cell_top = float(cell.get("y") or 0.0)
+            cell_bottom = cell_top + float(cell.get("height") or 0.0)
+            if not center_groups:
+                center_groups.append([cell])
+                continue
+            previous = center_groups[-1]
+            prev_top = min(float(item.get("y") or 0.0) for item in previous)
+            prev_bottom = max(float(item.get("y") or 0.0) + float(item.get("height") or 0.0) for item in previous)
+            overlap = _interval_overlap(cell_top, cell_bottom, prev_top, prev_bottom)
+            smaller_height = max(1.0, min(cell_bottom - cell_top, prev_bottom - prev_top))
+            center_gap = abs(float(cell["center_y"]) - sum(float(item["center_y"]) for item in previous) / len(previous))
+            if center_gap <= y_tolerance and overlap / smaller_height >= 0.28:
+                previous.append(cell)
+            else:
+                center_groups.append([cell])
+        centers = [
+            sum(float(cell["center_y"]) for cell in group) / len(group)
+            for group in center_groups
         ]
-        centers = _cluster_positions([float(cell["center_y"]) for cell in band_cells], y_tolerance)
         inner_boundaries: List[float] = []
         if len(centers) > 1:
             for upper, lower in zip(centers, centers[1:]):
@@ -547,9 +567,12 @@ def _column_boundaries_with_logical_subcolumns(
             if centers:
                 row_center_values[row_index] = centers
             for left, right in zip(row_cells, row_cells[1:]):
-                gap = float(right["center_x"]) - float(left["center_x"])
-                if gap >= max(min_gap, band_width * 0.08):
-                    proposals.append(((float(left["center_x"]) + float(right["center_x"])) / 2.0, row_index))
+                left_edge = float(left.get("x") or 0.0) + float(left.get("width") or 0.0)
+                right_edge = float(right.get("x") or 0.0)
+                gap = right_edge - left_edge
+                edge_gap_threshold = max(6.0, median_width * 0.45, band_width * 0.045)
+                if gap >= edge_gap_threshold:
+                    proposals.append(((left_edge + right_edge) / 2.0, row_index))
 
         centers = [center for values in row_center_values.values() for center in values]
         center_clusters = _cluster_positions(centers, max(median_width * 0.55, band_width * 0.035))
@@ -583,24 +606,6 @@ def _column_boundaries_with_logical_subcolumns(
             )
             if has_repeated_pattern and float(band_left) + min_gap <= proposal_center <= float(band_right) - min_gap:
                 inferred.append(proposal_center)
-
-        center_gap_tolerance = max(median_width * 0.55, band_width * 0.035)
-        for left_center, right_center in zip(center_clusters, center_clusters[1:]):
-            left_rows = {
-                row_index
-                for row_index, values in row_center_values.items()
-                if any(abs(value - left_center) <= center_gap_tolerance for value in values)
-            }
-            right_rows = {
-                row_index
-                for row_index, values in row_center_values.items()
-                if any(abs(value - right_center) <= center_gap_tolerance for value in values)
-            }
-            if len(left_rows | right_rows) < 2 or max(len(left_rows), len(right_rows)) < 2:
-                continue
-            boundary = (left_center + right_center) / 2.0
-            if float(band_left) + min_gap <= boundary <= float(band_right) - min_gap:
-                inferred.append(boundary)
 
         final_boundaries.extend(inferred)
         final_boundaries.append(float(band_right))
@@ -813,6 +818,72 @@ def _coordinate_assignment_diagnostics(
         "minimum_column_overlap": round(_clamp01(min_col_overlap), 4),
         "hard_region_violation_count": hard_region_violations,
     }
+
+
+def _compact_empty_inferred_columns(
+    rows: List[List[str]],
+    source_cells: List[Dict[str, Any]],
+    col_boundaries: List[float],
+    hard_col_boundaries: List[float],
+) -> tuple[List[List[str]], List[Dict[str, Any]], List[float], Dict[str, Any]]:
+    if len(col_boundaries) <= 2 or not rows:
+        return (rows, source_cells, col_boundaries, {"enabled": False, "removed_columns": 0, "reason": "not_needed"})
+    col_count = max((len(row) for row in rows), default=0)
+    if col_count <= 1:
+        return (rows, source_cells, col_boundaries, {"enabled": False, "removed_columns": 0, "reason": "single_column"})
+    hard_tolerance = max(2.0, (col_boundaries[-1] - col_boundaries[0]) * 0.004)
+
+    def is_hard_boundary(value: float) -> bool:
+        return any(abs(float(value) - float(hard)) <= hard_tolerance for hard in hard_col_boundaries)
+
+    keep_columns: List[int] = []
+    for col_index in range(col_count):
+        has_text = any(col_index < len(row) and str(row[col_index]).strip() for row in rows)
+        hard_interval = (
+            col_index < len(col_boundaries) - 1
+            and is_hard_boundary(col_boundaries[col_index])
+            and is_hard_boundary(col_boundaries[col_index + 1])
+        )
+        if has_text or hard_interval:
+            keep_columns.append(col_index)
+    if len(keep_columns) == col_count or not keep_columns:
+        return (rows, source_cells, col_boundaries, {"enabled": False, "removed_columns": 0, "reason": "no_empty_inferred_columns"})
+
+    remap = {old_col: new_col for new_col, old_col in enumerate(keep_columns)}
+    compacted_rows = [
+        [row[col_index] if col_index < len(row) else "" for col_index in keep_columns]
+        for row in rows
+    ]
+    compacted_cells: List[Dict[str, Any]] = []
+    for cell in source_cells:
+        old_col = int(cell.get("col") or 0)
+        if old_col not in remap:
+            continue
+        next_cell = dict(cell)
+        next_cell["col"] = remap[old_col]
+        compacted_cells.append(next_cell)
+
+    compacted_boundaries = [float(col_boundaries[0])]
+    for old_col in keep_columns[1:]:
+        compacted_boundaries.append(float(col_boundaries[old_col]))
+    compacted_boundaries.append(float(col_boundaries[-1]))
+    compacted_boundaries = sorted(set(round(value, 3) for value in compacted_boundaries))
+    if len(compacted_boundaries) != len(keep_columns) + 1:
+        compacted_boundaries = [float(col_boundaries[0])]
+        for old_col in keep_columns:
+            compacted_boundaries.append(float(col_boundaries[old_col + 1]))
+        compacted_boundaries = sorted(set(round(value, 3) for value in compacted_boundaries))
+    return (
+        compacted_rows,
+        compacted_cells,
+        compacted_boundaries,
+        {
+            "enabled": True,
+            "removed_columns": col_count - len(keep_columns),
+            "kept_columns": keep_columns,
+            "reason": "empty_inferred_columns_removed",
+        },
+    )
 
 
 def _line_evidence(mask: np.ndarray, orientation: str, position: float, start: float, end: float) -> float:
@@ -1594,6 +1665,12 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     rows = normalize_table_rows(rows)
     if not any(str(value).strip() for row in rows for value in row):
         return None
+    rows, source_cells, col_boundaries, column_compaction_debug = _compact_empty_inferred_columns(
+        rows,
+        source_cells,
+        col_boundaries,
+        hard_col_boundaries,
+    )
     assignment_diagnostics = _coordinate_assignment_diagnostics(rows, source_cells, row_boundaries, col_boundaries, hard_col_boundaries)
     structured = _structured_from_coordinate_grid(rows, source_cells, row_boundaries, col_boundaries, horizontal_mask, vertical_mask, hard_col_boundaries)
     confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
@@ -1609,6 +1686,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
         "logical_column_boundary_count": len(col_boundaries),
         "uses_text_alignment": len(col_boundaries) > len(hard_col_boundaries) or len(row_boundaries) > len(hard_row_boundaries),
         "assignment": assignment_diagnostics,
+        "column_compaction": column_compaction_debug,
     }
     return {
         "text": _markdown_table(rows),
@@ -1636,6 +1714,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "ocr": ocr_debug,
             "per_cell_ocr": grid_cell_debug,
             "assignment": assignment_diagnostics,
+            "column_compaction": column_compaction_debug,
             "region_processing": "coordinate_based",
             "model_reuse": {"enabled": False, "model_inference_count": 0},
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
