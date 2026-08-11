@@ -70,10 +70,10 @@ export default function AdminDashboard() {
   }, []);
 
   const stats = [
-    ["Pending Requests", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
-    ["Published Templates", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
-    ["Draft Versions", dashboard.draftTemplates, FilePenLine, "bg-sky-50 text-sky-600"],
-    ["Rejected Requests", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
+    ["คำขอที่รอดำเนินการ", dashboard.pendingRequests, FileClock, "bg-amber-50 text-amber-600"],
+    ["Template ที่เผยแพร่แล้ว", dashboard.activeTemplates, BadgeCheck, "bg-emerald-50 text-emerald-600"],
+    ["Version แบบร่าง", dashboard.draftTemplates, FilePenLine, "bg-sky-50 text-sky-600"],
+    ["คำขอที่ถูกปฏิเสธ", dashboard.rejectedRequests, CircleX, "bg-red-50 text-red-600"],
   ] as const;
 
   const recentRequests = dashboard.latestRequests.length ? dashboard.latestRequests : requests.slice(0, 4);

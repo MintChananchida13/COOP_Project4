@@ -1386,24 +1386,6 @@ export default function GroundTruthEditorZone({
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 pb-4 animate-fade-in">
-      
-      {/* Step progress bar */}
-      <div className="w-full bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3 w-full max-w-3xl mx-auto justify-between relative">
-          <div className="flex items-center gap-2.5 bg-white pr-4 z-10">
-            <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
-            <p className="text-xs font-semibold text-slate-400">เตรียมภาพ</p>
-          </div>
-          <div className="flex items-center gap-2.5 bg-white px-4 z-10">
-            <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 font-bold text-xs flex items-center justify-center">✓</div>
-            <p className="text-xs font-semibold text-slate-400">กำหนด ROI</p>
-          </div>
-          <div className="flex items-center gap-2.5 bg-white pl-4 z-10">
-            <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center ring-4 ring-indigo-100">3</div>
-            <p className="text-xs font-bold text-slate-800">ตรวจและแก้ไขผล OCR</p>
-          </div>
-        </div>
-      </div>
 
       {/* Main editor layout */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 xl:h-[720px] items-stretch">

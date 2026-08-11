@@ -776,7 +776,7 @@ return (
               : "bg-slate-50 text-slate-400"
           }`}
         >
-          {isCropped ? "Crop สำเร็จ" : "พร้อม"}
+          {isCropped ? "Crop สำเร็จ" : ""}
         </span>
       </div>
 

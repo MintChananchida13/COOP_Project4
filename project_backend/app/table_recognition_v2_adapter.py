@@ -752,6 +752,69 @@ def _merge_assigned_ocr_cells(cells: List[Dict[str, Any]]) -> List[Dict[str, Any
     return sorted(merged, key=lambda item: (int(item["row"]), int(item["col"]), float(item.get("y") or 0.0), float(item.get("x") or 0.0)))
 
 
+def _coordinate_assignment_diagnostics(
+    rows: List[List[str]],
+    source_cells: List[Dict[str, Any]],
+    row_boundaries: List[float],
+    col_boundaries: List[float],
+    hard_col_boundaries: List[float],
+) -> Dict[str, Any]:
+    row_count = len(rows)
+    col_count = max((len(row) for row in rows), default=0)
+    row_non_empty = [sum(1 for value in row if str(value).strip()) for row in rows]
+    col_non_empty = [
+        sum(1 for row in rows if col_index < len(row) and str(row[col_index]).strip())
+        for col_index in range(col_count)
+    ]
+    row_overlap_scores: List[float] = []
+    col_overlap_scores: List[float] = []
+    hard_region_violations = 0
+    for cell in source_cells:
+        bbox = cell.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        row_index = max(0, min(row_count - 1, int(cell.get("row") or 0))) if row_count else 0
+        col_index = max(0, min(col_count - 1, int(cell.get("col") or 0))) if col_count else 0
+        left = float(bbox.get("x") or 0.0)
+        top = float(bbox.get("y") or 0.0)
+        right = left + float(bbox.get("width") or 0.0)
+        bottom = top + float(bbox.get("height") or 0.0)
+        width = max(1.0, right - left)
+        height = max(1.0, bottom - top)
+        if row_index < len(row_boundaries) - 1:
+            row_overlap_scores.append(_interval_overlap(top, bottom, row_boundaries[row_index], row_boundaries[row_index + 1]) / height)
+        if col_index < len(col_boundaries) - 1:
+            col_overlap_scores.append(_interval_overlap(left, right, col_boundaries[col_index], col_boundaries[col_index + 1]) / width)
+        if len(hard_col_boundaries) >= 2 and col_index < len(col_boundaries) - 1:
+            hard_index = _dominant_interval_index(left, right, hard_col_boundaries, 0.0)
+            hard_left = hard_col_boundaries[hard_index]
+            hard_right = hard_col_boundaries[hard_index + 1]
+            assigned_center = (col_boundaries[col_index] + col_boundaries[col_index + 1]) / 2.0
+            if not (hard_left <= assigned_center <= hard_right):
+                hard_region_violations += 1
+
+    empty_rows = sum(1 for count in row_non_empty if count == 0)
+    empty_cols = sum(1 for count in col_non_empty if count == 0)
+    avg_row_overlap = sum(row_overlap_scores) / len(row_overlap_scores) if row_overlap_scores else 0.0
+    avg_col_overlap = sum(col_overlap_scores) / len(col_overlap_scores) if col_overlap_scores else 0.0
+    min_row_overlap = min(row_overlap_scores) if row_overlap_scores else 0.0
+    min_col_overlap = min(col_overlap_scores) if col_overlap_scores else 0.0
+    return {
+        "row_count": row_count,
+        "column_count": col_count,
+        "assigned_cell_count": len(source_cells),
+        "row_non_empty_counts": row_non_empty,
+        "column_non_empty_counts": col_non_empty,
+        "empty_row_ratio": round(empty_rows / row_count, 4) if row_count else 1.0,
+        "empty_column_ratio": round(empty_cols / col_count, 4) if col_count else 1.0,
+        "average_row_overlap": round(_clamp01(avg_row_overlap), 4),
+        "average_column_overlap": round(_clamp01(avg_col_overlap), 4),
+        "minimum_row_overlap": round(_clamp01(min_row_overlap), 4),
+        "minimum_column_overlap": round(_clamp01(min_col_overlap), 4),
+        "hard_region_violation_count": hard_region_violations,
+    }
+
+
 def _line_evidence(mask: np.ndarray, orientation: str, position: float, start: float, end: float) -> float:
     height, width = mask.shape[:2]
     if orientation == "vertical":
@@ -1531,6 +1594,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     rows = normalize_table_rows(rows)
     if not any(str(value).strip() for row in rows for value in row):
         return None
+    assignment_diagnostics = _coordinate_assignment_diagnostics(rows, source_cells, row_boundaries, col_boundaries, hard_col_boundaries)
     structured = _structured_from_coordinate_grid(rows, source_cells, row_boundaries, col_boundaries, horizontal_mask, vertical_mask, hard_col_boundaries)
     confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
     semi_analysis = dict(analysis)
@@ -1544,6 +1608,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
         "hard_column_boundary_count": len(hard_col_boundaries),
         "logical_column_boundary_count": len(col_boundaries),
         "uses_text_alignment": len(col_boundaries) > len(hard_col_boundaries) or len(row_boundaries) > len(hard_row_boundaries),
+        "assignment": assignment_diagnostics,
     }
     return {
         "text": _markdown_table(rows),
@@ -1570,6 +1635,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "logical_column_boundaries": col_boundaries,
             "ocr": ocr_debug,
             "per_cell_ocr": grid_cell_debug,
+            "assignment": assignment_diagnostics,
             "region_processing": "coordinate_based",
             "model_reuse": {"enabled": False, "model_inference_count": 0},
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
@@ -1982,6 +2048,7 @@ def _semi_result_reliability(candidate: Dict[str, Any], analysis: Dict[str, Any]
     quality = debug.get("quality") if isinstance(debug.get("quality"), dict) else {}
     ocr_debug = debug.get("ocr") if isinstance(debug.get("ocr"), dict) else {}
     per_cell_ocr = debug.get("per_cell_ocr") if isinstance(debug.get("per_cell_ocr"), dict) else {}
+    assignment = debug.get("assignment") if isinstance(debug.get("assignment"), dict) else {}
     line_summary = analysis.get("line_summary") if isinstance(analysis.get("line_summary"), dict) else {}
 
     row_count = int(quality.get("row_count") or 0)
@@ -2011,6 +2078,12 @@ def _semi_result_reliability(candidate: Dict[str, Any], analysis: Dict[str, Any]
         reasons.append("low_fill_ratio")
     if column_count >= 2 and column_consistency < 0.35 and sparse_row_ratio > 0.55:
         reasons.append("irregular_assignment")
+    if float(assignment.get("average_row_overlap") or 1.0) < 0.45 or float(assignment.get("average_column_overlap") or 1.0) < 0.45:
+        reasons.append("low_assignment_overlap")
+    if int(assignment.get("hard_region_violation_count") or 0) > 0:
+        reasons.append("hard_region_assignment_violation")
+    if column_count >= 2 and float(assignment.get("empty_column_ratio") or 0.0) > 0.65 and recognized_cells >= column_count:
+        reasons.append("too_many_empty_columns_after_assignment")
     if final_confidence < 0.38:
         reasons.append("low_final_confidence")
 
@@ -2028,6 +2101,7 @@ def _semi_result_reliability(candidate: Dict[str, Any], analysis: Dict[str, Any]
         "hard_column_boundary_count": hard_columns,
         "logical_column_boundary_count": logical_columns,
         "line_summary": {"horizontal": line_horizontals, "vertical": line_verticals},
+        "assignment": assignment,
         "final_confidence": round(_clamp01(final_confidence), 4),
     }
 

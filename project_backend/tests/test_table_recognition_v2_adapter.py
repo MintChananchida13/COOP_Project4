@@ -755,6 +755,11 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"][:2], [["LeftA", "1", "RightA", "2"], ["LeftB", "3", "RightB", "4"]])
         self.assertGreaterEqual(result["table_debug"]["hard_column_boundary_count"], 3)
         self.assertGreaterEqual(result["table_debug"]["logical_column_boundary_count"], 5)
+        assignment = result["table_debug"]["assignment"]
+        self.assertEqual(assignment["hard_region_violation_count"], 0)
+        self.assertEqual(assignment["row_non_empty_counts"][:2], [4, 4])
+        self.assertEqual(assignment["column_non_empty_counts"][:4], [2, 2, 2, 2])
+        self.assertGreaterEqual(assignment["average_column_overlap"], 0.6)
 
     def test_semi_coordinate_assigns_boundary_crossing_bbox_by_dominant_overlap(self) -> None:
         image = np.full((100, 180, 3), 255, dtype=np.uint8)

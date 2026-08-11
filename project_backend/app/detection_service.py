@@ -1291,14 +1291,14 @@ def _detection_engine(pages: List[Dict[str, Any]]) -> str:
 
 def _no_match_message(candidates: List[Dict[str, Any]]) -> str:
     if not candidates:
-        return "No active templates available in the Top 5 layout search."
+        return "ไม่พบ Template ที่เปิดใช้งานใน 5 อันดับแรกจากการค้นหา Layout"
     confident_layout_count = sum(
         1 for candidate in candidates
         if float(candidate.get("layout_score", candidate.get("retrieval_score", 0.0)) or 0.0) >= DecisionService.MIN_RETRIEVAL_SCORE
     )
     if confident_layout_count == 0:
-        return "No template was confident enough: no Top 5 layout candidate reached 0.50."
-    return "No candidate passed verification and final confidence."
+        return "ไม่มี Template ใน 5 อันดับแรกที่มีคะแนน Layout ถึงเกณฑ์ 0.50"
+    return "ไม่มี Template ที่ผ่านเกณฑ์การตรวจสอบและคะแนนความมั่นใจ"
 
 
 def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
