@@ -898,7 +898,6 @@ const EditableTableResult = ({
     const selected = isCellInSelection(rowIndex, cellIndex, selection);
     const Tag = rowIndex < headerRowCount ? "th" : "td";
     const isHeaderCell = rowIndex < headerRowCount;
-    const isSubHeaderCell = isHeaderCell && rowIndex > 0;
     const isMergedCell = Boolean(merge && ((merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1));
     const centerCellContent = isHeaderCell || isMergedCell;
     const columnSpan = merge?.colSpan ?? 1;
@@ -911,7 +910,7 @@ const EditableTableResult = ({
         rowSpan={merge?.rowSpan}
         colSpan={merge?.colSpan}
         style={{ width: cellWidth, minWidth: cellWidth }}
-        className={`h-auto border p-1.5 ${centerCellContent ? "align-middle" : "align-top"} ${
+        className={`h-auto border p-1.5 ${centerCellContent ? "align-middle text-center" : "align-top text-left"} ${
           selected
             ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400"
             : isHeaderCell || isMergedCell
@@ -926,6 +925,7 @@ const EditableTableResult = ({
         <textarea
           data-table-cell="true"
           value={rows[rowIndex]?.[cellIndex] ?? ""}
+          style={centerCellContent ? { minHeight: `${Math.max(36, (merge?.rowSpan ?? 1) * 36)}px` } : undefined}
           ref={fitTextareaToContent}
           onFocus={() =>
             setSelection(prev => prev ?? { startRow: rowIndex, startCol: cellIndex, endRow: rowIndex, endCol: cellIndex })
@@ -936,13 +936,13 @@ const EditableTableResult = ({
             fitTextareaToContent(event.currentTarget);
             updateCell(rowIndex, cellIndex, event.target.value);
           }}
-          className={`block min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 py-1 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
-            centerCellContent ? "text-center align-middle" : "text-left"
+          className={`block min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
+            centerCellContent ? "py-2 text-center" : "py-1 text-left"
           } ${
             isHeaderCell || isMergedCell ? "bg-white/80 font-black" : "bg-transparent font-medium"
           }`}
           rows={merge ? Math.max(1, merge.rowSpan) : 1}
-          placeholder={isHeaderCell ? `${isSubHeaderCell ? "Sub Header" : "Header"} ${rowIndex + 1}.${cellIndex + 1}` : ""}
+          placeholder={isHeaderCell ? `Header ${rowIndex + 1}.${cellIndex + 1}` : ""}
           spellCheck={false}
           translate="no"
         />
@@ -1037,9 +1037,9 @@ const EditableTableResult = ({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/60">
+              <tr key={rowIndex} className={rowIndex < headerRowCount ? "bg-slate-100" : "odd:bg-white even:bg-slate-50/60"}>
                 <th
-                  className={`${rowHeaderClass} ${isFullRowSelected(rowIndex) ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""}`}
+                  className={`${rowHeaderClass} ${rowIndex < headerRowCount ? "bg-slate-100 text-slate-700" : ""} ${isFullRowSelected(rowIndex) ? "border-indigo-500 bg-indigo-100 text-indigo-700" : ""}`}
                   onClick={() => selectRow(rowIndex)}
                   title="เลือกทั้งแถว"
                 >
