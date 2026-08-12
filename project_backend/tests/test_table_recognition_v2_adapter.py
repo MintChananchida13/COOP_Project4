@@ -48,48 +48,6 @@ class EmptyTableRecognitionPipelineV2:
         return [{}]
 
 
-class EnglishTextTableRecognitionPipelineV2:
-    init_kwargs = None
-
-    def __init__(self, **kwargs):
-        EnglishTextTableRecognitionPipelineV2.init_kwargs = kwargs
-
-    def predict(self, **kwargs):
-        return [
-            {
-                "table_structured": {
-                    "rows": [["Name", "Amount"]],
-                    "cells": [
-                        {"row": 0, "col": 0, "text": "Name", "bbox": {"x": 2, "y": 2, "width": 28, "height": 16}},
-                        {"row": 0, "col": 1, "text": "Amount", "bbox": {"x": 34, "y": 2, "width": 28, "height": 16}},
-                    ],
-                    "headerRowCount": 1,
-                }
-            }
-        ]
-
-
-class ThaiTextTableRecognitionPipelineV2:
-    init_kwargs = None
-
-    def __init__(self, **kwargs):
-        ThaiTextTableRecognitionPipelineV2.init_kwargs = kwargs
-
-    def predict(self, **kwargs):
-        return [
-            {
-                "table_structured": {
-                    "rows": [["ชื่อ", "จำนวนเงิน"]],
-                    "cells": [
-                        {"row": 0, "col": 0, "text": "ชื่อ", "bbox": {"x": 2, "y": 2, "width": 28, "height": 16}},
-                        {"row": 0, "col": 1, "text": "จำนวนเงิน", "bbox": {"x": 34, "y": 2, "width": 28, "height": 16}},
-                    ],
-                    "headerRowCount": 1,
-                }
-            }
-        ]
-
-
 class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         patcher = patch.multiple(
@@ -159,58 +117,6 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wireless_table_structure_recognition_model_name"], "SLANeXt_wireless")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["text_recognition_model_name"], "th_PP-OCRv5_mobile_rec")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "cpu")
-
-    def test_slanext_cell_text_is_refreshed_with_thai_ocr_when_bboxes_exist(self) -> None:
-        image = np.zeros((40, 80, 3), dtype=np.uint8)
-        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EnglishTextTableRecognitionPipelineV2)
-
-        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch.dict(
-            sys.modules,
-            {"paddleocr": fake_paddleocr},
-        ), patch(
-            "app.table_recognition_v2_adapter.analyze_table_regions",
-            return_value={"detected": False, "confidence": 0.0, "regions": []},
-        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
-            "app.table_recognition_v2_adapter.Path.unlink"
-        ), patch(
-            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
-            return_value=[
-                {"text": "ชื่อ", "confidence": 0.93, "model": "th_PP-OCRv5_mobile_rec"},
-                {"text": "จำนวนเงิน", "confidence": 0.91, "model": "th_PP-OCRv5_mobile_rec"},
-            ],
-        ):
-            result = recognize_table_v2_local(image)
-
-        self.assertEqual(result["table_rows"], [[normalize_ocr_text("ชื่อ"), normalize_ocr_text("จำนวนเงิน")]])
-        self.assertEqual(result["table_structured"]["cells"][0]["text"], "ชื่อ")
-        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["status"], "thai_cell_ocr")
-        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["updated_cells"], 2)
-
-    def test_slanext_thai_cell_text_is_preserved_when_cell_ocr_is_worse(self) -> None:
-        image = np.zeros((40, 80, 3), dtype=np.uint8)
-        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=ThaiTextTableRecognitionPipelineV2)
-
-        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch.dict(
-            sys.modules,
-            {"paddleocr": fake_paddleocr},
-        ), patch(
-            "app.table_recognition_v2_adapter.analyze_table_regions",
-            return_value={"detected": False, "confidence": 0.0, "regions": []},
-        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
-            "app.table_recognition_v2_adapter.Path.unlink"
-        ), patch(
-            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
-            return_value=[
-                {"text": "A", "confidence": 0.99, "model": "th_PP-OCRv5_mobile_rec"},
-                {"text": "Amount", "confidence": 0.99, "model": "th_PP-OCRv5_mobile_rec"},
-            ],
-        ):
-            result = recognize_table_v2_local(image)
-
-        self.assertEqual(result["table_rows"], [[normalize_ocr_text("ชื่อ"), normalize_ocr_text("จำนวนเงิน")]])
-        self.assertEqual(result["table_structured"]["cells"][0]["text"], "ชื่อ")
-        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["updated_cells"], 0)
-        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["preserved_cells"], 2)
 
     def test_paddle_table_device_cpu_is_used_by_pipeline_and_summary(self) -> None:
         fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
