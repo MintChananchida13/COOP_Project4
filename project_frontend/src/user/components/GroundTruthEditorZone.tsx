@@ -262,6 +262,11 @@ const normalizeColumnWidths = (widths: number[] | undefined, columnCount: number
     return Number.isFinite(value) ? Math.max(TABLE_COLUMN_MIN_WIDTH, Math.min(TABLE_COLUMN_MAX_WIDTH, Number(value))) : 144;
   });
 
+const hasSourceColumnWidths = (widths: number[] | undefined, columnCount: number) =>
+  Array.isArray(widths) &&
+  widths.length >= columnCount &&
+  widths.slice(0, columnCount).every(value => Number.isFinite(Number(value)));
+
 const measureTableTextWidth = (() => {
   let canvas: HTMLCanvasElement | null = null;
   return (value: string, isHeader = false) => {
@@ -499,12 +504,17 @@ const normalizeResultTableForEditor = (result: OCRResult & { pageIndex?: number 
   const mergedCells = result.tableMergedCells?.length
     ? cloneMergedCells(result.tableMergedCells)
     : mergedCellsFromStructured(result.tableStructured, rows);
+  const headerRowCount = result.tableStructured?.headerRowCount ?? 1;
+  const columnCount = rows[0]?.length || 1;
+  const columnWidths = hasSourceColumnWidths(result.tableStructured?.colWidths, columnCount)
+    ? result.tableStructured?.colWidths || []
+    : getAutoFitColumnWidths(rows, headerRowCount);
   const structured = structuredTableFromSnapshot(
     {
       rows,
       mergedCells,
-      columnWidths: result.tableStructured?.colWidths || [],
-      headerRowCount: result.tableStructured?.headerRowCount ?? 1,
+      columnWidths,
+      headerRowCount,
     },
     result.tableStructured
   );

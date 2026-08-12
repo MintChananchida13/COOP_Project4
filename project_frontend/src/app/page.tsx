@@ -489,8 +489,14 @@ const dataUrlMimeType = (dataUrl: string) => {
 
 const dataUrlBase64 = (dataUrl: string) => dataUrl.split(",", 2)[1] || "";
 
-const xmlEscape = (value: unknown) =>
+const sanitizeXmlText = (value: unknown) =>
   String(value ?? "")
+    // XML 1.0 rejects most control characters. OCR output can contain them and
+    // Excel will refuse to open the workbook if they are written into inlineStr.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+
+const xmlEscape = (value: unknown) =>
+  sanitizeXmlText(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -2255,7 +2261,6 @@ function HomeWorkspace() {
 
     if (imageCrops.length > 0) {
       files.push(
-        { name: "xl/worksheets/_rels/sheet3.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`) },
         { name: "xl/drawings/_rels/drawing1.xml.rels", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${imageCrops.map((crop, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${index + 1}.${dataUrlMimeType(crop.dataUrl).includes("png") ? "png" : "jpg"}"/>`).join("")}</Relationships>`) },
         { name: "xl/drawings/drawing1.xml", bytes: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${imageCrops.map((crop, index) => {
           const row = imageResults.findIndex((result) => result.id === crop.resultId) + 1;
