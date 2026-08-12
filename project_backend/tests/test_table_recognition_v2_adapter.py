@@ -439,6 +439,18 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertFalse(analysis["detected"])
 
+    def test_complete_vertical_grid_does_not_enter_semi_table(self) -> None:
+        image = np.full((260, 260, 3), 255, dtype=np.uint8)
+        for y in [10, 70, 130, 190, 250]:
+            image[y : y + 2, 10:250] = 0
+        for x in [10, 90, 170, 250]:
+            image[10:250, x : x + 2] = 0
+
+        analysis = analyze_table_regions(image)
+
+        self.assertFalse(analysis["detected"])
+        self.assertEqual(analysis["reason"], "full_vertical_grid")
+
     def _run_coordinate_semi_case(self, detected_regions, recognitions, image=None):
         test_image = image if image is not None else np.full((160, 220, 3), 255, dtype=np.uint8)
         fake_analysis = {
@@ -997,35 +1009,25 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         assert result is not None
         self.assertEqual(result["table_debug"]["model_reuse"]["model_inference_count"], 0)
 
-    def test_recognize_table_v2_local_does_not_load_slanext_when_semi_succeeds(self) -> None:
+    def test_recognize_table_v2_local_uses_slanext_first_and_skips_semi_when_confident(self) -> None:
         image = np.full((120, 160, 3), 255, dtype=np.uint8)
-        fake_analysis = {
-            "detected": True,
-            "confidence": 0.91,
-            "topology_change_ratio": 0.5,
-            "regions": [
-                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 160, "height": 60}},
-                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 160, "height": 60}},
-            ],
-        }
-        detected_regions = [
-            {"bbox": {"x": 12, "y": 20, "width": 30, "height": 10}},
-            {"bbox": {"x": 100, "y": 20, "width": 30, "height": 10}},
-        ]
+        slanext_output = [{"html": "<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>"}]
 
-        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
-            "app.table_recognition_v2_adapter.detect_text_boxes",
-            return_value={"regions": detected_regions},
+        with patch("app.table_recognition_v2_adapter._load_table_model", return_value=object()), patch(
+            "app.table_recognition_v2_adapter._predict_table_model",
+            return_value=slanext_output,
         ), patch(
-            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
-            return_value=[{"text": "A", "confidence": 0.9}, {"text": "B", "confidence": 0.9}],
-        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch("app.table_recognition_v2_adapter.Path.unlink"), patch(
-            "app.table_recognition_v2_adapter._load_table_model",
-            side_effect=AssertionError("Semi path must not load SLANeXt."),
-        ):
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            side_effect=AssertionError("Semi analyzer should not run when SLANeXt is confident."),
+        ), patch("app.table_recognition_v2_adapter._try_semi_structured_table") as semi, patch(
+            "app.table_recognition_v2_adapter.cv2.imwrite",
+            return_value=True,
+        ), patch("app.table_recognition_v2_adapter.Path.unlink"):
             result = recognize_table_v2_local(image)
 
-        self.assertEqual(result["table_selected_method"], "coordinate_based_semi")
+        semi.assert_not_called()
+        self.assertEqual(result["table_selected_method"], "slanext")
+        self.assertEqual(result["table_debug"]["semi_skipped_reason"], "slanext_passed_quality_gate")
 
     def test_recognize_table_v2_local_rejects_unreliable_semi_and_uses_slanext(self) -> None:
         image = np.full((120, 160, 3), 255, dtype=np.uint8)

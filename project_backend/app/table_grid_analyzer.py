@@ -15,6 +15,8 @@ _MIN_CONFIDENCE = 0.72
 _MIN_TOPOLOGY_CHANGE_RATIO = 0.33
 _MIN_REGION_COUNT = 2
 _MIN_DISTINCT_TOPOLOGIES = 2
+_FULL_VERTICAL_LINE_COVERAGE_RATIO = 0.72
+_FULL_VERTICAL_GRID_RATIO = 0.80
 
 
 def _clip_region(x: int, y: int, width: int, height: int, image_width: int, image_height: int) -> Dict[str, Any]:
@@ -81,6 +83,39 @@ def _vertical_segment_counts(vertical_mask: np.ndarray, bands: List[tuple[int, i
     return counts
 
 
+def _vertical_line_coverage(
+    vertical_mask: np.ndarray,
+    vertical_positions: List[int],
+    horizontal_positions: List[int],
+    image_width: int,
+    image_height: int,
+) -> Dict[str, Any]:
+    if not vertical_positions:
+        return {"full_ratio": 0.0, "coverages": []}
+    top = max(0, min(horizontal_positions) if horizontal_positions else 0)
+    bottom = min(image_height, max(horizontal_positions) if horizontal_positions else image_height)
+    if bottom <= top:
+        top, bottom = 0, image_height
+    span = max(1, bottom - top)
+    coverages: List[float] = []
+    probe_radius = max(1, int(round(image_width * 0.004)))
+    for x_position in vertical_positions:
+        x_left = max(0, int(x_position) - probe_radius)
+        x_right = min(image_width, int(x_position) + probe_radius + 1)
+        if x_right <= x_left:
+            continue
+        column_slice = vertical_mask[top:bottom, x_left:x_right] > 0
+        row_has_line = np.any(column_slice, axis=1)
+        coverages.append(float(np.sum(row_has_line)) / span)
+    if not coverages:
+        return {"full_ratio": 0.0, "coverages": []}
+    full_count = sum(1 for coverage in coverages if coverage >= _FULL_VERTICAL_LINE_COVERAGE_RATIO)
+    return {
+        "full_ratio": round(full_count / len(coverages), 4),
+        "coverages": [round(coverage, 4) for coverage in coverages],
+    }
+
+
 def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
     if image is None or image.size == 0:
         return {"detected": False, "confidence": 0.0, "regions": [], "reason": "empty_image"}
@@ -128,6 +163,20 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
         topology_changes = sum(1 for prev, curr in zip(segment_counts, segment_counts[1:]) if prev != curr)
         distinct_topologies = len(set(segment_counts))
         topology_change_ratio = topology_changes / max(1, len(bands) - 1)
+        vertical_coverage = _vertical_line_coverage(vertical, vertical_positions, horizontal_positions, width, height)
+        if float(vertical_coverage.get("full_ratio") or 0.0) >= _FULL_VERTICAL_GRID_RATIO:
+            return {
+                "detected": False,
+                "confidence": 0.0,
+                "regions": [],
+                "reason": "full_vertical_grid",
+                "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
+                "segment_counts": segment_counts,
+                "topology_change_ratio": round(topology_change_ratio, 4),
+                "distinct_topologies": distinct_topologies,
+                "vertical_line_coverage": vertical_coverage,
+                "contour_summary": contours,
+            }
         if topology_changes <= 0 or distinct_topologies < _MIN_DISTINCT_TOPOLOGIES:
             return {
                 "detected": False,
@@ -137,6 +186,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
                 "topology_change_ratio": round(topology_change_ratio, 4),
+                "vertical_line_coverage": vertical_coverage,
                 "contour_summary": contours,
             }
 
@@ -175,6 +225,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
                 "topology_change_ratio": round(topology_change_ratio, 4),
+                "vertical_line_coverage": vertical_coverage,
                 "contour_summary": contours,
             }
 
@@ -201,6 +252,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
             "topology_change_ratio": round(topology_change_ratio, 4),
             "distinct_topologies": distinct_topologies,
             "region_height_ratios": [round(ratio, 4) for ratio in region_height_ratios],
+            "vertical_line_coverage": vertical_coverage,
             "contour_summary": contours,
         }
     except Exception as error:

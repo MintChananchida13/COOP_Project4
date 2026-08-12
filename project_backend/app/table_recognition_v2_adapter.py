@@ -3044,51 +3044,6 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
 
     logger.info("Using local Table Recognition runtime")
     semi_analysis: Optional[Dict[str, Any]] = None
-    try:
-        grid_started = time.perf_counter()
-        semi_analysis = analyze_table_regions(image)
-        logger.info(
-            "Table Recognition phase timing: phase=Grid Analyzer detected=%s confidence=%s regions=%s elapsed=%.3fs",
-            bool(semi_analysis.get("detected")) if isinstance(semi_analysis, dict) else False,
-            semi_analysis.get("confidence") if isinstance(semi_analysis, dict) else None,
-            len(semi_analysis.get("regions") or []) if isinstance(semi_analysis, dict) else 0,
-            time.perf_counter() - grid_started,
-        )
-        semi_result = _try_semi_structured_table(image, None, started, semi_analysis)
-        if semi_result:
-            semi_candidate = _build_table_candidate(semi_result, "coordinate_based_semi")
-            reliability = _semi_result_reliability(semi_candidate, semi_analysis if isinstance(semi_analysis, dict) else {})
-            semi_candidate.setdefault("table_debug", {})
-            if isinstance(semi_candidate["table_debug"], dict):
-                semi_candidate["table_debug"]["semi_reliability"] = reliability
-            if not reliability["passed"]:
-                logger.info(
-                    "Table Recognition phase timing: phase=Semi Quality rejected reasons=%s elapsed=%.3fs",
-                    reliability["reasons"],
-                    time.perf_counter() - grid_started,
-                )
-                semi_analysis = _whole_roi_semi_analysis(semi_analysis, merge_status="coordinate_reconstruction_rejected")
-                semi_analysis["reliability"] = reliability
-            else:
-                semi_result = _attach_candidate_competition(semi_candidate, [semi_candidate], "semi_reconstruction_passed_quality_gate")
-                semi_result.setdefault("table_semi_analysis", semi_analysis if isinstance(semi_analysis, dict) else {})
-                semi_debug = semi_result.get("table_semi_analysis") if isinstance(semi_result.get("table_semi_analysis"), dict) else {}
-                model_inference_count = sum(1 for region in semi_debug.get("regions") or [] if isinstance(region, dict) and region.get("status") in {"recognized", "unusable_result", "failed"})
-                semi_result.setdefault("table_debug", {})
-                if isinstance(semi_result["table_debug"], dict):
-                    semi_result["table_debug"]["timing_total_seconds"] = round(time.perf_counter() - started, 3)
-                    semi_result["table_debug"]["model_inference_count"] = model_inference_count
-                    semi_result["table_debug"]["ocr_inference_count"] = ocr_inference_count
-                logger.info(
-                    "Table Recognition phase timing: phase=Total path=semi model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
-                    model_inference_count,
-                    ocr_inference_count,
-                    time.perf_counter() - started,
-                )
-                return semi_result
-    except Exception as error:
-        logger.info("Semi-structured table analysis fell back to whole ROI: %s", error)
-        semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
 
     whole_started = time.perf_counter()
     model = _load_table_model()
@@ -3106,6 +3061,56 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
     slanext_usable = _has_usable_table_result(slanext_candidate)
     slanext_has_structured_grid = bool(slanext_quality.get("has_structured_cells")) and int(slanext_quality.get("row_count") or 0) > 0 and int(slanext_quality.get("column_count") or 0) > 0
+    slanext_needs_fallback = _should_try_borderless_candidate(slanext_quality, slanext_confidence)
+
+    if slanext_usable and not slanext_needs_fallback:
+        selected = _attach_candidate_competition(slanext_candidate, candidates, "slanext_passed_quality_gate")
+        selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(None, merge_status="not_needed_slanext_confident"))
+        selected_debug = selected.get("table_debug")
+        if isinstance(selected_debug, dict):
+            selected_debug["timing_total_seconds"] = round(time.perf_counter() - started, 3)
+            selected_debug["model_inference_count"] = model_inference_count
+            selected_debug["ocr_inference_count"] = ocr_inference_count
+            selected_debug["semi_skipped_reason"] = "slanext_passed_quality_gate"
+        logger.info(
+            "Table Recognition phase timing: phase=Total path=slanext selected=%s model_inferences=%s ocr_inferences=%s elapsed=%.3fs",
+            selected.get("table_selected_method"),
+            model_inference_count,
+            ocr_inference_count,
+            time.perf_counter() - started,
+        )
+        return selected
+
+    try:
+        grid_started = time.perf_counter()
+        semi_analysis = analyze_table_regions(image)
+        logger.info(
+            "Table Recognition phase timing: phase=Grid Analyzer after SLANeXt detected=%s confidence=%s regions=%s elapsed=%.3fs",
+            bool(semi_analysis.get("detected")) if isinstance(semi_analysis, dict) else False,
+            semi_analysis.get("confidence") if isinstance(semi_analysis, dict) else None,
+            len(semi_analysis.get("regions") or []) if isinstance(semi_analysis, dict) else 0,
+            time.perf_counter() - grid_started,
+        )
+        semi_result = _try_semi_structured_table(image, model, started, semi_analysis)
+        if semi_result:
+            semi_candidate = _build_table_candidate(semi_result, "coordinate_based_semi")
+            reliability = _semi_result_reliability(semi_candidate, semi_analysis if isinstance(semi_analysis, dict) else {})
+            semi_candidate.setdefault("table_debug", {})
+            if isinstance(semi_candidate["table_debug"], dict):
+                semi_candidate["table_debug"]["semi_reliability"] = reliability
+            if not reliability["passed"]:
+                logger.info(
+                    "Table Recognition phase timing: phase=Semi Quality rejected reasons=%s elapsed=%.3fs",
+                    reliability["reasons"],
+                    time.perf_counter() - grid_started,
+                )
+                semi_analysis = _whole_roi_semi_analysis(semi_analysis, merge_status="coordinate_reconstruction_rejected")
+                semi_analysis["reliability"] = reliability
+            else:
+                candidates.append(semi_candidate)
+    except Exception as error:
+        logger.info("Semi-structured table analysis after SLANeXt fell back to whole ROI: %s", error)
+        semi_analysis = {"detected": False, "confidence": 0.0, "regions": [], "reason": str(error)}
 
     if not slanext_usable:
         try:
