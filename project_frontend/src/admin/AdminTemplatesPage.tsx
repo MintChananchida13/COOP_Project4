@@ -1000,13 +1000,13 @@ export default function AdminTemplatesPage() {
               ) : (
                 <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
                 <label className="block space-y-1.5">
-                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">เลือก Template เดิม</span>
+                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">Template ในระบบ</span>
                   <select
                     value={selectedExistingDocumentType}
                     onChange={(event) => setSelectedExistingDocumentType(event.target.value)}
                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   >
-                    <option value="">เลือก Template เดิม</option>
+                    <option value="" disabled hidden>เลือกจากรายการ</option>
                     {existingDocumentTypes.map((documentType) => (
                       <option key={documentType} value={documentType}>
                         {documentType}
@@ -1018,7 +1018,7 @@ export default function AdminTemplatesPage() {
                   <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">ชื่อต่อท้าย Version</span>
                   <div className="flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100">
                     <span className="flex max-w-[45%] shrink-0 items-center truncate border-r border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-500">
-                      {selectedExistingDocumentType.trim() || "Template เดิม"} -
+                      {selectedExistingDocumentType.trim() || "Template"} -
                     </span>
                     <input
                       type="text"

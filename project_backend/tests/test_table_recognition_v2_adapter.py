@@ -13,6 +13,7 @@ from app.table_recognition_v2_adapter import (
     _build_table_candidate,
     _calculate_ocr_confidence,
     _calculate_table_quality,
+    _deduplicate_assigned_table_cells,
     _postprocess_table_result,
     _recognize_raw_ocr_geometry_table,
     _select_best_table_candidate,
@@ -45,6 +46,27 @@ class EmptyTableRecognitionPipelineV2:
 
     def predict(self, **kwargs):
         return [{}]
+
+
+class EnglishTextTableRecognitionPipelineV2:
+    init_kwargs = None
+
+    def __init__(self, **kwargs):
+        EnglishTextTableRecognitionPipelineV2.init_kwargs = kwargs
+
+    def predict(self, **kwargs):
+        return [
+            {
+                "table_structured": {
+                    "rows": [["Name", "Amount"]],
+                    "cells": [
+                        {"row": 0, "col": 0, "text": "Name", "bbox": {"x": 2, "y": 2, "width": 28, "height": 16}},
+                        {"row": 0, "col": 1, "text": "Amount", "bbox": {"x": 34, "y": 2, "width": 28, "height": 16}},
+                    ],
+                    "headerRowCount": 1,
+                }
+            }
+        ]
 
 
 class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
@@ -116,6 +138,32 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["wireless_table_structure_recognition_model_name"], "SLANeXt_wireless")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["text_recognition_model_name"], "th_PP-OCRv5_mobile_rec")
         self.assertEqual(FakeTableRecognitionPipelineV2.init_kwargs["device"], "cpu")
+
+    def test_slanext_cell_text_is_refreshed_with_thai_ocr_when_bboxes_exist(self) -> None:
+        image = np.zeros((40, 80, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=EnglishTextTableRecognitionPipelineV2)
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch.dict(
+            sys.modules,
+            {"paddleocr": fake_paddleocr},
+        ), patch(
+            "app.table_recognition_v2_adapter.analyze_table_regions",
+            return_value={"detected": False, "confidence": 0.0, "regions": []},
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
+            "app.table_recognition_v2_adapter.Path.unlink"
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=[
+                {"text": "ชื่อ", "confidence": 0.93, "model": "th_PP-OCRv5_mobile_rec"},
+                {"text": "จำนวนเงิน", "confidence": 0.91, "model": "th_PP-OCRv5_mobile_rec"},
+            ],
+        ):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_rows"], [[normalize_ocr_text("ชื่อ"), normalize_ocr_text("จำนวนเงิน")]])
+        self.assertEqual(result["table_structured"]["cells"][0]["text"], "ชื่อ")
+        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["status"], "thai_cell_ocr")
+        self.assertEqual(result["table_debug"]["thai_cell_ocr"]["updated_cells"], 2)
 
     def test_paddle_table_device_cpu_is_used_by_pipeline_and_summary(self) -> None:
         fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
@@ -1319,6 +1367,38 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_debug"]["status"], "ocr_table_fallback")
         self.assertEqual(result["table_rows"], [["A", "B"], ["1", "2"]])
         self.assertNotEqual(result["table_rows"], [["Column 1"], [""]])
+
+    def test_cell_assignment_dedup_prefers_per_cell_ocr_for_same_text_inside_cell(self) -> None:
+        cells = [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "100",
+                "ocrText": "100",
+                "assignment_source": "text_detection",
+                "bbox": {"x": 54, "y": 14, "width": 18, "height": 8},
+                "x": 54,
+                "y": 14,
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "100",
+                "ocrText": "100",
+                "assignment_source": "per_cell_ocr",
+                "bbox": {"x": 50, "y": 10, "width": 45, "height": 24},
+                "x": 50,
+                "y": 10,
+            },
+        ]
+
+        deduped, debug = _deduplicate_assigned_table_cells(cells)
+
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0]["row"], 0)
+        self.assertEqual(deduped[0]["col"], 1)
+        self.assertEqual(deduped[0]["assignment_source"], "per_cell_ocr")
+        self.assertEqual(debug["removed"], 1)
 
 
 if __name__ == "__main__":

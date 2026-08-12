@@ -1263,24 +1263,38 @@ export default function GroundTruthEditorZone({
     return pageRois.length > 0 ? pageRois : rois;
   }, [rois, currentImageIndex]);
 
+  const normalizeRoiId = (value: unknown) => {
+    if (value === undefined || value === null) return "";
+    const text = String(value).trim();
+    return text && text !== "NaN" ? text : "";
+  };
+
+  const roiPageIndex = (roi: ROI) => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0);
+  const resultPageIndex = (result: OCRResult & { pageIndex?: number }) =>
+    result.pageIndex !== undefined ? Number(result.pageIndex) : 0;
+  const resultMatchesRoiId = (result: OCRResult & { pageIndex?: number }, roi: ROI) => {
+    const resultRoiId = normalizeRoiId(result.roiId);
+    return Boolean(resultRoiId) && normalizeRoiId(roi.id) === resultRoiId;
+  };
+
 
   const currentPageOcrResults = useMemo(() => {
-    const pageResults = ocrResults.filter(res => (res.pageIndex !== undefined ? Number(res.pageIndex) : 0) === currentImageIndex);
-    return pageResults.length > 0 ? pageResults : ocrResults;
+    return ocrResults.filter(res => resultPageIndex(res) === currentImageIndex);
   }, [ocrResults, currentImageIndex]);
 
   const getRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
-    return currentPageRois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
-      || rois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
-      || currentPageRois.find(roi => roi.fieldName === result.fieldName)
-      || rois.find(roi => roi.fieldName === result.fieldName);
+    const pageIndex = resultPageIndex(result);
+    const pageRois = currentPageRois.filter(roi => roiPageIndex(roi) === pageIndex);
+    return pageRois.find(roi => resultMatchesRoiId(result, roi))
+      || rois.find(roi => roiPageIndex(roi) === pageIndex && resultMatchesRoiId(result, roi))
+      || pageRois.find(roi => roi.fieldName === result.fieldName)
+      || rois.find(roi => roiPageIndex(roi) === pageIndex && roi.fieldName === result.fieldName);
   };
 
   const getAnyPageRoiForResult = (result: OCRResult & { pageIndex?: number }) => {
-    const resultPageIndex = result.pageIndex !== undefined ? Number(result.pageIndex) : 0;
-    return rois.find(roi => result.roiId !== undefined && roi.id === result.roiId)
-      || rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.id === result.roiId)
-      || rois.find(roi => (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === resultPageIndex && roi.fieldName === result.fieldName);
+    const pageIndex = resultPageIndex(result);
+    return rois.find(roi => roiPageIndex(roi) === pageIndex && resultMatchesRoiId(result, roi))
+      || rois.find(roi => roiPageIndex(roi) === pageIndex && roi.fieldName === result.fieldName);
   };
 
   const currentPageResultGroups = useMemo(() => {

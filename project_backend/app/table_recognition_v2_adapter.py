@@ -12,7 +12,7 @@ import numpy as np
 from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize_table
 from .ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
-from .paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr_batch
+from .paddle_thai_ocr_adapter import PADDLE_THAI_OCR_MODEL_NAME, PaddleThaiOcrUnavailableError, run_paddle_thai_ocr_batch
 from .table_grid_analyzer import analyze_table_regions
 
 
@@ -390,6 +390,118 @@ def _region_bbox(region: Dict[str, Any], scale_factor: float = 1.0) -> Optional[
     if width <= 0 or height <= 0:
         return None
     return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _cell_bbox_to_rect(bbox: Any) -> Optional[Dict[str, float]]:
+    if isinstance(bbox, dict):
+        try:
+            x = float(bbox.get("x") if bbox.get("x") is not None else bbox.get("left") or 0.0)
+            y = float(bbox.get("y") if bbox.get("y") is not None else bbox.get("top") or 0.0)
+            if bbox.get("width") is not None and bbox.get("height") is not None:
+                width = float(bbox.get("width") or 0.0)
+                height = float(bbox.get("height") or 0.0)
+            else:
+                right = float(bbox.get("right") if bbox.get("right") is not None else bbox.get("x2") or x)
+                bottom = float(bbox.get("bottom") if bbox.get("bottom") is not None else bbox.get("y2") or y)
+                width = right - x
+                height = bottom - y
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return {"x": x, "y": y, "width": width, "height": height}
+    if isinstance(bbox, list):
+        try:
+            if len(bbox) == 4 and all(isinstance(value, (int, float, str)) for value in bbox):
+                x1 = float(bbox[0])
+                y1 = float(bbox[1])
+                x2 = float(bbox[2])
+                y2 = float(bbox[3])
+            else:
+                points = []
+                for point in bbox:
+                    if isinstance(point, (list, tuple)) and len(point) >= 2:
+                        points.append((float(point[0]), float(point[1])))
+                    elif isinstance(point, dict):
+                        points.append((float(point.get("x") or 0.0), float(point.get("y") or 0.0)))
+                if not points:
+                    return None
+                x_values = [point[0] for point in points]
+                y_values = [point[1] for point in points]
+                x1, y1, x2, y2 = min(x_values), min(y_values), max(x_values), max(y_values)
+        except (TypeError, ValueError):
+            return None
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0 or height <= 0:
+            return None
+        return {"x": x1, "y": y1, "width": width, "height": height}
+    return None
+
+
+def _refresh_structured_cells_with_thai_ocr(image: np.ndarray, structured: Optional[Dict[str, Any]]) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    if not isinstance(structured, dict) or not isinstance(structured.get("cells"), list):
+        return structured, {"status": "no_structured_cells", "cell_crops": 0, "updated_cells": 0}
+
+    input_height, input_width = image.shape[:2]
+    crops: List[np.ndarray] = []
+    crop_indexes: List[int] = []
+    cells = [dict(cell) for cell in structured.get("cells") or [] if isinstance(cell, dict)]
+    for index, cell in enumerate(cells):
+        if cell.get("hidden"):
+            continue
+        rect = _cell_bbox_to_rect(cell.get("bbox") or cell.get("box"))
+        if not rect:
+            continue
+        left = max(0, int(round(rect["x"])))
+        top = max(0, int(round(rect["y"])))
+        right = min(input_width, int(round(rect["x"] + rect["width"])))
+        bottom = min(input_height, int(round(rect["y"] + rect["height"])))
+        if right - left <= 2 or bottom - top <= 2:
+            continue
+        inset_x = 1 if right - left > 8 else 0
+        inset_y = 1 if bottom - top > 8 else 0
+        crop = image[top + inset_y : bottom - inset_y, left + inset_x : right - inset_x]
+        if crop.size == 0:
+            continue
+        crops.append(crop)
+        crop_indexes.append(index)
+
+    if not crops:
+        return structured, {"status": "no_cell_bboxes", "cell_crops": 0, "updated_cells": 0}
+
+    try:
+        recognitions = run_paddle_thai_ocr_batch(crops)
+    except Exception as error:
+        return structured, {"status": "thai_ocr_failed", "reason": str(error), "cell_crops": len(crops), "updated_cells": 0}
+
+    updated = 0
+    confidence_values: List[float] = []
+    for index, recognition in zip(crop_indexes, recognitions):
+        text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
+        if not text:
+            continue
+        confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        cells[index]["text"] = text
+        cells[index]["ocrText"] = text
+        cells[index]["groundTruth"] = text
+        cells[index]["confidence"] = confidence
+        cells[index]["assignment_source"] = "thai_cell_ocr"
+        confidence_values.append(confidence)
+        updated += 1
+
+    refreshed = dict(structured)
+    refreshed["cells"] = cells
+    rows = _rows_from_structured_cells_preserve_grid(cells)
+    if rows:
+        refreshed["rows"] = rows
+    return refreshed, {
+        "status": "thai_cell_ocr",
+        "cell_crops": len(crops),
+        "updated_cells": updated,
+        "average_confidence": round(sum(confidence_values) / len(confidence_values), 4) if confidence_values else 0.0,
+        "model": PADDLE_THAI_OCR_MODEL_NAME,
+    }
 
 
 def _merge_bboxes(boxes: List[Dict[str, float]]) -> Optional[Dict[str, float]]:
@@ -844,6 +956,71 @@ def _merge_assigned_ocr_cells(cells: List[Dict[str, Any]]) -> List[Dict[str, Any
             })
         merged.append(base)
     return sorted(merged, key=lambda item: (int(item["row"]), int(item["col"]), float(item.get("y") or 0.0), float(item.get("x") or 0.0)))
+
+
+def _bbox_contains(inner: Optional[Dict[str, Any]], outer: Optional[Dict[str, Any]], tolerance: float = 2.0) -> bool:
+    if not isinstance(inner, dict) or not isinstance(outer, dict):
+        return False
+    inner_left = float(inner.get("x") or 0.0)
+    inner_top = float(inner.get("y") or 0.0)
+    inner_right = inner_left + float(inner.get("width") or 0.0)
+    inner_bottom = inner_top + float(inner.get("height") or 0.0)
+    outer_left = float(outer.get("x") or 0.0)
+    outer_top = float(outer.get("y") or 0.0)
+    outer_right = outer_left + float(outer.get("width") or 0.0)
+    outer_bottom = outer_top + float(outer.get("height") or 0.0)
+    return (
+        inner_left >= outer_left - tolerance
+        and inner_top >= outer_top - tolerance
+        and inner_right <= outer_right + tolerance
+        and inner_bottom <= outer_bottom + tolerance
+    )
+
+
+def _deduplicate_assigned_table_cells(cells: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not cells:
+        return ([], {"removed": 0, "preferred_per_cell": 0})
+    kept: List[Dict[str, Any]] = []
+    removed = 0
+    preferred_per_cell = 0
+    for cell in sorted(
+        cells,
+        key=lambda item: (
+            0 if item.get("assignment_source") == "per_cell_ocr" else 1,
+            int(item.get("row") or 0),
+            int(item.get("col") or 0),
+            float(item.get("y") or 0.0),
+            float(item.get("x") or 0.0),
+        ),
+    ):
+        text = normalize_ocr_text(cell.get("text") or cell.get("ocrText") or "")
+        if not text:
+            continue
+        duplicate_index: Optional[int] = None
+        for index, existing in enumerate(kept):
+            existing_text = normalize_ocr_text(existing.get("text") or existing.get("ocrText") or "")
+            if existing_text != text:
+                continue
+            same_position = int(existing.get("row") or 0) == int(cell.get("row") or 0) and int(existing.get("col") or 0) == int(cell.get("col") or 0)
+            existing_box = existing.get("bbox")
+            cell_box = cell.get("bbox")
+            per_cell_contains_existing = cell.get("assignment_source") == "per_cell_ocr" and _bbox_contains(existing_box, cell_box)
+            existing_per_cell_contains_cell = existing.get("assignment_source") == "per_cell_ocr" and _bbox_contains(cell_box, existing_box)
+            if same_position or per_cell_contains_existing or existing_per_cell_contains_cell:
+                duplicate_index = index
+                break
+        if duplicate_index is None:
+            kept.append(cell)
+            continue
+        existing = kept[duplicate_index]
+        if cell.get("assignment_source") == "per_cell_ocr" and existing.get("assignment_source") != "per_cell_ocr":
+            kept[duplicate_index] = cell
+            preferred_per_cell += 1
+        removed += 1
+    return (
+        sorted(kept, key=lambda item: (int(item.get("row") or 0), int(item.get("col") or 0), float(item.get("y") or 0.0), float(item.get("x") or 0.0))),
+        {"removed": removed, "preferred_per_cell": preferred_per_cell},
+    )
 
 
 def _coordinate_assignment_diagnostics(
@@ -1624,6 +1801,7 @@ def _ocr_cells_from_grid_boundaries(
         source_cells.append({
             "text": text,
             "confidence": confidence,
+            "assignment_source": "per_cell_ocr",
             "bbox": bbox,
             "x": bbox["x"],
             "y": bbox["y"],
@@ -1716,6 +1894,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
             "col": col_index,
             "rowSpan": 1,
             "colSpan": 1,
+            "assignment_source": "text_detection",
             "ocrText": text,
             "groundTruth": text,
             "text": text,
@@ -1754,6 +1933,16 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
     rows = normalize_table_rows(rows)
     if not any(str(value).strip() for row in rows for value in row):
         return None
+    source_cells, dedupe_debug = _deduplicate_assigned_table_cells(source_cells)
+    rows = [["" for _ in range(col_count)] for _ in range(row_count)]
+    for cell in source_cells:
+        row_index = max(0, min(row_count - 1, int(cell.get("row") or 0)))
+        col_index = max(0, min(col_count - 1, int(cell.get("col") or 0)))
+        text = str(cell.get("text") or "").strip()
+        if not text:
+            continue
+        rows[row_index][col_index] = f"{rows[row_index][col_index]} {text}".strip() if rows[row_index][col_index] else text
+    rows = normalize_table_rows(rows)
     rows, source_cells, col_boundaries, column_compaction_debug = _compact_empty_inferred_columns(
         rows,
         source_cells,
@@ -1776,6 +1965,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
         "uses_text_alignment": len(col_boundaries) > len(hard_col_boundaries) or len(row_boundaries) > len(hard_row_boundaries),
         "assignment": assignment_diagnostics,
         "column_compaction": column_compaction_debug,
+        "dedupe": dedupe_debug,
     }
     return {
         "text": _markdown_table(rows),
@@ -2398,6 +2588,12 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
     rows = normalize_table_rows(rows)
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
+    structured_table, thai_ocr_debug = _refresh_structured_cells_with_thai_ocr(image, structured_table)
+    if isinstance(structured_table, dict) and isinstance(structured_table.get("rows"), list):
+        refreshed_rows = normalize_table_rows(structured_table.get("rows") or [])
+        if refreshed_rows:
+            rows = refreshed_rows
+            text = _markdown_table(rows)
     debug: Dict[str, Any] = {
         "status": "recognized" if text or html else "structure_empty",
         "row_count": len(rows),
@@ -2405,6 +2601,7 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
         "raw_result_count": len(dicts),
         "model_kind": _TABLE_MODEL_KIND,
         "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
+        "thai_cell_ocr": thai_ocr_debug,
         "runtime_called": True,
         "input_size": [int(input_width), int(input_height)],
         "elapsed_seconds": round(time.perf_counter() - started, 3),

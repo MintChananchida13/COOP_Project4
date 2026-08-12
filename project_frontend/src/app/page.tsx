@@ -754,6 +754,31 @@ const getTableExportConfigForRows = (
   };
 };
 
+const normalizedResultRoiId = (value: unknown) => {
+  if (value === undefined || value === null) return "";
+  const text = String(value).trim();
+  return text && text !== "NaN" ? text : "";
+};
+
+const getResultPageIndex = (result: OCRResult & { pageIndex?: number }) =>
+  Number.isFinite(Number(result.pageIndex)) ? Number(result.pageIndex) : 0;
+
+const getRoiPageIndex = (roi: ROI) =>
+  Number.isFinite(Number(roi.pageIndex)) ? Number(roi.pageIndex) : 0;
+
+const resultBelongsToRoi = (result: OCRResult & { pageIndex?: number }, roi: ROI) => {
+  const resultRoiId = normalizedResultRoiId(result.roiId);
+  return Boolean(resultRoiId) && normalizedResultRoiId(roi.id) === resultRoiId;
+};
+
+const findRoiForOcrResult = (rois: ROI[], result: OCRResult & { pageIndex?: number }) => {
+  const resultPageIndex = getResultPageIndex(result);
+  const pageRois = rois.filter((roi) => getRoiPageIndex(roi) === resultPageIndex);
+  return pageRois.find((roi) => resultBelongsToRoi(result, roi))
+    || rois.find((roi) => resultBelongsToRoi(result, roi))
+    || pageRois.find((roi) => roi.fieldName === result.fieldName);
+};
+
 type TableRowKind = "header" | "data" | "summary" | "empty";
 type TableSummaryRegion = {
   detected: boolean;
@@ -1601,9 +1626,10 @@ function HomeWorkspace() {
               const finalTableRows = isTableRoi ? rawTableRows || finalTableStructured?.rows || [["Column 1"], [""]] : rawTableRows;
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
+              const responseRoiId = Number(resItem.roiId ?? roi.id);
               return {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
-                roiId: Number(resItem.roiId ?? roi.id),
+                roiId: Number.isFinite(responseRoiId) ? responseRoiId : roi.id,
                 fieldName: roi.fieldName,
                 bbox: [],
                 extractedText,
@@ -1823,7 +1849,7 @@ function HomeWorkspace() {
     };
 
     getIncludedExportResults(content).forEach((result) => {
-      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      const matchedRoi = findRoiForOcrResult(rois, result);
       const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
       const page = pages[pageIndex] || pages[0];
       const fieldName = result.fieldName || matchedRoi?.fieldName || `field_${Object.keys(page.fields).length + 1}`;
@@ -1905,7 +1931,7 @@ function HomeWorkspace() {
   ) => buildExportPayload(content, options, await buildImageFieldCrops(content));
 
   const getResultFieldType = (result: OCRResult & { pageIndex?: number }) => {
-    const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+    const matchedRoi = findRoiForOcrResult(rois, result);
     const markers = [
       result.type,
       result.dataType,
@@ -2006,7 +2032,7 @@ function HomeWorkspace() {
     const imageResults = getIncludedExportResults(content).filter((result) => getResultFieldType(result) === "image");
     const usedNames = new Map<string, number>();
     return imageResults.map((result) => {
-      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      const matchedRoi = findRoiForOcrResult(rois, result);
       const baseName = safeFilename(result.fieldName || matchedRoi?.fieldName || "image");
       const nextCount = (usedNames.get(baseName) || 0) + 1;
       usedNames.set(baseName, nextCount);
@@ -2026,7 +2052,7 @@ function HomeWorkspace() {
     const crops: ImageFieldCrop[] = [];
 
     for (const result of imageResults) {
-      const matchedRoi = rois.find((roi) => roi.id === result.roiId) || rois.find((roi) => roi.fieldName === result.fieldName);
+      const matchedRoi = findRoiForOcrResult(rois, result);
       const pageIndex = Math.max(0, result.pageIndex ?? matchedRoi?.pageIndex ?? 0);
       const sourceImage = imagesList[pageIndex] || imagesList[0] || previewUrl;
       if (!matchedRoi || !sourceImage) continue;
