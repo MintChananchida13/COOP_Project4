@@ -17,6 +17,7 @@ class OcrUnavailableError(RuntimeError):
 
 TEXT_DETECTION_MIN_BOX_SIZE = 2
 TEXT_DETECTION_LINE_Y_TOLERANCE = 0.6
+TEXT_DETECTION_DUPLICATE_OVERLAP_RATIO = 0.82
 
 
 def _load_image():
@@ -91,10 +92,38 @@ def _region_to_box(region: Dict[str, Any], image_width: int, image_height: int) 
     return {"x": x, "y": y, "width": width, "height": height}
 
 
+def _box_area(box: Dict[str, int]) -> float:
+    return float(max(0, box["width"]) * max(0, box["height"]))
+
+
+def _intersection_area(left_box: Dict[str, int], right_box: Dict[str, int]) -> float:
+    left = max(left_box["x"], right_box["x"])
+    top = max(left_box["y"], right_box["y"])
+    right = min(left_box["x"] + left_box["width"], right_box["x"] + right_box["width"])
+    bottom = min(left_box["y"] + left_box["height"], right_box["y"] + right_box["height"])
+    return float(max(0, right - left) * max(0, bottom - top))
+
+
+def _deduplicate_detected_boxes(boxes: List[Dict[str, int]]) -> List[Dict[str, int]]:
+    kept: List[Dict[str, int]] = []
+    for box in sorted(boxes, key=lambda item: (_box_area(item), item["y"], item["x"])):
+        box_area = max(1.0, _box_area(box))
+        duplicate = False
+        for existing in kept:
+            existing_area = max(1.0, _box_area(existing))
+            overlap = _intersection_area(box, existing)
+            if overlap / min(box_area, existing_area) >= TEXT_DETECTION_DUPLICATE_OVERLAP_RATIO:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(box)
+    return kept
+
+
 def _sort_boxes_reading_order(boxes: List[Dict[str, int]]) -> List[Dict[str, int]]:
     if not boxes:
         return []
-    ordered = sorted(boxes, key=lambda box: (box["y"] + box["height"] / 2, box["x"]))
+    ordered = sorted(_deduplicate_detected_boxes(boxes), key=lambda box: (box["y"] + box["height"] / 2, box["x"]))
     lines: List[Dict[str, Any]] = []
     for box in ordered:
         center_y = box["y"] + box["height"] / 2

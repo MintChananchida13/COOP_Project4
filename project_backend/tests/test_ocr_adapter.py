@@ -4,6 +4,7 @@ from unittest.mock import patch
 import numpy as np
 
 from app.ocr_adapter import _recognize_text_crops_with_detection
+from app.ocr_postprocess import normalize_ocr_text
 
 
 class OcrAdapterTextDetectionTest(unittest.TestCase):
@@ -51,6 +52,34 @@ class OcrAdapterTextDetectionTest(unittest.TestCase):
         self.assertEqual(result["preprocessing"], "paddle_text_detection_fallback_then_recognition")
         self.assertEqual(result["text_detection"]["box_count"], 0)
         self.assertTrue(result["text_detection"]["fallback_used"])
+
+    def test_text_roi_deduplicates_overlapping_detected_boxes_before_recognition(self) -> None:
+        crop = np.zeros((100, 200, 3), dtype=np.uint8)
+        detection = {
+            "model": "PP-OCRv5_server_det",
+            "regions": [
+                {"bbox": {"x": 10, "y": 10, "width": 80, "height": 24}},
+                {"bbox": {"x": 12, "y": 11, "width": 76, "height": 22}},
+            ],
+        }
+
+        with patch("app.ocr_adapter.detect_text_boxes", return_value=detection), patch(
+            "app.ocr_adapter.run_paddle_thai_ocr_batch",
+            return_value=[
+                {"text": "ชื่อ", "confidence": 0.9, "engine": "paddle_thai_ocr", "model": "th_PP-OCRv5_mobile_rec"},
+            ],
+        ) as recognize_batch:
+            result = _recognize_text_crops_with_detection([("field_1", crop)])["field_1"]
+
+        self.assertEqual(len(recognize_batch.call_args.args[0]), 1)
+        self.assertEqual(result["text"], normalize_ocr_text("ชื่อ"))
+
+    def test_ocr_postprocess_removes_single_ascii_noise_in_thai_context(self) -> None:
+        self.assertEqual(
+            normalize_ocr_text("P นางสาวศิรินทร์ สุวรรณ a"),
+            "นางสาวศิรินทร์ สุวรรณ",
+        )
+        self.assertEqual(normalize_ocr_text("ประเภท A"), "ประเภท A")
 
 
 if __name__ == "__main__":

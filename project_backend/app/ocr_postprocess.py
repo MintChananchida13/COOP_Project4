@@ -21,6 +21,24 @@ _SINGLE_LETTER_CONTEXT_WORDS = {
     "ระดับ",
 }
 
+# Override mojibake-prone regex literals with Unicode escapes so Thai/noise
+# detection stays stable across Windows terminals and source encodings.
+_DOTTED_LINE_RE = re.compile(r"^[\s.\u00b7\u2022\u2026_\-=~*|/\\:;,]+$")
+_REPEATED_LINE_NOISE_RE = re.compile(r"(?<![\w\u0e01-\u0e5b])[\s.\u00b7\u2022\u2026_\-=~*|/\\:;,]{3,}(?![\w\u0e01-\u0e5b])")
+_PUNCTUATION_NOISE_RE = re.compile(r"^[.\u00b7\u2022\u2026_\-=~*|/\\:;,]{2,}$")
+_THAI_RE = re.compile(r"[\u0e01-\u0e5b]")
+_SINGLE_LETTER_CONTEXT_WORDS = {
+    "\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17",
+    "type",
+    "class",
+    "grade",
+    "group",
+    "category",
+    "\u0e2b\u0e21\u0e27\u0e14",
+    "\u0e01\u0e25\u0e38\u0e48\u0e21",
+    "\u0e23\u0e30\u0e14\u0e31\u0e1a",
+}
+
 
 def cleanup_ocr_noise(text: str) -> str:
     lines: List[str] = []

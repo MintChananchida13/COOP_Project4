@@ -774,8 +774,9 @@ const resultBelongsToRoi = (result: OCRResult & { pageIndex?: number }, roi: ROI
 const findRoiForOcrResult = (rois: ROI[], result: OCRResult & { pageIndex?: number }) => {
   const resultPageIndex = getResultPageIndex(result);
   const pageRois = rois.filter((roi) => getRoiPageIndex(roi) === resultPageIndex);
+  const hasResultPage = result.pageIndex !== undefined && Number.isFinite(Number(result.pageIndex));
   return pageRois.find((roi) => resultBelongsToRoi(result, roi))
-    || rois.find((roi) => resultBelongsToRoi(result, roi))
+    || (!hasResultPage ? rois.find((roi) => resultBelongsToRoi(result, roi)) : undefined)
     || pageRois.find((roi) => roi.fieldName === result.fieldName);
 };
 
