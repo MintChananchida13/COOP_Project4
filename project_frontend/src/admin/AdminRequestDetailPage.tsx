@@ -744,20 +744,16 @@ export default function AdminRequestDetailPage({
                   </p>
                 </label>
 
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
-                  {isSuggestingVersion ? (
-                    "กำลังวิเคราะห์ Layout และหา Version ที่ใกล้ที่สุด..."
-                  ) : versionSuggestion?.reuse_roi && versionSuggestion.suggested_base_version ? (
+                {versionSuggestion?.reuse_roi && versionSuggestion.suggested_base_version && !isSuggestingVersion && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
                     <div className="space-y-1">
                       <div className="font-black text-emerald-700">Suggested Base Version</div>
                       <div>Reuse ROI: ใช่</div>
                       <div>Similarity Score: {Math.round(versionSuggestion.suggested_base_version.similarity_score * 100)}%</div>
                       <div>Base Template ID: {versionSuggestion.suggested_base_version.template_id}</div>
                     </div>
-                  ) : (
-                    "เลือก Template เดิมเพื่อเริ่มเปรียบเทียบ Layout"
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             )}
           </section>

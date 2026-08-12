@@ -122,6 +122,42 @@ const parseHtmlTable = (value?: string | null): string[][] | null => {
   }
 };
 
+type StructuredPreviewCell = {
+  row: number;
+  col: number;
+  text: string;
+  rowSpan: number;
+  colSpan: number;
+  hidden: boolean;
+};
+
+const asPreviewNumber = (value: unknown, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const getStructuredPreviewCells = (structured?: TemplateStepTestItem["tableStructured"] | null): StructuredPreviewCell[] => {
+  if (!Array.isArray(structured?.cells)) return [];
+  return structured.cells
+    .map((cell) => ({
+      row: Math.max(0, asPreviewNumber(cell.row)),
+      col: Math.max(0, asPreviewNumber(cell.col)),
+      text: String(cell.groundTruth ?? cell.text ?? cell.ocrText ?? ""),
+      rowSpan: Math.max(1, asPreviewNumber(cell.rowSpan, 1)),
+      colSpan: Math.max(1, asPreviewNumber(cell.colSpan, 1)),
+      hidden: Boolean(cell.hidden),
+    }))
+    .sort((a, b) => a.row - b.row || a.col - b.col);
+};
+
+const getStructuredPreviewRows = (structured?: TemplateStepTestItem["tableStructured"] | null): string[][] | null => {
+  if (!Array.isArray(structured?.rows)) return null;
+  const rows = structured.rows
+    .filter((row) => Array.isArray(row))
+    .map((row) => row.map((cell) => String(cell ?? "")));
+  return rows.length > 0 ? rows : null;
+};
+
 const getTableRowsFromTestItem = (item: TemplateStepTestItem): string[][] | null =>
   normalizeTableRows(item.tableStructured?.rows) ||
   normalizeTableRows(item.tableRows) ||
@@ -838,7 +874,101 @@ export default function WorkspaceTemplateEditorV2({
     }
   };
 
+  const renderStructuredTable = (
+    structured: TemplateStepTestItem["tableStructured"] | null | undefined,
+    fallbackRows: string[][] | null,
+    title = "ผลลัพธ์ตาราง"
+  ) => {
+    const cells = getStructuredPreviewCells(structured);
+    const sourceRows = getStructuredPreviewRows(structured) || fallbackRows || [];
+    const headerRowCount = Math.max(1, Number(structured?.headerRowCount ?? 1));
+    const maxRowFromCells = cells.reduce((max, cell) => Math.max(max, cell.row + cell.rowSpan), 0);
+    const maxColFromCells = cells.reduce((max, cell) => Math.max(max, cell.col + cell.colSpan), 0);
+    const rowCount = Math.max(sourceRows.length, maxRowFromCells);
+    const colCount = Math.max(1, sourceRows.reduce((max, row) => Math.max(max, row.length), 0), maxColFromCells);
+    const cellByPosition = new Map(cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
+    const hiddenPositions = new Set<string>();
+
+    cells.forEach((cell) => {
+      if (cell.hidden) {
+        hiddenPositions.add(`${cell.row}:${cell.col}`);
+        return;
+      }
+      for (let rowOffset = 0; rowOffset < cell.rowSpan; rowOffset += 1) {
+        for (let colOffset = 0; colOffset < cell.colSpan; colOffset += 1) {
+          if (rowOffset !== 0 || colOffset !== 0) {
+            hiddenPositions.add(`${cell.row + rowOffset}:${cell.col + colOffset}`);
+          }
+        }
+      }
+    });
+
+    return (
+      <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-100 bg-slate-50 px-2.5 py-1.5 text-[9px] font-black uppercase text-slate-500">
+          {title}
+        </div>
+        <div className="max-h-48 overflow-auto">
+          <table className="min-w-full border-collapse text-left text-[11px] font-semibold text-slate-700">
+            <tbody>
+              {Array.from({ length: rowCount }).map((_, rowIndex) => (
+                <tr key={`table-row-${title}-${rowIndex}`} className={rowIndex < headerRowCount ? "bg-slate-50 font-black text-slate-800" : "bg-white"}>
+                  {Array.from({ length: colCount }).map((__, colIndex) => {
+                    if (hiddenPositions.has(`${rowIndex}:${colIndex}`)) return null;
+                    const structuredCell = cellByPosition.get(`${rowIndex}:${colIndex}`);
+                    const cellText = structuredCell?.text ?? sourceRows[rowIndex]?.[colIndex] ?? "";
+                    const isMerged = Boolean(structuredCell && (structuredCell.rowSpan > 1 || structuredCell.colSpan > 1));
+                    const isHeader = rowIndex < headerRowCount;
+                    return (
+                      <td
+                        key={`table-cell-${title}-${rowIndex}-${colIndex}`}
+                        rowSpan={structuredCell?.rowSpan}
+                        colSpan={structuredCell?.colSpan}
+                        className={`border border-slate-200 px-2 py-1.5 ${
+                          isHeader || isMerged ? "text-center align-middle" : "text-left align-top"
+                        }`}
+                      >
+                        {cellText || <span className="text-slate-300">-</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   const renderTablePreview = (item: TemplateStepTestItem) => {
+    if (Array.isArray(item.tableSections) && item.tableSections.length > 0) {
+      const renderedSections = item.tableSections
+        .map((section, index) => {
+          const structured = section.tableStructured || {
+            rows: Array.isArray(section.rows) ? section.rows : undefined,
+            cells: Array.isArray(section.cells) ? section.cells : undefined,
+          };
+          const rows = getStructuredPreviewRows(structured) || normalizeTableRows(section.rows);
+          const hasStructuredCells = getStructuredPreviewCells(structured).length > 0;
+          if (!hasStructuredCells && (!rows || rows.length === 0) && !section.text) return null;
+          if (!hasStructuredCells && (!rows || rows.length === 0) && section.text) {
+            return (
+              <div key={section.regionId || `section-${index}`} className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-semibold leading-relaxed text-slate-700">
+                {section.text}
+              </div>
+            );
+          }
+          return (
+            <div key={section.regionId || `section-${index}`}>
+              {renderStructuredTable(structured, rows, `ผลลัพธ์ตาราง ${index + 1}`)}
+            </div>
+          );
+        })
+        .filter(Boolean);
+      if (renderedSections.length > 0) return <>{renderedSections}</>;
+    }
+
     const rows = getTableRowsFromTestItem(item);
     const tableDebugStatus = typeof item.tableDebug?.status === "string" ? item.tableDebug.status : null;
     if (!rows || rows.length === 0) {
@@ -849,28 +979,7 @@ export default function WorkspaceTemplateEditorV2({
       );
     }
 
-    return (
-      <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="border-b border-slate-100 bg-slate-50 px-2.5 py-1.5 text-[9px] font-black uppercase text-slate-500">
-          ผลลัพธ์ตาราง
-        </div>
-        <div className="max-h-48 overflow-auto">
-          <table className="min-w-full border-collapse text-left text-[11px] font-semibold text-slate-700">
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={`table-row-${rowIndex}`} className={rowIndex === 0 ? "bg-slate-50 font-black text-slate-800" : "bg-white"}>
-                  {row.map((cell, cellIndex) => (
-                    <td key={`table-cell-${rowIndex}-${cellIndex}`} className="border border-slate-200 px-2 py-1.5 align-top">
-                      {cell || <span className="text-slate-300">-</span>}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
+    return renderStructuredTable(item.tableStructured, rows);
   };
 
   const renderRoiCropPreview = (item: TemplateStepTestItem) => {

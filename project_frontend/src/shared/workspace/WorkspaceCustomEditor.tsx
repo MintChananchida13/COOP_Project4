@@ -446,7 +446,7 @@ export default function WorkspaceCustomEditor({
             </svg>
           </button>
 
-          <div className="flex max-w-[320px] items-center gap-2 overflow-x-auto py-0.5">
+          <div className="flex max-w-[320px] items-center gap-2 overflow-x-auto py-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {imagesList.map((url, idx) => (
               <button
                 key={idx}
@@ -1338,7 +1338,7 @@ export default function WorkspaceCustomEditor({
             </button>
 
             {/* Thumbnails */}
-            <div className="flex items-center gap-2 overflow-x-auto max-w-[320px] py-0.5">
+            <div className="flex items-center gap-2 overflow-x-auto max-w-[320px] py-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               {imagesList.map((url, idx) => (
                 <button
                   key={idx}
