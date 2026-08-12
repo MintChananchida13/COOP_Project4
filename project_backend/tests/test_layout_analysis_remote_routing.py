@@ -106,14 +106,44 @@ class LayoutAnalysisRemoteRoutingTest(unittest.TestCase):
         table_region = next(region for region in result["regions"] if region["type"] == "table")
         text_region = next(region for region in result["regions"] if region["type"] == "text")
 
-        self.assertEqual(table_region["roi"]["x_ratio"], 16 / 200)
-        self.assertEqual(table_region["roi"]["y_ratio"], 6 / 100)
-        self.assertEqual(table_region["roi"]["width_ratio"], 108 / 200)
-        self.assertEqual(table_region["roi"]["height_ratio"], 58 / 100)
+        self.assertEqual(table_region["roi"]["x_ratio"], 18 / 200)
+        self.assertEqual(table_region["roi"]["y_ratio"], 8 / 100)
+        self.assertEqual(table_region["roi"]["width_ratio"], 104 / 200)
+        self.assertEqual(table_region["roi"]["height_ratio"], 54 / 100)
         self.assertTrue(table_region["roi_expansion"]["enabled"])
         self.assertEqual(table_region["roi_expansion"]["reason"], "table_edge_guard_padding")
-        self.assertEqual(table_region["roi_expansion"]["padding"]["left"], 4)
+        self.assertEqual(table_region["roi_expansion"]["padding"]["left"], 2)
         self.assertLess(text_region["roi"]["x_ratio"], 150 / 200)
+
+    def test_auto_roi_skips_image_region_when_text_is_inside(self) -> None:
+        image = np.zeros((100, 200, 3), dtype=np.uint8)
+        raw_items = [
+            {"bbox": [20, 10, 120, 80], "label": "image", "score": 0.95},
+            {"bbox": [40, 30, 70, 45], "label": "text", "score": 0.9},
+        ]
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch(
+            "app.layout_analysis_service._run_pipeline",
+            return_value=raw_items,
+        ):
+            result = analyze_layout(image, expand_text_rois=True, auto_roi_mode="text_line")
+
+        self.assertEqual([region["type"] for region in result["regions"]], ["text"])
+
+    def test_auto_roi_keeps_image_region_when_no_text_is_inside(self) -> None:
+        image = np.zeros((100, 200, 3), dtype=np.uint8)
+        raw_items = [
+            {"bbox": [20, 10, 120, 80], "label": "image", "score": 0.95},
+            {"bbox": [150, 30, 180, 45], "label": "text", "score": 0.9},
+        ]
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch(
+            "app.layout_analysis_service._run_pipeline",
+            return_value=raw_items,
+        ):
+            result = analyze_layout(image, expand_text_rois=True, auto_roi_mode="text_line")
+
+        self.assertEqual([region["type"] for region in result["regions"]], ["image", "text"])
 
 
 if __name__ == "__main__":

@@ -429,6 +429,16 @@ def _text_box_belongs_to_table(text_box: List[float], table_boxes: List[List[flo
     return False
 
 
+def _image_box_contains_text(image_box: List[float], text_boxes: List[List[float]]) -> bool:
+    for text_box in text_boxes:
+        text_area = max(_box_area(text_box), 1.0)
+        if _box_center_inside(text_box, image_box):
+            return True
+        if _intersection_area(text_box, image_box) / text_area >= 0.35:
+            return True
+    return False
+
+
 def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_mode: AutoRoiMode = "text_line") -> Dict[str, Any]:
     if image is None or image.size == 0:
         raise ValueError("Invalid image for layout analysis.")
@@ -474,12 +484,15 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_m
         )
 
     table_boxes = [item["box"] for item in parsed_items if item["type"] == "table"]
+    text_boxes = [item["box"] for item in parsed_items if item["type"] == "text"]
 
     filtered_items: List[Dict[str, Any]] = []
     for item in parsed_items:
         box = item["box"]
         region_type = item["type"]
         if region_type == "text" and _text_box_belongs_to_table(box, table_boxes):
+            continue
+        if region_type == "image" and _image_box_contains_text(box, text_boxes):
             continue
 
         filtered_items.append(item)
