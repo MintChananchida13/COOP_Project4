@@ -47,6 +47,8 @@ _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD = 0.45
 _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD = 0.70
 _TABLE_CANDIDATE_TIE_EPSILON = 0.03
 _TABLE_LOW_OCR_CONFIDENCE_THRESHOLD = 0.65
+_SEMI_TABLE_MIN_CONFIDENCE = 0.72
+_SEMI_TABLE_MIN_TOPOLOGY_CHANGE_RATIO = 0.33
 
 
 def _model_service_url() -> str:
@@ -2869,15 +2871,27 @@ def _try_semi_structured_table(
 ) -> Optional[Dict[str, Any]]:
     semi_started = time.perf_counter()
     analysis = analysis if isinstance(analysis, dict) else analyze_table_regions(image)
-    if not analysis.get("detected") or float(analysis.get("confidence") or 0.0) < 0.72:
+    is_forced_whole_roi = bool(analysis.get("forced"))
+    topology_change_ratio = float(analysis.get("topology_change_ratio") or 0.0)
+    if (
+        not analysis.get("detected")
+        or (
+            not is_forced_whole_roi
+            and (
+                float(analysis.get("confidence") or 0.0) < _SEMI_TABLE_MIN_CONFIDENCE
+                or topology_change_ratio < _SEMI_TABLE_MIN_TOPOLOGY_CHANGE_RATIO
+            )
+        )
+    ):
         logger.info(
-            "Table Recognition phase timing: phase=Region Inference skipped reason=%s elapsed=%.3fs",
+            "Table Recognition phase timing: phase=Region Inference skipped reason=%s confidence=%s topology_change_ratio=%s elapsed=%.3fs",
             analysis.get("reason") if isinstance(analysis, dict) else "not_detected",
+            analysis.get("confidence") if isinstance(analysis, dict) else None,
+            analysis.get("topology_change_ratio") if isinstance(analysis, dict) else None,
             time.perf_counter() - semi_started,
         )
         return None
     regions = [region for region in analysis.get("regions") or [] if isinstance(region, dict)]
-    is_forced_whole_roi = bool(analysis.get("forced"))
     if len(regions) < 2 and not is_forced_whole_roi:
         logger.info(
             "Table Recognition phase timing: phase=Region Inference skipped reason=not_enough_regions regions=%s elapsed=%.3fs",

@@ -444,6 +444,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
+            "topology_change_ratio": 0.5,
             "regions": [
                 {"type": "grid", "bbox": {"x": 0, "y": 0, "width": test_image.shape[1], "height": test_image.shape[0] // 2}},
                 {"type": "grid", "bbox": {"x": 0, "y": test_image.shape[0] // 2, "width": test_image.shape[1], "height": test_image.shape[0] // 2}},
@@ -502,6 +503,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
+            "topology_change_ratio": 0.5,
             "regions": [
                 {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 180, "height": 60}},
                 {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 180, "height": 60}},
@@ -958,6 +960,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
+            "topology_change_ratio": 0.5,
             "regions": [
                 {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 180, "height": 45}},
                 {"type": "grid", "bbox": {"x": 0, "y": 45, "width": 180, "height": 45}},
@@ -999,6 +1002,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
+            "topology_change_ratio": 0.5,
             "regions": [
                 {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 160, "height": 60}},
                 {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 160, "height": 60}},
@@ -1028,6 +1032,7 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         fake_analysis = {
             "detected": True,
             "confidence": 0.91,
+            "topology_change_ratio": 0.5,
             "regions": [
                 {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 160, "height": 60}},
                 {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 160, "height": 60}},
@@ -1213,6 +1218,27 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis):
             result = _try_semi_structured_table(image, object(), 0.0)
 
+        self.assertIsNone(result)
+
+    def test_semi_structured_low_topology_change_is_skipped(self) -> None:
+        image = np.zeros((120, 180, 3), dtype=np.uint8)
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "topology_change_ratio": 0.12,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 180, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 180, "height": 60}},
+            ],
+            "reason": "weak_topology_change",
+        }
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter._recognize_coordinate_based_semi_table"
+        ) as coordinate:
+            result = _try_semi_structured_table(image, object(), 0.0)
+
+        coordinate.assert_not_called()
         self.assertIsNone(result)
 
     def test_grid_analyzer_error_falls_back_to_whole_roi(self) -> None:

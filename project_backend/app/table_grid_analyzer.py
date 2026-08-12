@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 _MIN_REGION_HEIGHT_RATIO = 0.12
 _MIN_REGION_WIDTH_RATIO = 0.35
 _MIN_CONFIDENCE = 0.72
+_MIN_TOPOLOGY_CHANGE_RATIO = 0.33
+_MIN_REGION_COUNT = 2
+_MIN_DISTINCT_TOPOLOGIES = 2
 
 
 def _clip_region(x: int, y: int, width: int, height: int, image_width: int, image_height: int) -> Dict[str, Any]:
@@ -124,7 +127,8 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
         segment_counts = _vertical_segment_counts(vertical, bands, width)
         topology_changes = sum(1 for prev, curr in zip(segment_counts, segment_counts[1:]) if prev != curr)
         distinct_topologies = len(set(segment_counts))
-        if topology_changes <= 0 or distinct_topologies < 2:
+        topology_change_ratio = topology_changes / max(1, len(bands) - 1)
+        if topology_changes <= 0 or distinct_topologies < _MIN_DISTINCT_TOPOLOGIES:
             return {
                 "detected": False,
                 "confidence": 0.0,
@@ -132,6 +136,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "reason": "no_topology_change",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
+                "topology_change_ratio": round(topology_change_ratio, 4),
                 "contour_summary": contours,
             }
 
@@ -161,7 +166,7 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "grid_line_count": current_count,
             })
 
-        if len(regions) < 2:
+        if len(regions) < _MIN_REGION_COUNT:
             return {
                 "detected": False,
                 "confidence": 0.0,
@@ -169,22 +174,33 @@ def analyze_table_regions(image: np.ndarray) -> Dict[str, Any]:
                 "reason": "region_split_not_confident",
                 "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
                 "segment_counts": segment_counts,
+                "topology_change_ratio": round(topology_change_ratio, 4),
                 "contour_summary": contours,
             }
 
         line_strength = min(1.0, (len(horizontal_positions) / 8.0) * 0.45 + (len(vertical_positions) / 6.0) * 0.35)
-        topology_strength = min(1.0, topology_changes / max(1, len(bands) - 1))
+        topology_strength = min(1.0, topology_change_ratio)
         confidence = round(max(0.0, min(1.0, line_strength + topology_strength * 0.45)), 4)
-        detected = confidence >= _MIN_CONFIDENCE
+        region_height_ratios = [float(region["bbox"]["height"]) / max(1, height) for region in regions]
+        has_meaningful_regions = all(ratio >= _MIN_REGION_HEIGHT_RATIO for ratio in region_height_ratios)
+        detected = (
+            confidence >= _MIN_CONFIDENCE
+            and topology_change_ratio >= _MIN_TOPOLOGY_CHANGE_RATIO
+            and distinct_topologies >= _MIN_DISTINCT_TOPOLOGIES
+            and has_meaningful_regions
+        )
         for region in regions:
             region["confidence"] = confidence
         return {
             "detected": detected,
             "confidence": confidence,
             "regions": regions if detected else [],
-            "reason": "topology_change_detected" if detected else "low_confidence",
+            "reason": "topology_change_detected" if detected else "low_topology_confidence",
             "line_summary": {"horizontal": len(horizontal_positions), "vertical": len(vertical_positions)},
             "segment_counts": segment_counts,
+            "topology_change_ratio": round(topology_change_ratio, 4),
+            "distinct_topologies": distinct_topologies,
+            "region_height_ratios": [round(ratio, 4) for ratio in region_height_ratios],
             "contour_summary": contours,
         }
     except Exception as error:
