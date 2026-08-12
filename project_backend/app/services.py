@@ -2092,8 +2092,37 @@ class TemplateRequestService:
             request_rows = conn.execute(
                 "SELECT * FROM template_requests ORDER BY created_at DESC"
             ).fetchall()
+            page_rows = conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                ORDER BY template_request_id ASC, page_number ASC
+                """
+            ).fetchall()
+            field_rows = conn.execute(
+                """
+                SELECT * FROM requested_fields
+                ORDER BY template_request_id ASC, page_number ASC, created_at ASC
+                """
+            ).fetchall()
 
-        return {"template_requests": [self.get(row["id"]) for row in request_rows]}
+        pages_by_request: Dict[str, List[Dict[str, Any]]] = {}
+        for page_row in page_rows:
+            page = _page_row_to_api(page_row)
+            pages_by_request.setdefault(page["template_request_id"], []).append(page)
+
+        fields_by_request: Dict[str, List[Dict[str, Any]]] = {}
+        for field_row in field_rows:
+            field = _field_row_to_api(field_row)
+            fields_by_request.setdefault(field["template_request_id"], []).append(field)
+
+        requests = []
+        for row in request_rows:
+            request = _request_row_to_api(row)
+            request["pages"] = pages_by_request.get(request["id"], [])
+            request["requested_fields"] = fields_by_request.get(request["id"], [])
+            requests.append(request)
+
+        return {"template_requests": requests}
 
     def get(self, request_id: str) -> Dict[str, Any]:
         with _connect() as conn:

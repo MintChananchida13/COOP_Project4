@@ -6,6 +6,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { StatusBadge } from "../shared/ui";
 import { AuthSession, clearAuthSession, readAuthSession } from "../auth/session";
+import { preloadAdminLists } from "./adminApi";
 
 const navItems = [
   { href: "/admin", label: "ภาพรวม" },
@@ -21,6 +22,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setSession(readAuthSession());
+    preloadAdminLists();
   }, []);
 
   const handleLogout = () => {

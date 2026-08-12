@@ -13,6 +13,8 @@ export const ADMIN_API_BASE_URL =
 
 let templateRequestListCache: AdminTemplateRequest[] | null = null;
 let templateListCache: Template[] | null = null;
+let templateRequestListPromise: Promise<AdminTemplateRequest[]> | null = null;
+let templateListPromise: Promise<Template[]> | null = null;
 
 const cloneTemplateRequests = (requests: AdminTemplateRequest[]) =>
   requests.map((request) => ({
@@ -66,8 +68,14 @@ const removeTemplateListCache = (templateId: string) => {
 };
 
 export const invalidateAdminListCache = (target: "templates" | "requests" | "all" = "all") => {
-  if (target === "templates" || target === "all") templateListCache = null;
-  if (target === "requests" || target === "all") templateRequestListCache = null;
+  if (target === "templates" || target === "all") {
+    templateListCache = null;
+    templateListPromise = null;
+  }
+  if (target === "requests" || target === "all") {
+    templateRequestListCache = null;
+    templateRequestListPromise = null;
+  }
 };
 
 interface ApiTemplateRequestPage {
@@ -917,17 +925,29 @@ export const fetchTemplateRequests = async () => {
   if (templateRequestListCache) {
     return cloneTemplateRequests(templateRequestListCache);
   }
-
-  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`);
-  if (!response.ok) {
-    throw new Error(`Template request load failed with ${response.status}`);
+  if (templateRequestListPromise) {
+    return cloneTemplateRequests(await templateRequestListPromise);
   }
 
-  const json = await response.json();
-  const apiRequests = json?.data?.template_requests as ApiTemplateRequest[] | undefined;
-  const requests = (apiRequests || []).map(mapApiRequest);
-  setTemplateRequestListCache(requests);
-  return cloneTemplateRequests(requests);
+  templateRequestListPromise = (async () => {
+    const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`);
+    if (!response.ok) {
+      throw new Error(`Template request load failed with ${response.status}`);
+    }
+
+    const json = await response.json();
+    const apiRequests = json?.data?.template_requests as ApiTemplateRequest[] | undefined;
+    const requests = (apiRequests || []).map(mapApiRequest);
+    setTemplateRequestListCache(requests);
+    return cloneTemplateRequests(requests);
+  })();
+
+  try {
+    return cloneTemplateRequests(await templateRequestListPromise);
+  } catch (error) {
+    templateRequestListPromise = null;
+    throw error;
+  }
 };
 
 export const fetchAdminDashboard = async () => {
@@ -949,6 +969,15 @@ export const fetchAdminDashboard = async () => {
     latestRequests: (latestRequests || []).map(mapApiRequest),
     latestTemplates: (latestTemplates || []).map(mapApiTemplate),
   };
+};
+
+export const preloadAdminLists = () => {
+  void fetchTemplateRequests().catch((error) => {
+    console.warn("Template request preload failed.", error);
+  });
+  void fetchTemplates().catch((error) => {
+    console.warn("Template preload failed.", error);
+  });
 };
 
 export const createTemplateRequest = async (payload: {
@@ -1201,17 +1230,29 @@ export const fetchTemplates = async () => {
   if (templateListCache) {
     return cloneTemplates(templateListCache);
   }
-
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates`);
-  if (!response.ok) {
-    throw new Error(`Template list failed with ${response.status}`);
+  if (templateListPromise) {
+    return cloneTemplates(await templateListPromise);
   }
 
-  const json = await response.json();
-  const templates = json?.data?.templates as ApiTemplate[] | undefined;
-  const mappedTemplates = (templates || []).map(mapApiTemplate);
-  setTemplateListCache(mappedTemplates);
-  return cloneTemplates(mappedTemplates);
+  templateListPromise = (async () => {
+    const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates`);
+    if (!response.ok) {
+      throw new Error(`Template list failed with ${response.status}`);
+    }
+
+    const json = await response.json();
+    const templates = json?.data?.templates as ApiTemplate[] | undefined;
+    const mappedTemplates = (templates || []).map(mapApiTemplate);
+    setTemplateListCache(mappedTemplates);
+    return cloneTemplates(mappedTemplates);
+  })();
+
+  try {
+    return cloneTemplates(await templateListPromise);
+  } catch (error) {
+    templateListPromise = null;
+    throw error;
+  }
 };
 
 export const deleteTemplateApi = async (templateId: string) => {

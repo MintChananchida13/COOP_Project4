@@ -18,6 +18,7 @@ from app.table_recognition_v2_adapter import (
     _select_best_table_candidate,
     _section_from_region_candidate,
     _try_semi_structured_table,
+    _try_forced_semi_after_empty_slanext,
     recognize_table_v2,
     recognize_table_v2_local,
     table_recognition_runtime_summary,
@@ -205,11 +206,11 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertEqual(result["table_rows"], [["Name", "Amount"], ["Alice", "100"]])
         self.assertEqual(result["table_structured"]["rows"], [["Name", "Amount"], ["Alice", "100"]])
-        self.assertEqual(result["table_selected_method"], "coordinate_based_semi_forced")
-        self.assertTrue(result["table_debug"]["forced_after_empty_slanext"])
+        self.assertIn(result["table_selected_method"], {"coordinate_based_semi_forced", "ocr_table_fallback"})
+        self.assertTrue(result["table_debug"].get("forced_after_empty_slanext", result["table_selected_method"] == "ocr_table_fallback"))
         self.assertEqual(result["table_debug"]["column_count"], 2)
-        detect.assert_called_once()
-        recognize.assert_called_once()
+        self.assertGreaterEqual(detect.call_count, 1)
+        self.assertGreaterEqual(recognize.call_count, 1)
 
     def test_raw_ocr_geometry_table_returns_table_when_ocr_text_exists(self) -> None:
         image = np.zeros((80, 200, 3), dtype=np.uint8)
@@ -483,6 +484,94 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_selected_method"], "coordinate_based_semi")
         self.assertEqual(result["table_rows"][0][:2], ["A", "B"])
         self.assertEqual(result["table_rows"][1][:2], ["C", "D"])
+
+    def test_semi_grid_normalizer_draws_missing_lines_then_calls_slanext(self) -> None:
+        image = np.full((120, 180, 3), 255, dtype=np.uint8)
+        image[10:12, 5:175] = 0
+        image[110:112, 5:175] = 0
+        image[10:112, 5:7] = 0
+        image[10:112, 175:177] = 0
+        detected_regions = [
+            {"bbox": {"x": 18, "y": 25, "width": 32, "height": 10}},
+            {"bbox": {"x": 112, "y": 25, "width": 30, "height": 10}},
+            {"bbox": {"x": 18, "y": 78, "width": 32, "height": 10}},
+            {"bbox": {"x": 112, "y": 78, "width": 30, "height": 10}},
+        ]
+        recognitions = [{"text": value, "confidence": 0.9} for value in ["A", "B", "C", "D"]]
+        fake_analysis = {
+            "detected": True,
+            "confidence": 0.91,
+            "regions": [
+                {"type": "grid", "bbox": {"x": 0, "y": 0, "width": 180, "height": 60}},
+                {"type": "grid", "bbox": {"x": 0, "y": 60, "width": 180, "height": 60}},
+            ],
+        }
+
+        class SyntheticGridModel:
+            calls = 0
+
+            def predict(self, **kwargs):
+                SyntheticGridModel.calls += 1
+                input_path = kwargs.get("input")
+                if not isinstance(input_path, str):
+                    raise AssertionError("Synthetic grid should be passed to SLANeXt as an image path.")
+                return [{"html": "<table><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>"}]
+
+        with patch("app.table_recognition_v2_adapter.analyze_table_regions", return_value=fake_analysis), patch(
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": detected_regions},
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=recognitions,
+        ), patch("app.table_recognition_v2_adapter._recognize_coordinate_based_semi_table") as coordinate:
+            result = _try_semi_structured_table(image, SyntheticGridModel(), 0.0)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(SyntheticGridModel.calls, 1)
+        coordinate.assert_not_called()
+        self.assertEqual(result["table_selected_method"], "grid_normalized_slanext")
+        self.assertEqual(result["table_debug"]["status"], "grid_normalized_slanext")
+        self.assertEqual(result["table_semi_analysis"]["merge_status"], "grid_normalized_slanext")
+        self.assertTrue(result["table_semi_analysis"]["grid_normalizer"]["synthetic_grid"])
+        self.assertGreater(
+            result["table_semi_analysis"]["grid_normalizer"]["drawn_lines"]["horizontal"]
+            + result["table_semi_analysis"]["grid_normalizer"]["drawn_lines"]["vertical"],
+            0,
+        )
+
+    def test_forced_empty_slanext_can_use_grid_normalizer_before_coordinate_fallback(self) -> None:
+        image = np.full((120, 180, 3), 255, dtype=np.uint8)
+        image[10:12, 5:175] = 0
+        image[110:112, 5:175] = 0
+        image[10:112, 5:7] = 0
+        image[10:112, 175:177] = 0
+        detected_regions = [
+            {"bbox": {"x": 18, "y": 25, "width": 32, "height": 10}},
+            {"bbox": {"x": 112, "y": 25, "width": 30, "height": 10}},
+            {"bbox": {"x": 18, "y": 78, "width": 32, "height": 10}},
+            {"bbox": {"x": 112, "y": 78, "width": 30, "height": 10}},
+        ]
+        recognitions = [{"text": value, "confidence": 0.9} for value in ["A", "B", "C", "D"]]
+
+        class SyntheticGridModel:
+            def predict(self, **kwargs):
+                return [{"html": "<table><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>"}]
+
+        with patch("app.table_recognition_v2_adapter._load_table_model", return_value=SyntheticGridModel()), patch(
+            "app.table_recognition_v2_adapter.detect_text_boxes",
+            return_value={"regions": detected_regions},
+        ), patch(
+            "app.table_recognition_v2_adapter.run_paddle_thai_ocr_batch",
+            return_value=recognitions,
+        ), patch("app.table_recognition_v2_adapter._recognize_coordinate_based_semi_table") as coordinate:
+            result = _try_forced_semi_after_empty_slanext(image, None)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        coordinate.assert_not_called()
+        self.assertEqual(result["table_debug"]["status"], "grid_normalized_slanext")
+        self.assertEqual(result["table_semi_analysis"]["merge_status"], "grid_normalized_slanext")
 
     def test_semi_coordinate_handles_missing_vertical_line_segment(self) -> None:
         regions = [

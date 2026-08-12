@@ -483,6 +483,95 @@ def _combined_boundaries(
     return sorted(set(round(value, 3) for value in text_boundaries))
 
 
+def _has_near_position(values: List[float], target: float, tolerance: float) -> bool:
+    return any(abs(float(value) - float(target)) <= tolerance for value in values)
+
+
+def _infer_repeated_alignment_lines(cells: List[Dict[str, Any]], axis: str, limit: int) -> List[float]:
+    if len(cells) < 4:
+        return []
+    size_key = "width" if axis == "x" else "height"
+    center_key = "center_x" if axis == "x" else "center_y"
+    sizes = [float(cell.get(size_key) or 0.0) for cell in cells if float(cell.get(size_key) or 0.0) > 0]
+    median_size = float(np.median(sizes)) if sizes else max(8.0, float(limit) * 0.02)
+    tolerance = max(6.0, median_size * 0.75)
+    centers = [float(cell.get(center_key) or 0.0) for cell in cells]
+    clusters = _cluster_positions(centers, tolerance)
+    if len(clusters) < 2:
+        return []
+
+    inferred: List[float] = []
+    min_support = 2
+    for left, right in zip(clusters, clusters[1:]):
+        left_support = sum(1 for cell in cells if abs(float(cell.get(center_key) or 0.0) - left) <= tolerance)
+        right_support = sum(1 for cell in cells if abs(float(cell.get(center_key) or 0.0) - right) <= tolerance)
+        if left_support >= min_support and right_support >= min_support:
+            boundary = (left + right) / 2.0
+            if tolerance <= boundary <= float(limit) - tolerance:
+                inferred.append(boundary)
+    return inferred
+
+
+def _draw_synthetic_grid_lines(image: np.ndarray, horizontal_lines: List[float], vertical_lines: List[float]) -> np.ndarray:
+    normalized = image.copy()
+    height, width = normalized.shape[:2]
+    color = (0, 0, 0) if len(normalized.shape) == 3 else 0
+    thickness = max(1, int(round(min(width, height) * 0.0025)))
+    for y_value in horizontal_lines:
+        y = int(round(max(0, min(height - 1, y_value))))
+        cv2.line(normalized, (0, y), (width - 1, y), color, thickness=thickness)
+    for x_value in vertical_lines:
+        x = int(round(max(0, min(width - 1, x_value))))
+        cv2.line(normalized, (x, 0), (x, height - 1), color, thickness=thickness)
+    return normalized
+
+
+def _normalize_semi_table_grid(image: np.ndarray, analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    phase_started = time.perf_counter()
+    height, width = image.shape[:2]
+    horizontal_mask, vertical_mask = _semi_line_masks(image)
+    hard_horizontal = _line_positions_from_mask(horizontal_mask, "horizontal", 0.18)
+    hard_vertical = _line_positions_from_mask(vertical_mask, "vertical", 0.15)
+    try:
+        ocr_cells, _, ocr_debug = _ocr_cells_from_text_detection(image, "grid_normalizer")
+    except Exception as error:
+        return {"ok": False, "reason": f"ocr_geometry_failed:{error}"}
+    if len(ocr_cells) < 4:
+        return {"ok": False, "reason": "insufficient_ocr_alignment", "ocr_debug": ocr_debug}
+
+    inferred_horizontal = _infer_repeated_alignment_lines(ocr_cells, "y", height)
+    inferred_vertical = _infer_repeated_alignment_lines(ocr_cells, "x", width)
+    line_tolerance = max(4.0, min(width, height) * 0.01)
+    missing_horizontal = [line for line in inferred_horizontal if not _has_near_position(hard_horizontal, line, line_tolerance)]
+    missing_vertical = [line for line in inferred_vertical if not _has_near_position(hard_vertical, line, line_tolerance)]
+    if len(missing_horizontal) + len(missing_vertical) < 1:
+        return {
+            "ok": False,
+            "reason": "no_confident_missing_lines",
+            "ocr_debug": ocr_debug,
+            "hard_lines": {"horizontal": len(hard_horizontal), "vertical": len(hard_vertical)},
+        }
+
+    normalized_image = _draw_synthetic_grid_lines(image, missing_horizontal, missing_vertical)
+    confidence = min(0.92, max(float(analysis.get("confidence") or 0.0), 0.72) + min(0.18, 0.03 * (len(missing_horizontal) + len(missing_vertical))))
+    return {
+        "ok": True,
+        "image": normalized_image,
+        "debug": {
+            "status": "grid_normalized",
+            "role": "grid_normalizer",
+            "synthetic_grid": True,
+            "confidence": round(confidence, 4),
+            "hard_lines": {"horizontal": len(hard_horizontal), "vertical": len(hard_vertical)},
+            "inferred_lines": {"horizontal": len(inferred_horizontal), "vertical": len(inferred_vertical)},
+            "drawn_lines": {"horizontal": len(missing_horizontal), "vertical": len(missing_vertical)},
+            "ocr_box_count": len(ocr_cells),
+            "ocr_debug": ocr_debug,
+            "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
+        },
+    }
+
+
 def _row_boundaries_with_logical_subrows(
     hard_boundaries: List[float],
     text_cells: List[Dict[str, Any]],
@@ -2710,13 +2799,62 @@ def _try_semi_structured_table(
         )
         return None
     regions = [region for region in analysis.get("regions") or [] if isinstance(region, dict)]
-    if len(regions) < 2:
+    is_forced_whole_roi = bool(analysis.get("forced"))
+    if len(regions) < 2 and not is_forced_whole_roi:
         logger.info(
             "Table Recognition phase timing: phase=Region Inference skipped reason=not_enough_regions regions=%s elapsed=%.3fs",
             len(regions),
             time.perf_counter() - semi_started,
         )
         return None
+
+    normalizer = _normalize_semi_table_grid(image, analysis)
+    if isinstance(normalizer, dict) and normalizer.get("ok") and isinstance(normalizer.get("image"), np.ndarray):
+        normalized_image = normalizer["image"]
+        normalizer_debug = normalizer.get("debug") if isinstance(normalizer.get("debug"), dict) else {}
+        try:
+            model = model or _load_table_model()
+            output = _predict_table_model(model, normalized_image)
+            result = _slanext_result_from_output(
+                output,
+                normalized_image,
+                semi_started,
+                {
+                    "type": "synthetic_grid",
+                    "bbox": {"x": 0, "y": 0, "width": int(image.shape[1]), "height": int(image.shape[0])},
+                    "grid_normalizer": normalizer_debug,
+                },
+            )
+            result["table_selected_method"] = "grid_normalized_slanext"
+            result.setdefault("table_semi_analysis", dict(analysis))
+            if isinstance(result["table_semi_analysis"], dict):
+                result["table_semi_analysis"].update({
+                    "detected": True,
+                    "merge_status": "grid_normalized_slanext",
+                    "region_processing": "grid_normalizer",
+                    "grid_normalizer": normalizer_debug,
+                    "model_reuse": {"enabled": True, "model_inference_count": 1},
+                })
+            result.setdefault("table_debug", {})
+            if isinstance(result["table_debug"], dict):
+                result["table_debug"]["status"] = "grid_normalized_slanext"
+                result["table_debug"]["grid_normalizer"] = normalizer_debug
+                result["table_debug"]["model_inference_count"] = 1
+            logger.info(
+                "Table Recognition phase timing: phase=Grid Normalizer complete drawn_h=%s drawn_v=%s model_inferences=1 elapsed=%.3fs",
+                normalizer_debug.get("drawn_lines", {}).get("horizontal") if isinstance(normalizer_debug.get("drawn_lines"), dict) else None,
+                normalizer_debug.get("drawn_lines", {}).get("vertical") if isinstance(normalizer_debug.get("drawn_lines"), dict) else None,
+                time.perf_counter() - semi_started,
+            )
+            return result
+        except Exception as error:
+            logger.info("Grid-normalized SLANeXt failed, falling back to coordinate semi flow: %s", error)
+    else:
+        logger.info(
+            "Table Recognition phase timing: phase=Grid Normalizer skipped reason=%s elapsed=%.3fs",
+            normalizer.get("reason") if isinstance(normalizer, dict) else "not_available",
+            time.perf_counter() - semi_started,
+        )
 
     result = _recognize_coordinate_based_semi_table(image, analysis)
     if not result:
@@ -2773,7 +2911,13 @@ def _try_forced_semi_after_empty_slanext(
     previous_analysis: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     forced_analysis = _forced_whole_roi_semi_analysis(image, previous_analysis)
-    result = _recognize_coordinate_based_semi_table(image, forced_analysis)
+    try:
+        result = _try_semi_structured_table(image, None, time.perf_counter(), forced_analysis)
+    except Exception as error:
+        logger.info("Forced grid-normalized semi failed before coordinate fallback: %s", error)
+        result = None
+    if not result:
+        result = _recognize_coordinate_based_semi_table(image, forced_analysis)
     if not result:
         return None
     candidate = _build_table_candidate(result, "coordinate_based_semi_forced")
