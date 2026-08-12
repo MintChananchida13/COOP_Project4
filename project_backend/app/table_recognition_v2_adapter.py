@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import logging
 import time
@@ -47,6 +48,8 @@ _TABLE_BORDERLESS_COLUMN_CONSISTENCY_THRESHOLD = 0.45
 _TABLE_BORDERLESS_SPARSE_ROW_RATIO_THRESHOLD = 0.70
 _TABLE_CANDIDATE_TIE_EPSILON = 0.03
 _TABLE_LOW_OCR_CONFIDENCE_THRESHOLD = 0.65
+_TABLE_THAI_CELL_REFRESH_MIN_CONFIDENCE = 0.78
+_THAI_TEXT_RE = re.compile(r"[\u0e01-\u0e5b]")
 
 
 def _model_service_url() -> str:
@@ -476,12 +479,29 @@ def _refresh_structured_cells_with_thai_ocr(image: np.ndarray, structured: Optio
         return structured, {"status": "thai_ocr_failed", "reason": str(error), "cell_crops": len(crops), "updated_cells": 0}
 
     updated = 0
+    preserved = 0
     confidence_values: List[float] = []
     for index, recognition in zip(crop_indexes, recognitions):
         text = normalize_ocr_text(recognition.get("text") if isinstance(recognition, dict) else "")
         if not text:
             continue
         confidence = float(recognition.get("confidence") or 0.0) if isinstance(recognition, dict) else 0.0
+        original_text = normalize_ocr_text(
+            cells[index].get("groundTruth") or cells[index].get("text") or cells[index].get("ocrText") or ""
+        )
+        original_has_thai = bool(_THAI_TEXT_RE.search(original_text))
+        refreshed_has_thai = bool(_THAI_TEXT_RE.search(text))
+        should_replace = (
+            not original_text
+            or (
+                not original_has_thai
+                and refreshed_has_thai
+                and confidence >= _TABLE_THAI_CELL_REFRESH_MIN_CONFIDENCE
+            )
+        )
+        if not should_replace:
+            preserved += 1
+            continue
         cells[index]["text"] = text
         cells[index]["ocrText"] = text
         cells[index]["groundTruth"] = text
@@ -499,6 +519,9 @@ def _refresh_structured_cells_with_thai_ocr(image: np.ndarray, structured: Optio
         "status": "thai_cell_ocr",
         "cell_crops": len(crops),
         "updated_cells": updated,
+        "preserved_cells": preserved,
+        "replace_rule": "empty_or_non_thai_original_with_high_confidence_thai_refresh",
+        "min_confidence": _TABLE_THAI_CELL_REFRESH_MIN_CONFIDENCE,
         "average_confidence": round(sum(confidence_values) / len(confidence_values), 4) if confidence_values else 0.0,
         "model": PADDLE_THAI_OCR_MODEL_NAME,
     }
