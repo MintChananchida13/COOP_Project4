@@ -315,65 +315,6 @@ _POSTGRES_SCHEMA = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS documents (
-        id TEXT NOT NULL PRIMARY KEY,
-        uploaded_by TEXT,
-        original_file_url TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'uploaded',
-        page_count INTEGER NOT NULL DEFAULT 1,
-        detected_template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
-        confidence_score DOUBLE PRECISION,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS document_pages (
-        id TEXT NOT NULL PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
-        original_image_url TEXT,
-        normalized_image_url TEXT,
-        status TEXT NOT NULL DEFAULT 'uploaded',
-        detected_template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
-        detected_template_page_id TEXT REFERENCES template_pages(id) ON DELETE SET NULL,
-        confidence_score DOUBLE PRECISION,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS extraction_results (
-        id TEXT NOT NULL PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        document_page_id TEXT NOT NULL REFERENCES document_pages(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
-        template_field_id TEXT REFERENCES template_fields(id) ON DELETE SET NULL,
-        field_name TEXT NOT NULL,
-        display_label TEXT NOT NULL,
-        ocr_text TEXT,
-        ocr_confidence DOUBLE PRECISION,
-        roi_preview_url TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS detection_logs (
-        id TEXT NOT NULL PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        document_page_id TEXT NOT NULL REFERENCES document_pages(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
-        candidate_template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
-        candidate_template_page_id TEXT REFERENCES template_pages(id) ON DELETE SET NULL,
-        layout_score DOUBLE PRECISION,
-        verification_score DOUBLE PRECISION,
-        final_score DOUBLE PRECISION,
-        decision TEXT NOT NULL,
-        fail_reason TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS embedding_jobs (
         id TEXT NOT NULL PRIMARY KEY,
         template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
@@ -405,9 +346,6 @@ _POSTGRES_SCHEMA = [
     'CREATE INDEX IF NOT EXISTS requested_fields_template_request_page_id_page_number_idx ON requested_fields(template_request_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS template_layout_references_template_id_idx ON template_layout_references(template_id)',
     'CREATE INDEX IF NOT EXISTS template_layout_references_template_status_idx ON template_layout_references(template_id, review_status, is_canonical)',
-    'CREATE UNIQUE INDEX IF NOT EXISTS document_pages_document_id_page_number_key ON document_pages(document_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS extraction_results_document_page_id_page_number_idx ON extraction_results(document_page_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS detection_logs_document_page_id_page_number_idx ON detection_logs(document_page_id, page_number)',
     'CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)',
     'CREATE INDEX IF NOT EXISTS ocr_jobs_status_requested_at_idx ON ocr_jobs(status, requested_at)',
 ]

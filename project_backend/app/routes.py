@@ -5,9 +5,6 @@ from fastapi import APIRouter, HTTPException, Request
 from .db import connect as connect_db
 from .schemas import (
     ApiResponse,
-    CustomOcrRequest,
-    DocumentUploadRequest,
-    ExtractionRequest,
     IgnoreRegionCreate,
     IgnoreRegionUpdate,
     ImageVerificationCategoryCreate,
@@ -31,22 +28,14 @@ from .schemas import (
 from .detection_service import detect_template_dev
 from .services import (
     AdminTemplateService,
-    DocumentService,
     EmbeddingService,
-    ExtractionService,
-    OCRService,
     StorageMaintenanceService,
-    TemplateDetectionService,
     TemplateRequestService,
     ImageVerificationCategoryService,
 )
 
 router = APIRouter()
 
-documents = DocumentService()
-detection = TemplateDetectionService()
-extraction = ExtractionService()
-custom_ocr = OCRService()
 template_requests = TemplateRequestService()
 admin_templates = AdminTemplateService()
 embeddings = EmbeddingService()
@@ -156,11 +145,6 @@ async def _read_dev_detection_image(request: Request) -> bytes:
     raise HTTPException(status_code=400, detail="Upload must be multipart/form-data, image, or PDF")
 
 
-@router.post("/documents/upload", response_model=ApiResponse)
-def upload_document(payload: DocumentUploadRequest) -> ApiResponse:
-    return ok(documents.upload(payload))
-
-
 @router.post("/api/templates/detect-dev")
 async def detect_template_dev_route(request: Request) -> dict:
     image_bytes = await _read_dev_detection_image(request)
@@ -172,56 +156,6 @@ async def detect_template_dev_route(request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-
-
-@router.get("/documents/{document_id}", response_model=ApiResponse)
-def get_document(document_id: str) -> ApiResponse:
-    return ok(documents.get_document(document_id))
-
-
-@router.get("/documents/{document_id}/pages", response_model=ApiResponse)
-def get_document_pages(document_id: str) -> ApiResponse:
-    return ok(documents.get_pages(document_id))
-
-
-@router.get("/documents/{document_id}/pages/{page_id}", response_model=ApiResponse)
-def get_document_page(document_id: str, page_id: str) -> ApiResponse:
-    return ok(documents.get_page(document_id, page_id))
-
-
-@router.post("/documents/{document_id}/detect-template", response_model=ApiResponse)
-def detect_template(document_id: str) -> ApiResponse:
-    return ok(detection.detect_document(document_id))
-
-
-@router.get("/documents/{document_id}/detection", response_model=ApiResponse)
-def get_detection(document_id: str) -> ApiResponse:
-    return ok(detection.get_detection(document_id))
-
-
-@router.get("/documents/{document_id}/selectable-fields", response_model=ApiResponse)
-def get_selectable_fields(document_id: str) -> ApiResponse:
-    return ok(extraction.get_selectable_fields(document_id))
-
-
-@router.get("/documents/{document_id}/pages/{page_id}/selectable-fields", response_model=ApiResponse)
-def get_page_selectable_fields(document_id: str, page_id: str) -> ApiResponse:
-    return ok(extraction.get_selectable_fields(document_id, page_id))
-
-
-@router.post("/documents/{document_id}/extract", response_model=ApiResponse)
-def extract_fields(document_id: str, payload: ExtractionRequest) -> ApiResponse:
-    return ok(extraction.extract_selected_fields(document_id, payload))
-
-
-@router.get("/documents/{document_id}/results", response_model=ApiResponse)
-def get_results(document_id: str) -> ApiResponse:
-    return ok(extraction.get_results(document_id))
-
-
-@router.post("/documents/{document_id}/custom-ocr", response_model=ApiResponse)
-def run_custom_ocr(document_id: str, payload: CustomOcrRequest) -> ApiResponse:
-    return ok(custom_ocr.ocr_custom_fields(document_id, payload))
 
 
 @router.post("/template-requests", response_model=ApiResponse)
