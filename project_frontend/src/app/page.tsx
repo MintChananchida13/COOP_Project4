@@ -2805,7 +2805,7 @@ function HomeWorkspace() {
   const renderExportPreview = () => {
     if (exportFormat === "json") {
       return (
-        <pre className="h-full min-h-[520px] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
+        <pre className="h-full min-h-0 overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
           {exportPreviewJsonText || "กำลังเตรียม JSON พร้อมรูปภาพ..."}
         </pre>
       );
@@ -2813,7 +2813,7 @@ function HomeWorkspace() {
 
     if (exportFormat === "images") {
       return (
-        <div className="h-full min-h-[520px] overflow-auto rounded-xl border border-slate-200 bg-white">
+        <div className="h-full min-h-0 overflow-auto rounded-xl border border-slate-200 bg-white">
           {exportPreviewImages.length === 0 ? (
             <p className="p-4 text-xs font-semibold text-slate-500">ไม่มีรูปภาพที่จะอยู่ใน ZIP</p>
           ) : (
@@ -2835,7 +2835,7 @@ function HomeWorkspace() {
       const textCount = exportPreviewResults.filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image").length;
       const tableResults = exportPreviewResults.filter((result) => getResultFieldType(result) === "table");
       return (
-        <div className="h-full min-h-[520px] space-y-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4">
+        <div className="h-full min-h-0 space-y-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4">
           {exportOptions.showDocumentTitle && <h3 className="text-sm font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
           {exportContent.text && (
             <div className="rounded-lg border border-slate-200">
@@ -2862,7 +2862,7 @@ function HomeWorkspace() {
     }
 
     return (
-      <div className="h-full min-h-[520px] overflow-auto rounded-xl border border-slate-200 bg-white p-5">
+      <div className="h-full min-h-0 overflow-auto rounded-xl border border-slate-200 bg-white p-5">
         {exportOptions.showDocumentTitle && <h3 className="text-lg font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
         <div className="mt-4 space-y-4">
           {exportPreviewResults.length === 0 ? (
@@ -3218,7 +3218,7 @@ function HomeWorkspace() {
             />
             {isExportMenuOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                <section className="flex h-[min(720px,82vh)] w-[min(1420px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                <section className="flex h-[min(820px,88vh)] w-[min(1420px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                   <div className="flex h-[88px] shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Preview</h2>
