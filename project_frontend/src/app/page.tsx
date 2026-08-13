@@ -2805,7 +2805,7 @@ function HomeWorkspace() {
   const renderExportPreview = () => {
     if (exportFormat === "json") {
       return (
-        <pre className="max-h-[46vh] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
+        <pre className="h-full min-h-[520px] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
           {exportPreviewJsonText || "กำลังเตรียม JSON พร้อมรูปภาพ..."}
         </pre>
       );
@@ -2813,7 +2813,7 @@ function HomeWorkspace() {
 
     if (exportFormat === "images") {
       return (
-        <div className="max-h-[46vh] overflow-auto rounded-xl border border-slate-200 bg-white">
+        <div className="h-full min-h-[520px] overflow-auto rounded-xl border border-slate-200 bg-white">
           {exportPreviewImages.length === 0 ? (
             <p className="p-4 text-xs font-semibold text-slate-500">ไม่มีรูปภาพที่จะอยู่ใน ZIP</p>
           ) : (
@@ -2835,7 +2835,7 @@ function HomeWorkspace() {
       const textCount = exportPreviewResults.filter((result) => getResultFieldType(result) !== "table" && getResultFieldType(result) !== "image").length;
       const tableResults = exportPreviewResults.filter((result) => getResultFieldType(result) === "table");
       return (
-        <div className="max-h-[46vh] space-y-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4">
+        <div className="h-full min-h-[520px] space-y-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4">
           {exportOptions.showDocumentTitle && <h3 className="text-sm font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
           {exportContent.text && (
             <div className="rounded-lg border border-slate-200">
@@ -2848,7 +2848,7 @@ function HomeWorkspace() {
               <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700">
                 Sheet: {exportOptions.showFieldNames ? result.fieldName : "Table"}
               </div>
-              <div className="overflow-auto p-3" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
+              <div className="overflow-auto p-3 [&_.kv-record]:mb-3 [&_.kv-record]:rounded-lg [&_.kv-record]:border [&_.kv-record]:border-slate-200 [&_.kv-record]:bg-white [&_.kv-record]:p-3 [&_.kv-record]:shadow-sm [&_.kv-record_p]:my-1 [&_.kv-summary]:rounded-lg [&_.kv-summary]:border [&_.kv-summary]:border-emerald-200 [&_.kv-summary]:bg-emerald-50 [&_.kv-summary]:p-3 [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_th]:border [&_th]:border-slate-400 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-2" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
             </div>
           ))}
           {exportContent.images && (
@@ -2862,7 +2862,7 @@ function HomeWorkspace() {
     }
 
     return (
-      <div className="max-h-[46vh] overflow-auto rounded-xl border border-slate-200 bg-white p-5">
+      <div className="h-full min-h-[520px] overflow-auto rounded-xl border border-slate-200 bg-white p-5">
         {exportOptions.showDocumentTitle && <h3 className="text-lg font-black text-slate-950">{matchedTemplate?.name || "OCR Export"}</h3>}
         <div className="mt-4 space-y-4">
           {exportPreviewResults.length === 0 ? (
@@ -2874,7 +2874,7 @@ function HomeWorkspace() {
                 <section key={result.roiId || result.fieldName} className="border-b border-slate-100 pb-4 last:border-b-0">
                   {exportOptions.showFieldNames && <h4 className="text-xs font-black uppercase tracking-wide text-slate-500">{result.fieldName}</h4>}
                   {fieldType === "table" ? (
-                    <div className="mt-2 overflow-auto" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
+                    <div className="mt-2 overflow-auto [&_.kv-record]:mb-3 [&_.kv-record]:rounded-lg [&_.kv-record]:border [&_.kv-record]:border-slate-200 [&_.kv-record]:bg-white [&_.kv-record]:p-3 [&_.kv-record]:shadow-sm [&_.kv-record_p]:my-1 [&_.kv-summary]:rounded-lg [&_.kv-summary]:border [&_.kv-summary]:border-emerald-200 [&_.kv-summary]:bg-emerald-50 [&_.kv-summary]:p-3 [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_th]:border [&_th]:border-slate-400 [&_th]:bg-slate-100 [&_th]:px-2.5 [&_th]:py-2" dangerouslySetInnerHTML={{ __html: renderHtmlTable(result) }} />
                   ) : fieldType === "image" ? (
                     <p className="mt-2 text-sm font-semibold text-slate-600">Image crop จะถูกใส่ในเอกสาร Word และ Excel</p>
                   ) : (
@@ -3218,7 +3218,7 @@ function HomeWorkspace() {
             />
             {isExportMenuOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                <section className="flex h-[min(860px,90vh)] w-[min(1280px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                <section className="flex h-[min(900px,94vh)] w-[min(1480px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                   <div className="flex h-[88px] shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Preview</h2>
@@ -3237,8 +3237,8 @@ function HomeWorkspace() {
 
                   <div className={`grid min-h-0 flex-1 gap-0 overflow-hidden ${
                     showTableExportConfigPanel
-                      ? "lg:grid-cols-[280px_340px_minmax(0,1fr)]"
-                      : "lg:grid-cols-[280px_minmax(0,1fr)]"
+                      ? "lg:grid-cols-[260px_320px_minmax(0,1fr)]"
+                      : "lg:grid-cols-[260px_minmax(0,1fr)]"
                   }`}>
                     <aside className="space-y-5 overflow-auto border-b border-slate-200 bg-slate-50 p-5 lg:border-b-0 lg:border-r">
                       <div>
@@ -3337,7 +3337,7 @@ function HomeWorkspace() {
                       </aside>
                     )}
 
-                    <div className="min-h-0 overflow-auto bg-slate-100 p-5">
+                    <div className="flex min-h-0 flex-col overflow-hidden bg-slate-100 p-4">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                           <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">Preview</p>
@@ -3347,7 +3347,9 @@ function HomeWorkspace() {
                           {exportPreviewResults.length} fields
                         </span>
                       </div>
-                      {renderExportPreview()}
+                      <div className="min-h-0 flex-1">
+                        {renderExportPreview()}
+                      </div>
                     </div>
                   </div>
 
