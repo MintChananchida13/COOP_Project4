@@ -3218,7 +3218,7 @@ function HomeWorkspace() {
             />
             {isExportMenuOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                <section className="flex h-[min(900px,94vh)] w-[min(1480px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                <section className="flex h-[min(860px,92vh)] w-[min(1420px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                   <div className="flex h-[88px] shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-wide text-slate-900">Export Preview</h2>
@@ -3353,7 +3353,7 @@ function HomeWorkspace() {
                     </div>
                   </div>
 
-                  <div className="flex h-[72px] shrink-0 flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex h-[72px] shrink-0 flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
 
                     <button
                       type="button"
