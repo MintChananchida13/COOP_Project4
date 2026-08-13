@@ -2829,21 +2829,132 @@ def _owner_cell_for_ocr_bbox(
     }
 
 
+def _infer_axis_boundaries_from_cells(
+    cells: List[Dict[str, Any]],
+    axis: str,
+    count: int,
+) -> List[float]:
+    if count <= 0:
+        return []
+    starts: Dict[int, List[float]] = {}
+    ends: Dict[int, List[float]] = {}
+    for cell in cells:
+        edges = _bbox_edges(cell)
+        if edges is None:
+            continue
+        try:
+            index = int(cell.get("col" if axis == "x" else "row") or 0)
+            span = max(1, int(cell.get("colSpan" if axis == "x" else "rowSpan") or cell.get("colspan" if axis == "x" else "rowspan") or cell.get("col_span" if axis == "x" else "row_span") or 1))
+        except (TypeError, ValueError):
+            continue
+        if span != 1 or index < 0 or index >= count:
+            continue
+        start_value = edges[0] if axis == "x" else edges[1]
+        end_value = edges[2] if axis == "x" else edges[3]
+        starts.setdefault(index, []).append(start_value)
+        ends.setdefault(index, []).append(end_value)
+
+    centers: List[Optional[float]] = [None for _ in range(count)]
+    widths: List[float] = []
+    for index in range(count):
+        if starts.get(index) and ends.get(index):
+            left = float(np.median(starts[index]))
+            right = float(np.median(ends[index]))
+            centers[index] = (left + right) / 2.0
+            widths.append(max(1.0, right - left))
+
+    known = [(index, center) for index, center in enumerate(centers) if center is not None]
+    if not known:
+        return []
+    if len(known) == 1:
+        median_width = float(np.median(widths)) if widths else 40.0
+        only_index, only_center = known[0]
+        for index in range(count):
+            centers[index] = float(only_center) + (index - only_index) * median_width
+    else:
+        for index in range(count):
+            if centers[index] is not None:
+                continue
+            left_known = [item for item in known if item[0] < index]
+            right_known = [item for item in known if item[0] > index]
+            if left_known and right_known:
+                left_index, left_center = left_known[-1]
+                right_index, right_center = right_known[0]
+                step = (right_center - left_center) / max(1, right_index - left_index)
+                centers[index] = left_center + step * (index - left_index)
+            elif left_known:
+                gaps = [right - left for (_, left), (_, right) in zip(known, known[1:])]
+                step = float(np.median(gaps)) if gaps else (float(np.median(widths)) if widths else 40.0)
+                left_index, left_center = left_known[-1]
+                centers[index] = left_center + step * (index - left_index)
+            elif right_known:
+                gaps = [right - left for (_, left), (_, right) in zip(known, known[1:])]
+                step = float(np.median(gaps)) if gaps else (float(np.median(widths)) if widths else 40.0)
+                right_index, right_center = right_known[0]
+                centers[index] = right_center - step * (right_index - index)
+
+    numeric_centers = [float(center if center is not None else 0.0) for center in centers]
+    boundaries: List[float] = []
+    for index, center in enumerate(numeric_centers):
+        if index == 0:
+            next_gap = numeric_centers[1] - center if len(numeric_centers) > 1 else (float(np.median(widths)) if widths else 40.0)
+            boundaries.append(center - next_gap / 2.0)
+        if index < len(numeric_centers) - 1:
+            boundaries.append((center + numeric_centers[index + 1]) / 2.0)
+        else:
+            prev_gap = center - numeric_centers[index - 1] if index > 0 else (float(np.median(widths)) if widths else 40.0)
+            boundaries.append(center + prev_gap / 2.0)
+    return boundaries
+
+
+def _logical_owner_cells_from_structured(cells: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    visible = [cell for cell in cells if not cell.get("hidden")]
+    if not visible:
+        return []
+    row_count = max(
+        int(cell.get("row") or 0) + max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+        for cell in visible
+    )
+    col_count = max(
+        int(cell.get("col") or 0) + max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+        for cell in visible
+    )
+    row_boundaries = _infer_axis_boundaries_from_cells(visible, "y", row_count)
+    col_boundaries = _infer_axis_boundaries_from_cells(visible, "x", col_count)
+    if len(row_boundaries) < row_count + 1 or len(col_boundaries) < col_count + 1:
+        return [cell for cell in visible if _bbox_edges(cell) is not None]
+
+    owners: List[Dict[str, Any]] = []
+    emitted: set[tuple[int, int]] = set()
+    for cell in visible:
+        try:
+            row = int(cell.get("row") or 0)
+            col = int(cell.get("col") or 0)
+            row_span = max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+            col_span = max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+        except (TypeError, ValueError):
+            continue
+        key = (row, col)
+        if key in emitted:
+            continue
+        emitted.add(key)
+        next_cell = dict(cell)
+        next_cell["bbox"] = {
+            "x": col_boundaries[col],
+            "y": row_boundaries[row],
+            "width": max(1.0, col_boundaries[min(col + col_span, len(col_boundaries) - 1)] - col_boundaries[col]),
+            "height": max(1.0, row_boundaries[min(row + row_span, len(row_boundaries) - 1)] - row_boundaries[row]),
+        }
+        next_cell["assignmentOwnerGeometry"] = "logical_grid"
+        owners.append(next_cell)
+    return owners
+
+
 def _reassign_ocr_text_to_slanext_cells(candidate: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
     structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else None
     source_cells = [cell for cell in (structured or {}).get("cells", []) if isinstance(cell, dict)]
     visible_cells = [cell for cell in source_cells if not cell.get("hidden")]
-    owner_by_position: Dict[tuple[int, int], Dict[str, Any]] = {}
-    for cell in visible_cells:
-        edges = _bbox_edges(cell)
-        if edges is None:
-            continue
-        key = (int(cell.get("row") or 0), int(cell.get("col") or 0))
-        existing = owner_by_position.get(key)
-        existing_edges = _bbox_edges(existing) if existing else None
-        if existing is None or _box_area(edges) > _box_area(existing_edges or (0.0, 0.0, 0.0, 0.0)):
-            owner_by_position[key] = cell
-    owners = list(owner_by_position.values())
+    owners = _logical_owner_cells_from_structured(visible_cells)
     if not structured or not source_cells or not owners:
         quality = _structured_assignment_quality(structured)
         return candidate, {"attempted": False, "selected": False, "quality": quality, "reason": "missing_structured_cell_geometry"}
