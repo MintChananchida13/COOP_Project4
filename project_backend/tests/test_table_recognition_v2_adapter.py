@@ -16,7 +16,9 @@ from app.table_recognition_v2_adapter import (
     _deduplicate_assigned_table_cells,
     _postprocess_table_result,
     _recognize_raw_ocr_geometry_table,
+    _reassign_ocr_text_to_slanext_cells,
     _select_best_table_candidate,
+    _structured_assignment_quality,
     _section_from_region_candidate,
     _try_semi_structured_table,
     _try_forced_semi_after_empty_slanext,
@@ -1139,6 +1141,44 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
 
         self.assertEqual(header["col"], 0)
         self.assertEqual(header["colSpan"], 2)
+
+    def test_slanext_ocr_assignment_uses_single_owner_by_overlap_and_preserves_span(self) -> None:
+        structured = {
+            "rows": [["", ""], ["", ""]],
+            "headerRowCount": 1,
+            "cells": [
+                {"row": 0, "col": 0, "text": "Header", "bbox": {"x": 0, "y": 0, "width": 100, "height": 20}, "rowSpan": 1, "colSpan": 2},
+                {"row": 0, "col": 1, "text": "", "rowSpan": 1, "colSpan": 1, "hidden": True},
+                {"row": 1, "col": 0, "text": "A", "bbox": {"x": 2, "y": 24, "width": 46, "height": 18}, "rowSpan": 1, "colSpan": 1},
+                {"row": 1, "col": 1, "text": "", "bbox": {"x": 52, "y": 24, "width": 46, "height": 18}, "rowSpan": 1, "colSpan": 1},
+                {"row": 1, "col": 0, "text": "B", "bbox": {"x": 56, "y": 26, "width": 20, "height": 10}, "rowSpan": 1, "colSpan": 1},
+            ],
+        }
+        candidate = {"table_structured": structured, "table_rows": structured["rows"], "table_debug": {"status": "slanext"}}
+
+        reassigned, debug = _reassign_ocr_text_to_slanext_cells(candidate)
+
+        self.assertTrue(debug["selected"])
+        self.assertEqual(reassigned["table_rows"][1][0], "A")
+        self.assertEqual(reassigned["table_rows"][1][1], "B")
+        header = next(cell for cell in reassigned["table_structured"]["cells"] if cell.get("text") == "Header")
+        self.assertEqual(header["colSpan"], 2)
+        hidden = [cell for cell in reassigned["table_structured"]["cells"] if cell.get("hidden")]
+        self.assertEqual(len(hidden), 1)
+
+    def test_assignment_quality_gate_fails_cross_boundary_assignment(self) -> None:
+        structured = {
+            "rows": [["A", ""]],
+            "cells": [
+                {"row": 0, "col": 0, "text": "A", "bbox": {"x": 45, "y": 0, "width": 30, "height": 12}, "rowSpan": 1, "colSpan": 1},
+                {"row": 0, "col": 1, "text": "", "bbox": {"x": 50, "y": 0, "width": 50, "height": 20}, "rowSpan": 1, "colSpan": 1},
+            ],
+        }
+
+        quality = _structured_assignment_quality(structured)
+
+        self.assertFalse(quality["passed"])
+        self.assertGreater(quality["cross_boundary_ratio"], 0)
 
     def test_postprocess_preserves_empty_cells_and_merge_grid(self) -> None:
         result = {

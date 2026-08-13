@@ -2671,6 +2671,269 @@ def _span_for_bbox(left: float, right: float, center_x: float, anchors: List[Dic
     return (start, end - start + 1)
 
 
+def _box_area(edges: tuple[float, float, float, float]) -> float:
+    return max(0.0, edges[2] - edges[0]) * max(0.0, edges[3] - edges[1])
+
+
+def _edge_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def _axis_overlap_ratio(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    overlap = max(0.0, min(a_end, b_end) - max(a_start, b_start))
+    return overlap / max(1.0, min(a_end - a_start, b_end - b_start))
+
+
+def _bbox_contained_in(inner: tuple[float, float, float, float], outer: tuple[float, float, float, float], tolerance: float) -> bool:
+    return (
+        inner[0] >= outer[0] - tolerance
+        and inner[1] >= outer[1] - tolerance
+        and inner[2] <= outer[2] + tolerance
+        and inner[3] <= outer[3] + tolerance
+    )
+
+
+def _cell_text_value(cell: Dict[str, Any]) -> str:
+    if cell.get("groundTruth") is not None:
+        return normalize_ocr_text(cell.get("groundTruth"), cleanup_noise=False)
+    return normalize_ocr_text(cell.get("text") or cell.get("ocrText") or "")
+
+
+def _structured_assignment_quality(structured: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    cells = [cell for cell in (structured or {}).get("cells", []) if isinstance(cell, dict)]
+    visible = [cell for cell in cells if not cell.get("hidden")]
+    text_cells = [cell for cell in visible if _cell_text_value(cell)]
+    owners = [cell for cell in visible if _bbox_edges(cell) is not None]
+    if not text_cells:
+        return {
+            "passed": False,
+            "assignment_consistency": 0.0,
+            "cross_boundary_ratio": 0.0,
+            "unassigned_ratio": 1.0,
+            "text_coverage": 0.0,
+            "assigned_text_boxes": 0,
+            "text_box_count": 0,
+            "reason": "no_text_boxes",
+        }
+    if not owners:
+        return {
+            "passed": True,
+            "assignment_consistency": 1.0,
+            "cross_boundary_ratio": 0.0,
+            "unassigned_ratio": 0.0,
+            "text_coverage": 1.0,
+            "assigned_text_boxes": len(text_cells),
+            "text_box_count": len(text_cells),
+            "reason": "no_cell_geometry",
+        }
+
+    assigned = 0
+    cross_boundary = 0
+    consistency_scores: List[float] = []
+    for source in text_cells:
+        source_edges = _bbox_edges(source)
+        if source_edges is None:
+            continue
+        source_area = max(1.0, _box_area(source_edges))
+        overlaps = []
+        for owner in owners:
+            owner_edges = _bbox_edges(owner)
+            if owner_edges is None:
+                continue
+            overlap = _edge_overlap(source_edges, owner_edges)
+            if overlap <= 0:
+                continue
+            overlaps.append((overlap / source_area, owner))
+        if not overlaps:
+            continue
+        overlaps.sort(key=lambda item: item[0], reverse=True)
+        best_ratio, best_owner = overlaps[0]
+        same_position = int(source.get("row") or 0) == int(best_owner.get("row") or 0) and int(source.get("col") or 0) == int(best_owner.get("col") or 0)
+        if best_ratio >= 0.2:
+            assigned += 1
+            consistency_scores.append(best_ratio if same_position else best_ratio * 0.75)
+            second_ratio = overlaps[1][0] if len(overlaps) > 1 else 0.0
+            if second_ratio > 0.18 or not same_position:
+                cross_boundary += 1
+
+    unassigned_ratio = 1.0 - assigned / max(1, len(text_cells))
+    cross_boundary_ratio = cross_boundary / max(1, assigned)
+    assignment_consistency = sum(consistency_scores) / len(consistency_scores) if consistency_scores else 0.0
+    text_coverage = assigned / max(1, len(text_cells))
+    passed = (
+        text_coverage >= 0.82
+        and unassigned_ratio <= 0.18
+        and cross_boundary_ratio <= 0.32
+        and assignment_consistency >= 0.58
+    )
+    return {
+        "passed": passed,
+        "assignment_consistency": round(assignment_consistency, 4),
+        "cross_boundary_ratio": round(cross_boundary_ratio, 4),
+        "unassigned_ratio": round(unassigned_ratio, 4),
+        "text_coverage": round(text_coverage, 4),
+        "assigned_text_boxes": assigned,
+        "text_box_count": len(text_cells),
+        "reason": "passed" if passed else "assignment_quality_failed",
+    }
+
+
+def _owner_cell_for_ocr_bbox(
+    source_edges: tuple[float, float, float, float],
+    owners: List[Dict[str, Any]],
+    tolerance: float,
+) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    source_area = max(1.0, _box_area(source_edges))
+    ranked: List[tuple[float, Dict[str, Any], Dict[str, float]]] = []
+    for owner in owners:
+        owner_edges = _bbox_edges(owner)
+        if owner_edges is None:
+            continue
+        overlap_area = _edge_overlap(source_edges, owner_edges)
+        overlap_ratio = overlap_area / source_area
+        row_alignment = _axis_overlap_ratio(source_edges[1], source_edges[3], owner_edges[1], owner_edges[3])
+        col_alignment = _axis_overlap_ratio(source_edges[0], source_edges[2], owner_edges[0], owner_edges[2])
+        containment = _bbox_contained_in(source_edges, owner_edges, tolerance)
+        if overlap_ratio <= 0 and not containment:
+            continue
+        score = overlap_ratio * 0.62 + row_alignment * 0.2 + col_alignment * 0.18 + (0.35 if containment else 0.0)
+        ranked.append((
+            score,
+            owner,
+            {
+                "overlap_ratio": overlap_ratio,
+                "row_alignment": row_alignment,
+                "col_alignment": col_alignment,
+                "containment": 1.0 if containment else 0.0,
+            },
+        ))
+    if not ranked:
+        return None, {"reason": "no_overlap"}
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_owner, best_metrics = ranked[0]
+    second_score = ranked[1][0] if len(ranked) > 1 else 0.0
+    dominant = best_score >= second_score * 1.12 or best_metrics["containment"] > 0
+    usable = best_metrics["overlap_ratio"] >= 0.18 and best_metrics["row_alignment"] >= 0.35 and best_metrics["col_alignment"] >= 0.18
+    if not usable or not dominant:
+        return None, {
+            **best_metrics,
+            "score": round(best_score, 4),
+            "second_score": round(second_score, 4),
+            "reason": "ambiguous_owner",
+        }
+    return best_owner, {
+        **best_metrics,
+        "score": round(best_score, 4),
+        "second_score": round(second_score, 4),
+        "reason": "assigned",
+    }
+
+
+def _reassign_ocr_text_to_slanext_cells(candidate: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else None
+    source_cells = [cell for cell in (structured or {}).get("cells", []) if isinstance(cell, dict)]
+    visible_cells = [cell for cell in source_cells if not cell.get("hidden")]
+    owner_by_position: Dict[tuple[int, int], Dict[str, Any]] = {}
+    for cell in visible_cells:
+        edges = _bbox_edges(cell)
+        if edges is None:
+            continue
+        key = (int(cell.get("row") or 0), int(cell.get("col") or 0))
+        existing = owner_by_position.get(key)
+        existing_edges = _bbox_edges(existing) if existing else None
+        if existing is None or _box_area(edges) > _box_area(existing_edges or (0.0, 0.0, 0.0, 0.0)):
+            owner_by_position[key] = cell
+    owners = list(owner_by_position.values())
+    if not structured or not source_cells or not owners:
+        quality = _structured_assignment_quality(structured)
+        return candidate, {"attempted": False, "selected": False, "quality": quality, "reason": "missing_structured_cell_geometry"}
+
+    text_sources = [cell for cell in visible_cells if _cell_text_value(cell) and _bbox_edges(cell) is not None]
+    if not text_sources:
+        quality = _structured_assignment_quality(structured)
+        return candidate, {"attempted": False, "selected": False, "quality": quality, "reason": "no_ocr_text_geometry"}
+
+    edge_heights = [max(1.0, (_bbox_edges(cell) or (0, 0, 0, 1))[3] - (_bbox_edges(cell) or (0, 0, 0, 1))[1]) for cell in owners]
+    tolerance = max(2.0, float(np.median(edge_heights)) * 0.18 if edge_heights else 2.0)
+    grouped: Dict[tuple[int, int], List[Dict[str, Any]]] = {}
+    unassigned = 0
+    ambiguous = 0
+    assignment_metrics: List[Dict[str, Any]] = []
+    for source in text_sources:
+        source_edges = _bbox_edges(source)
+        if source_edges is None:
+            unassigned += 1
+            continue
+        owner, metrics = _owner_cell_for_ocr_bbox(source_edges, owners, tolerance)
+        assignment_metrics.append(metrics)
+        if owner is None:
+            unassigned += 1
+            if metrics.get("reason") == "ambiguous_owner":
+                ambiguous += 1
+            continue
+        key = (int(owner.get("row") or 0), int(owner.get("col") or 0))
+        grouped.setdefault(key, []).append(source)
+
+    next_cells: List[Dict[str, Any]] = []
+    emitted_visible_positions: set[tuple[int, int]] = set()
+    for cell in source_cells:
+        next_cell = dict(cell)
+        if not next_cell.get("hidden"):
+            key = (int(next_cell.get("row") or 0), int(next_cell.get("col") or 0))
+            if key in emitted_visible_positions:
+                continue
+            emitted_visible_positions.add(key)
+            assigned_sources = grouped.get(key, [])
+            if assigned_sources:
+                ordered = sorted(assigned_sources, key=lambda item: ((_bbox_edges(item) or (0, 0, 0, 0))[1], (_bbox_edges(item) or (0, 0, 0, 0))[0]))
+                text = normalize_ocr_text(" ".join(_cell_text_value(item) for item in ordered if _cell_text_value(item)))
+                boxes = [_bbox_edges(item) for item in ordered if _bbox_edges(item) is not None]
+                bbox = _merge_bboxes([
+                    {"x": edge[0], "y": edge[1], "width": edge[2] - edge[0], "height": edge[3] - edge[1]}
+                    for edge in boxes
+                    if edge is not None
+                ])
+                next_cell["text"] = text
+                next_cell["ocrText"] = text
+                next_cell["groundTruth"] = text
+                next_cell["assignmentSource"] = "slanext_geometry_reassignment"
+                if bbox:
+                    next_cell["bbox"] = bbox
+            else:
+                next_cell["text"] = ""
+                next_cell["ocrText"] = ""
+                next_cell["groundTruth"] = ""
+        next_cells.append(next_cell)
+
+    next_structured = dict(structured)
+    next_structured["cells"] = next_cells
+    next_rows = _rows_from_structured_cells_preserve_grid(next_cells)
+    next_structured["rows"] = next_rows
+    reassigned = dict(candidate)
+    reassigned["table_structured"] = next_structured
+    reassigned["table_rows"] = next_rows
+    reassigned["text"] = _markdown_table(next_rows)
+    debug = reassigned.get("table_debug") if isinstance(reassigned.get("table_debug"), dict) else {}
+    reassigned["table_debug"] = dict(debug)
+    quality = _structured_assignment_quality(next_structured)
+    reassignment_debug = {
+        "attempted": True,
+        "selected": bool(quality.get("passed")),
+        "quality": quality,
+        "source_text_boxes": len(text_sources),
+        "assigned_text_boxes": len(text_sources) - unassigned,
+        "unassigned_text_boxes": unassigned,
+        "ambiguous_text_boxes": ambiguous,
+        "average_overlap": round(
+            sum(float(item.get("overlap_ratio") or 0.0) for item in assignment_metrics) / max(1, len(assignment_metrics)),
+            4,
+        ),
+        "reason": "passed" if quality.get("passed") else "quality_gate_failed",
+    }
+    reassigned["table_debug"]["ocr_cell_assignment"] = reassignment_debug
+    return reassigned, reassignment_debug
+
+
 def _geometry_table_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[List[str]]) -> Optional[tuple[List[List[str]], List[Dict[str, Any]], List[Dict[str, float]]]]:
     positioned = []
     heights = []
@@ -3055,15 +3318,38 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     )
     slanext_result = _slanext_result_from_output(output, image, started)
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
+    slanext_assignment_quality = _structured_assignment_quality(
+        slanext_candidate.get("table_structured") if isinstance(slanext_candidate.get("table_structured"), dict) else None
+    )
+    slanext_candidate.setdefault("table_debug", {})
+    if isinstance(slanext_candidate["table_debug"], dict):
+        slanext_candidate["table_debug"]["ocr_cell_assignment"] = {
+            "attempted": False,
+            "selected": False,
+            "quality": slanext_assignment_quality,
+            "reason": "initial_quality_gate",
+        }
+    if not bool(slanext_assignment_quality.get("passed")):
+        reassigned_candidate, reassignment_debug = _reassign_ocr_text_to_slanext_cells(slanext_candidate)
+        if bool(reassignment_debug.get("selected")):
+            slanext_candidate = _build_table_candidate(reassigned_candidate, "slanext")
+            slanext_candidate.setdefault("table_debug", {})
+            if isinstance(slanext_candidate["table_debug"], dict):
+                slanext_candidate["table_debug"]["ocr_cell_assignment"] = reassignment_debug
+                slanext_candidate["table_debug"]["assignment_repaired_before_semi"] = True
+        elif isinstance(slanext_candidate.get("table_debug"), dict):
+            slanext_candidate["table_debug"]["ocr_cell_assignment"] = reassignment_debug
     candidates = [slanext_candidate]
     slanext_debug = slanext_candidate.get("table_debug") if isinstance(slanext_candidate.get("table_debug"), dict) else {}
     slanext_quality = slanext_debug.get("quality") if isinstance(slanext_debug.get("quality"), dict) else {}
+    slanext_assignment = slanext_debug.get("ocr_cell_assignment") if isinstance(slanext_debug.get("ocr_cell_assignment"), dict) else {}
     slanext_confidence = float(slanext_candidate.get("confidence") or 0.0)
     slanext_usable = _has_usable_table_result(slanext_candidate)
     slanext_has_structured_grid = bool(slanext_quality.get("has_structured_cells")) and int(slanext_quality.get("row_count") or 0) > 0 and int(slanext_quality.get("column_count") or 0) > 0
     slanext_needs_fallback = _should_try_borderless_candidate(slanext_quality, slanext_confidence)
+    slanext_assignment_needs_fallback = bool(slanext_has_structured_grid) and not bool((slanext_assignment.get("quality") or {}).get("passed"))
 
-    if slanext_usable and not slanext_needs_fallback:
+    if slanext_usable and not slanext_needs_fallback and not slanext_assignment_needs_fallback:
         selected = _attach_candidate_competition(slanext_candidate, candidates, "slanext_passed_quality_gate")
         selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(None, merge_status="not_needed_slanext_confident"))
         selected_debug = selected.get("table_debug")
