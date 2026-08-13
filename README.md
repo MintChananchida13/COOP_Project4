@@ -1,6 +1,6 @@
 ﻿# OCR Template Management Project
 
-โปรเจกต์นี้เป็นระบบ OCR Template Management สำหรับอัปโหลดเอกสาร ตรวจจับประเภทเอกสารด้วย embedding, จัดการ Template/ROI ผ่าน Admin UI และอ่านข้อมูลจาก ROI ด้วย OCR
+โปรเจกต์นี้เป็นระบบ OCR Template Management สำหรับอัปโหลดเอกสาร ค้นหา Template ที่ตรงกับเอกสาร จัดการ Template/ROI ผ่าน Admin UI และอ่านข้อมูลจาก ROI ด้วย OCR, Table Recognition และ Image Extraction
 
 ## ภาพรวมระบบ
 
@@ -10,7 +10,7 @@
   Next.js + TypeScript สำหรับ User OCR Studio และ Admin Template Management
 
 - `project_backend`  
-  FastAPI + PostgreSQL + PaddleOCR + OpenCV สำหรับ OCR, Template CRUD, Detection Pipeline และ Layout Signature Matching
+  FastAPI + PostgreSQL + PaddleOCR + OpenCV สำหรับ OCR, Template CRUD, Detection Pipeline, Layout Reference/Signature Matching และ Table Recognition
 
 Blueprint ใน `project-blueprint-v4` เป็นเอกสารออกแบบ ไม่ใช่ runtime code
 
@@ -35,8 +35,10 @@ Flow ปัจจุบัน:
    - กด OCR Selected Fields
 9. ถ้าไม่ match template:
    - fallback ไป Custom OCR Workspace
-10. ตรวจผล OCR ใน Ground Truth
-11. ส่ง Template Request ให้ Admin ได้
+10. ตรวจผล OCR/Ground Truth
+11. ตารางแสดงเป็น structured table editor รองรับ merged cell, rowSpan, colSpan และ empty rows
+12. Export ผ่านปุ่ม Export เดียว รองรับ Word, Excel, JSON และ Images ZIP
+13. ส่ง Template Request ให้ Admin ได้
 
 ### Admin Module
 
@@ -49,17 +51,18 @@ Admin routes หลัก:
   รายการ Template Requests
 
 - `/admin/requests/[id]`
-  Review request, ดูภาพ/ROI, convert request เป็น template draft, delete request
+  Review request, ดูภาพ/ROI, เลือก Create New Template หรือ Add New Version, convert request เป็น template draft/version, delete request
 
 - `/admin/templates`
-  รายการ Templates พร้อม filter แบบย่อ: all, draft, active, nonactive
+  คลัง Template แบบโฟลเดอร์ แสดง Template/Versions ค้นหาชื่อ เปลี่ยนชื่อโฟลเดอร์หลักและ Template ย่อยได้
 
 - `/admin/templates/[id]/edit`
   Template Editor
-  - Define Extraction Fields
-  - Verification Anchors
-  - จัดการ ROI
-  - Save ลง backend/database
+  - 2.0 ปรับภาพ
+  - 2.1 กำหนด Extraction ROI
+  - 2.2 กำหนด Verification ROI
+  - Test Extraction / Test Verification ก่อนเข้าสู่ขั้นต่อไป
+  - จัดการ ROI, field name, type และลำดับ field
 
 - `/admin/templates/[id]/test`
   Pre-Publish Template Validation สำหรับ Draft Template
@@ -69,10 +72,12 @@ Admin routes หลัก:
 
 ### Template Request
 
-User สามารถส่ง Template Request ได้ 2 แบบ:
+User สามารถส่ง Template Request ได้จากหน้า Ground Truth โดยใช้ไฟล์และ ROI/Ground Truth ปัจจุบัน
 
-- `image_only`
-- `image_with_roi`
+Admin รับ request แล้วเลือกได้ 2 แบบ:
+
+- `Create New Template`
+- `Add New Version`
 
 ข้อมูลที่ persist:
 
@@ -83,12 +88,15 @@ User สามารถส่ง Template Request ได้ 2 แบบ:
 - field name / display label
 - data type
 - extraction method
+- source file/page information
+- Ground Truth ที่ผู้ใช้แก้ไขแล้ว
 
-Admin สามารถ convert request เป็น template draft ได้ โดยสร้าง:
+Admin สามารถ convert request เป็น template draft/version ได้ โดยสร้าง:
 
 - templates
 - template_pages
 - template_fields
+- template version/reference data ตาม flow ปัจจุบัน
 
 ### Detection / Layout Signature Pipeline
 
@@ -99,16 +107,17 @@ Admin สามารถ convert request เป็น template draft ได้ �
 3. ใช้ภาพที่ normalize/confirmed แล้ว
 4. สร้าง Layout Signature ด้วย `layout_signature_service`
 5. ค้นหา candidate templates ด้วย `layout_template_matcher`
-6. เลือก Top-K candidates
-7. ใช้ Verification Anchors ช่วย re-rank
-8. คำนวณ final score
-9. คืนผล candidate และ best match
+6. เลือก candidate ที่คะแนนดีที่สุดตาม threshold
+7. ใช้ Verification Anchors ช่วยยืนยัน/re-rank
+8. คำนวณ final confidence
+9. ถ้า `matched=true` โหลด Template bundle และ ROI เข้าหน้า `MatchedTemplateWorkspaceZone`
 
 โหมดที่รองรับ:
 
 - Layout Signature matching
 - SigLIP Image Anchor verification
-- PaddleOCR Thai OCR
+- PaddleOCR Thai OCR/Text Recognition
+- Table Recognition สำหรับ field type table
 
 ## โครงสร้างโปรเจกต์
 
@@ -157,9 +166,15 @@ COOP_Project4/
       detection_service.py
       layout_signature_service.py
       layout_template_matcher.py
+      layout_analysis_service.py
+      paddle_thai_ocr_adapter.py
+      table_recognition_v2_adapter.py
+      table_grid_analyzer.py
+      ocr_postprocess.py
       siglip_image_verification_adapter.py
       image_normalization.py
       alignment_service.py
+      model_runtime_client.py
     requirements.txt
     storage/
 ```
@@ -233,7 +248,57 @@ http://localhost:3000
 
 ## Model Runtime
 
-ระบบใช้ `model_server.py` สำหรับโหลดโมเดลหนักค้างไว้ เช่น PP-DocLayoutV3, PP-OCRv5 และ SigLIP
+ระบบใช้ `model_server.py` สำหรับโหลดโมเดลหนักค้างไว้ และ backend จะเรียกผ่าน `MODEL_SERVICE_URL` เมื่อ config ไว้
+
+ถ้า `MODEL_SERVICE_URL` มีค่า:
+
+- Backend ทำหน้าที่เป็น API gateway
+- OCR/Layout/Table ใช้ Remote Model Runtime เท่านั้น
+- ไม่มี fallback กลับไป local PaddleOCR
+
+ถ้า `MODEL_SERVICE_URL` ว่าง:
+
+- จึงอนุญาตให้ใช้ local PaddleOCR/local pipeline
+
+โมเดล/เครื่องมือหลัก:
+
+- `PP-DocLayoutV3`  
+  ใช้วิเคราะห์ layout, auto ROI และสร้าง/เทียบ Layout Reference ของ Template
+
+- `PP-OCRv5_server_det`  
+  ใช้ Text Detection หา bbox ข้อความ
+
+- `th_PP-OCRv5_mobile_rec`  
+  ใช้ Thai OCR/Text Recognition
+
+- `TableRecognitionPipelineV2`
+  - `SLANeXt_wired` สำหรับตารางมีเส้น
+  - `SLANeXt_wireless` สำหรับตารางไม่มีเส้น
+  - ใช้ร่วมกับ `th_PP-OCRv5_mobile_rec`
+
+- `OpenCV`  
+  ใช้ช่วยตรวจเส้น/โครงสร้างตาราง, auto ROI และ semi-table analysis
+
+- `SigLIP`  
+  ใช้ Image Verification Anchor
+
+- `PyThaiNLP`  
+  ใช้ OCR post-process / Thai text normalization
+
+- `BeautifulSoup4` + `lxml`  
+  ใช้ parse HTML table output จาก Table Recognition
+
+### Table Recognition Flow
+
+สำหรับ field type `table`:
+
+1. ลอง `SLANeXt_wired` / `SLANeXt_wireless` ก่อน
+2. ถ้า SLANeXt ให้ผล usable และผ่าน quality gate จะใช้ผลนี้เลย
+3. ถ้าไม่มั่นใจหรือไม่มีข้อมูล จึงใช้ Semi Table / OCR geometry fallback
+4. ต้องรักษา structured schema เช่น `row`, `col`, `rowSpan`, `colSpan`, `hidden`, `bbox`, `ocrText`, `groundTruth`
+5. ถ้ามี OCR text ห้ามคืนตารางว่างโดยไม่พยายามสร้าง table fallback
+
+Semi Table ไม่ใช่ default path สำหรับทุกตาราง และไม่ควรแทนที่ SLANeXt เมื่อ SLANeXt อ่านโครงสร้างได้ดี
 
 ## คำสั่งตรวจสอบ
 
@@ -310,6 +375,8 @@ Extraction method ที่รองรับ:
 
 - `ocr_text`
 - `ocr_table`
+- `paddle_thai_ocr`
+- `table_recognition_v2`
 - `extract_image`
 
 ### Verification Anchors
@@ -328,6 +395,8 @@ Anchor types:
 - Text Anchor
 - Image Anchor
 
+Image Anchor ต้องใช้ image verification ตามประเภทภาพ ไม่ใช่ OCR text แทน
+
 ### Template Status
 
 สถานะที่ใช้งานหลัก:
@@ -337,6 +406,29 @@ Anchor types:
 - `nonactive`
 
 สถานะอื่นอาจยังมีอยู่เพื่อ backward compatibility หรือ lifecycle เดิม
+
+## Export
+
+หน้า Ground Truth ใช้ปุ่ม Export เดียว แล้วเลือก format ภายใน popup
+
+Format ที่รองรับ:
+
+- Word: รวม text, table, image
+- Excel: สร้างเฉพาะ sheet ของ type ที่มีอยู่จริงในเอกสาร
+- JSON: ส่ง text/table และ image field ตาม policy ที่กำหนด
+- Images ZIP: crop image fields เป็น ZIP ตามชื่อ field
+
+Table export รองรับ 2 mode:
+
+- `structure` ใช้โครงสร้างตารางเดิม
+- `key_value` ใช้ resolved header เป็น key และ data rows เป็น records
+
+Key-Value รองรับ:
+
+- Multi-level header
+- เลือก row/column ที่จะ export
+- Summary Region แยกจาก Data Region
+- Preview ก่อนดาวน์โหลด
 
 ## Backend API สำคัญ
 
@@ -422,11 +514,26 @@ Detection:
 - `app/detection_service.py`  
   Detection pipeline
 
+- `app/layout_analysis_service.py`  
+  Layout analysis, auto ROI และ remote/local layout runtime gateway
+
 - `app/layout_signature_service.py`  
   Template layout signature orchestration
 
 - `app/layout_template_matcher.py`  
   Layout signature candidate matcher
+
+- `app/paddle_thai_ocr_adapter.py`  
+  Thai OCR adapter และ remote/local OCR runtime gateway
+
+- `app/table_recognition_v2_adapter.py`  
+  Table Recognition V2 adapter, SLANeXt wired/wireless, table fallback และ remote/local table runtime gateway
+
+- `app/table_grid_analyzer.py`  
+  OpenCV helper สำหรับ semi-table/grid analysis
+
+- `app/ocr_postprocess.py`  
+  OCR text normalization/noise cleanup
 
 - `app/siglip_image_verification_adapter.py`  
   SigLIP image category verification adapter
@@ -440,17 +547,16 @@ Detection:
 ## ข้อจำกัดปัจจุบัน
 
 - Detection endpoint ยังใช้ชื่อ `detect-dev` แต่ flow หลักใช้ Layout Signature + Verification Anchors
-- Alignment เป็น optional refinement และไม่ควรเป็นเงื่อนไข reject candidate
-- Image normalization ฝั่ง backend เคยมีปัญหา จึงควรระวังการเปิดใช้ crop/normalize อัตโนมัติแบบเต็ม
-- Pre-Publish flow ยังเป็นเครื่องมือช่วย Admin ก่อน publish ไม่ใช่ production detection
-- Detection Lab ใช้ทดสอบ published/active templates เท่านั้น
-- Verification Anchors และ Image Anchors มีโครงรองรับแล้ว แต่ควรทดสอบจริงกับเอกสารหลายรูปแบบก่อนใช้งาน production
+- PDF หลายหน้าและ Template หลาย version ต้องทดสอบด้วยเอกสารจริงต่อเนื่อง เพราะเกี่ยวกับ page mapping และ layout reference โดยตรง
+- Table Recognition มี fallback หลายชั้น แต่คุณภาพขึ้นกับ ROI, เส้นตาราง, OCR geometry และผลจาก SLANeXt
+- Semi Table ควรใช้เฉพาะเมื่อ SLANeXt ไม่มั่นใจ เพื่อไม่ให้ตารางปกติถูก reconstruct เกินจำเป็น
+- Image normalization/alignment ควรใช้แบบระวัง โดยเฉพาะ PDF ที่เป็นต้นฉบับและ ROI ไม่ควรถูกบิดผิดตำแหน่ง
 
 ## แนวทางพัฒนาต่อ
 
-1. ทำให้ Document Classification หลัง `AdjustZone` เสถียรขึ้นกับ multi-page PDF
+1. เพิ่ม regression test สำหรับ multi-page template detection ทั้งฝั่ง user และ Admin Detection Lab
 2. แยก `adminApi.ts` ที่ user ใช้ออกเป็น shared API helper เพื่อลด coupling ระหว่าง user/admin
-3. เพิ่ม UI แสดง candidate/debug แบบย่อใน user flow เมื่อ template detection ไม่มั่นใจ
-4. ทำ normalization backend ให้แม่นขึ้น แล้วค่อยเปิดใช้ใน production detection
-5. เพิ่ม OCR extraction pipeline หลัง final template selection แบบเต็ม รวมถึง table/image extraction
-6. ทำ permission/auth สำหรับ Admin ก่อน deploy จริง
+3. เพิ่ม debug view แบบย่อสำหรับ Template matching เมื่อหา template ไม่เจอ
+4. เพิ่ม QA ชุดเอกสารจริงสำหรับ table มีเส้น/ไม่มีเส้น/semi-structured
+5. ปรับ OCR post-process ให้ conservative ขึ้นกับชื่อคน บริษัท รหัส และข้อมูลเฉพาะ
+6. ทำ permission/auth และ role policy ให้ครบก่อน deploy production จริง
