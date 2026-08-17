@@ -81,7 +81,6 @@ export default function MatchedTemplateWorkspaceZone({
       hideOcrActions
       hideDrawTools
       hideFooterActions
-      lockRoiMetadata
       getRoiBadges={() => []}
       getRoiClassName={(roi, selected) => {
         if (hasResolvedChildren(roi)) {
@@ -141,9 +140,10 @@ export default function MatchedTemplateWorkspaceZone({
         return roi.roiMode === "flexible" ? `${roi.fieldName || "(Unnamed)"} · Flexible Search Area` : roi.fieldName || "(Unnamed)";
       }}
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
-        const selectablePageRois = currentPageRois.filter((roi) => !roi.isResolvedBlock);
+        const selectablePageRois = currentPageRois.filter((roi) => !hasResolvedChildren(roi));
         const enabledCount = selectablePageRois.filter((roi) => roi.enabled !== false).length;
         const filteredRois = currentPageRois.filter((roi) =>
+          !hasResolvedChildren(roi) &&
           `${roi.fieldName} ${roi.type || ""} ${roi.extractionMethod || ""}`.toLowerCase().includes(fieldQuery.trim().toLowerCase())
         );
 
@@ -261,7 +261,6 @@ export default function MatchedTemplateWorkspaceZone({
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={roi.isResolvedBlock}
                           onChange={(event) => updateROI(roi.id, { enabled: event.target.checked })}
                           className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                         />

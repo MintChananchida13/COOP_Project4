@@ -280,6 +280,21 @@ async function imageUrlToCanvasSafeSrc(src: string) {
   return blobToDataUrl(await response.blob());
 }
 
+async function analyzeLayoutForUserImage(imageDataUrl: string) {
+  const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      auto_roi_mode: "text_line",
+      images: [{ page_index: 0, image: imageDataUrl }],
+    }),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.detail || data?.message || "Layout analysis failed.");
+  const regions = data?.pages?.[0]?.regions;
+  return Array.isArray(regions) ? (regions as Record<string, any>[]) : [];
+}
+
 function backendPreviewSrc(value?: string | null) {
   if (!value) return "";
   if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("http")) return value;
@@ -840,12 +855,50 @@ const createResolvedBlockDisplayRois = (
         roiMode: "fix",
         parentRoiId: parentRoi.id,
         isResolvedBlock: true,
-        enabled: false,
+        enabled: true,
         layoutType: String(block.layout_type || block.layoutType || type),
       });
     });
   return resolvedRois;
 };
+
+async function buildFlexibleResolvedDisplayRois(
+  sourceImages: string[],
+  sourceRois: (ROI & { pageIndex?: number })[]
+): Promise<(ROI & { pageIndex?: number })[]> {
+  const byPageImage = new Map<number, HTMLImageElement>();
+  const resolved: (ROI & { pageIndex?: number })[] = [];
+  for (const roi of sourceRois) {
+    if (roi.roiMode !== "flexible") continue;
+    const pageIndex = Number(roi.pageIndex ?? 0);
+    const sourceImage = sourceImages[pageIndex];
+    if (!sourceImage) continue;
+    let img = byPageImage.get(pageIndex);
+    if (!img) {
+      img = await loadImageElement(sourceImage);
+      byPageImage.set(pageIndex, img);
+    }
+    const renderedWidth = 750;
+    const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
+    const scaleX = img.naturalWidth / renderedWidth;
+    const scaleY = img.naturalHeight / renderedHeight;
+    const boundaryCrop = cropRoiToImage(img, roi, scaleX, scaleY);
+    if (!boundaryCrop) continue;
+    const regions = await analyzeLayoutForUserImage(boundaryCrop);
+    const blocks = regions.length > 0
+      ? regions
+      : [
+          {
+            type: "text",
+            data_type: "text",
+            extraction_method: "paddle_thai_ocr",
+            roi: { x_ratio: 0, y_ratio: 0, width_ratio: 1, height_ratio: 1 },
+          },
+        ];
+    resolved.push(...createResolvedBlockDisplayRois(roi, blocks, scaleX, scaleY, pageIndex));
+  }
+  return resolved;
+}
 
 type TableRowKind = "header" | "data" | "summary" | "empty";
 type TableSummaryRegion = {
@@ -1531,9 +1584,18 @@ function HomeWorkspace() {
       let detectedRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[];
       try {
         detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId);
+        const flexibleResolvedRois = await buildFlexibleResolvedDisplayRois(templateCanvasImages, detectedRois);
+        if (flexibleResolvedRois.length > 0) {
+          const resolvedParentIds = new Set(flexibleResolvedRois.map((roi) => roi.parentRoiId).filter((id): id is number => typeof id === "number"));
+          detectedRois = [
+            ...detectedRois.map((roi) => resolvedParentIds.has(roi.id) ? { ...roi, enabled: false } : roi),
+            ...flexibleResolvedRois,
+          ];
+        }
         devTemplateFlowLog("ROIs mapped", {
           templateId,
           roiCount: detectedRois.length,
+          flexibleResolvedRoiCount: flexibleResolvedRois.length,
           firstRoi: detectedRois[0]
             ? {
                 fieldName: detectedRois[0].fieldName,
@@ -1582,7 +1644,7 @@ function HomeWorkspace() {
   const handleRunOCR = async () => {
     const runId = ocrRunIdRef.current + 1;
     ocrRunIdRef.current = runId;
-    const activeRois = rois.filter((roi) => roi.enabled !== false && !roi.isResolvedBlock);
+    const activeRois = rois.filter((roi) => roi.enabled !== false);
     if (activeRois.length === 0) {
       setOperationNotice({
         tone: "warning",
@@ -1604,7 +1666,7 @@ function HomeWorkspace() {
         if (ocrRunIdRef.current !== runId) return;
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
         const pageRois = rois.filter(
-          (roi) => roi.enabled !== false && !roi.isResolvedBlock && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
+          (roi) => roi.enabled !== false && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
         );
 
         if (pageRois.length === 0) {
