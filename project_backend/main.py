@@ -433,26 +433,12 @@ def _region_crop_box(region: Dict[str, Any], image_width: int, image_height: int
     return (x, y, w, h)
 
 
-def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
-    if search_img.size == 0:
-        return {"text": "", "confidence": 0.0, "segments": [], "attempts": [], "engine": "flexible_roi_text"}
-
+def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     h_img, w_img = search_img.shape[:2]
-    analysis = analyze_layout(search_img, expand_text_rois=False, auto_roi_mode="text_line")
-    text_regions = [
-        region
-        for region in analysis.get("regions", [])
-        if isinstance(region, dict) and _region_type(region) in {"text", "title", "plain text", "text_block", "content"}
-    ]
-    text_regions.sort(key=lambda region: (
-        float((region.get("roi") or {}).get("y_ratio") or 0.0),
-        float((region.get("roi") or {}).get("x_ratio") or 0.0),
-    ))
-
     texts: List[str] = []
     confidences: List[float] = []
     segments: List[Dict[str, Any]] = []
-    for index, region in enumerate(text_regions):
+    for index, region in enumerate(regions):
         box = _region_crop_box(region, w_img, h_img)
         if not box:
             continue
@@ -473,20 +459,45 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
                 "text": text,
                 "confidence": confidence,
                 "bbox": {"x": x, "y": y, "width": w, "height": h},
-                "source": "flexible_resolved_block",
+                "source": source,
                 "raw_segments": ocr_result.get("segments", []),
             }
         )
-
     return {
         "text": "\n".join(texts),
         "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
         "segments": segments,
-        "attempts": [{"step": "flexible_roi_layout_blocks", "block_count": len(text_regions), "recognized_count": len(texts)}],
+    }
+
+
+def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
+    if search_img.size == 0:
+        return {"text": "", "confidence": 0.0, "segments": [], "attempts": [], "engine": "flexible_roi_text"}
+
+    h_img, w_img = search_img.shape[:2]
+    analysis = analyze_layout(search_img, expand_text_rois=False, auto_roi_mode="text_line")
+    text_regions = [
+        region
+        for region in analysis.get("regions", [])
+        if isinstance(region, dict) and _region_type(region) in {"text", "title", "plain text", "text_block", "content"}
+    ]
+    text_regions.sort(key=lambda region: (
+        float((region.get("roi") or {}).get("y_ratio") or 0.0),
+        float((region.get("roi") or {}).get("x_ratio") or 0.0),
+    ))
+
+    result = _ocr_flexible_regions(search_img, text_regions, "pp_doclayout_v3_block")
+    attempts = [{"step": "flexible_roi_layout_blocks", "block_count": len(text_regions), "recognized_count": len(result["segments"])}]
+
+    return {
+        "text": result.get("text") or "",
+        "confidence": float(result.get("confidence") or 0.0),
+        "segments": result.get("segments") or [],
+        "attempts": attempts,
         "preprocessing": "flexible_roi_search_boundary_layout_blocks",
         "engine": "flexible_roi_text",
         "model": "PP-DocLayoutV3 + text_ocr_pipeline",
-        "resolved_blocks": segments,
+        "resolved_blocks": result.get("segments") or [],
     }
 
 

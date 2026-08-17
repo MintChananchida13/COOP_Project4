@@ -1038,6 +1038,63 @@ export default function WorkspaceTemplateEditorV2({
     );
   };
 
+  const renderFlexibleTextPreview = (item: TemplateStepTestItem) => {
+    if (item.roiMode !== "flexible") return null;
+    const blocks = item.resolvedBlocks || [];
+    return (
+      <div className="space-y-2">
+        <div className="rounded-lg border border-sky-100 bg-sky-50/70 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[9px] font-black uppercase text-sky-700">Flexible Search Result</div>
+            <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-sky-600">
+              {blocks.length} blocks
+            </span>
+          </div>
+          <div className="mt-1 text-[10px] font-semibold leading-relaxed text-sky-800">
+            ใช้ PP-DocLayoutV3 หา Text Content ภายในกรอบ แล้ว OCR แยกตามกรอบที่พบ
+          </div>
+        </div>
+
+        {blocks.length > 0 ? (
+          <div className="space-y-2">
+            {blocks.map((block, index) => (
+              <div key={`flexible-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-white p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[9px] font-black uppercase text-slate-400">กรอบที่ใช้ #{index + 1}</div>
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                    PP-DocLayoutV3
+                  </span>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-[140px_1fr]">
+                  {block.cropPreviewDataUrl ? (
+                    <img src={block.cropPreviewDataUrl} alt="" className="h-24 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+                  ) : (
+                    <div className="flex h-24 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
+                      ไม่มีภาพกรอบ
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-[9px] font-black uppercase text-slate-400">ผล OCR ของกรอบนี้</div>
+                    <div className="mt-1 max-h-24 overflow-y-auto rounded bg-slate-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-700">
+                      <p className="whitespace-pre-wrap break-words">{block.text || "-"}</p>
+                    </div>
+                    {block.confidence !== null && block.confidence !== undefined && (
+                      <div className="mt-1 text-[9px] font-black uppercase text-slate-400">Conf {block.confidence.toFixed(2)}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">
+            ยังไม่พบกรอบ Text Content ภายใน Search Boundary
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTextVerificationPreview = (item: TemplateStepTestItem) => (
     <div className="rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
       <div className="flex items-center justify-between gap-2">
@@ -1088,8 +1145,9 @@ export default function WorkspaceTemplateEditorV2({
                 <div className="min-w-0">
                   {isImageTestItem(item) && renderImageFieldPreview(item)}
                   {isTableTestItem(item) && renderTablePreview(item)}
+                  {renderFlexibleTextPreview(item)}
                   {item.anchorType === "text" && renderTextVerificationPreview(item)}
-                  {!isTableTestItem(item) && !isImageTestItem(item) && item.anchorType !== "text" && (item.ocrText || item.actualText || item.expectedText) && (
+                  {item.roiMode !== "flexible" && !isTableTestItem(item) && !isImageTestItem(item) && item.anchorType !== "text" && (item.ocrText || item.actualText || item.expectedText) && (
                     <div className="min-w-0 rounded-lg border border-slate-100 bg-white p-2 font-semibold text-slate-600">
                       <div className="text-[9px] font-black uppercase text-slate-400">ข้อความที่อ่านได้</div>
                       <div className="mt-2 max-h-44 min-w-0 space-y-1 overflow-y-auto rounded bg-slate-50 p-2 text-[11px] leading-5 text-slate-700">

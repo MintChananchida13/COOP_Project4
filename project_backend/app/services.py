@@ -718,6 +718,59 @@ def _layout_region_type(region: Dict[str, Any]) -> str:
     return str(region.get("type") or region.get("data_type") or "").lower()
 
 
+def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
+    image = _load_image_source(boundary_image_path)
+    image_width, image_height = image.size if image is not None else (1, 1)
+    texts: List[str] = []
+    confidences: List[float] = []
+    segments: List[Dict[str, Any]] = []
+    for index, region in enumerate(regions):
+        roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+        if not roi:
+            continue
+        block_roi = {
+            "page_number": 1,
+            "x_ratio": float(roi.get("x_ratio") or 0.0),
+            "y_ratio": float(roi.get("y_ratio") or 0.0),
+            "width_ratio": float(roi.get("width_ratio") or 0.0),
+            "height_ratio": float(roi.get("height_ratio") or 0.0),
+        }
+        if block_roi["width_ratio"] <= 0 or block_roi["height_ratio"] <= 0:
+            continue
+        crop_preview_data_url = None
+        if image is not None:
+            left = max(0, int(round(block_roi["x_ratio"] * image_width)))
+            top = max(0, int(round(block_roi["y_ratio"] * image_height)))
+            right = min(image_width, int(round((block_roi["x_ratio"] + block_roi["width_ratio"]) * image_width)))
+            bottom = min(image_height, int(round((block_roi["y_ratio"] + block_roi["height_ratio"]) * image_height)))
+            if right > left and bottom > top:
+                buffer = io.BytesIO()
+                image.crop((left, top, right, bottom)).save(buffer, format="PNG")
+                crop_preview_data_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+        ocr_result = ocr_roi(boundary_image_path, block_roi)
+        text = normalize_ocr_text(ocr_result.get("text"))
+        if not text:
+            continue
+        confidence = float(ocr_result.get("confidence") or 0.0)
+        texts.append(text)
+        confidences.append(confidence)
+        segments.append(
+            {
+                "index": index,
+                "text": text,
+                "confidence": confidence,
+                "roi": block_roi,
+                "source": source,
+                "crop_preview_data_url": crop_preview_data_url,
+            }
+        )
+    return {
+        "text": "\n".join(texts),
+        "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
+        "segments": segments,
+    }
+
+
 def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict[str, Any]:
     if not boundary_image_path:
         return {"text": "", "confidence": 0.0, "segments": [], "failure_reason": "boundary_crop_failed"}
@@ -737,44 +790,15 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
         float((region.get("roi") or {}).get("x_ratio") or 0.0),
     ))
 
-    texts: List[str] = []
-    confidences: List[float] = []
-    segments: List[Dict[str, Any]] = []
-    for index, region in enumerate(regions):
-        roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
-        if not roi:
-            continue
-        block_roi = {
-            "page_number": 1,
-            "x_ratio": float(roi.get("x_ratio") or 0.0),
-            "y_ratio": float(roi.get("y_ratio") or 0.0),
-            "width_ratio": float(roi.get("width_ratio") or 0.0),
-            "height_ratio": float(roi.get("height_ratio") or 0.0),
-        }
-        if block_roi["width_ratio"] <= 0 or block_roi["height_ratio"] <= 0:
-            continue
-        ocr_result = ocr_roi(boundary_image_path, block_roi)
-        text = normalize_ocr_text(ocr_result.get("text"))
-        if not text:
-            continue
-        confidence = float(ocr_result.get("confidence") or 0.0)
-        texts.append(text)
-        confidences.append(confidence)
-        segments.append(
-            {
-                "index": index,
-                "text": text,
-                "confidence": confidence,
-                "roi": block_roi,
-                "source": "flexible_resolved_block",
-            }
-        )
+    result = _ocr_flexible_regions(boundary_image_path, regions, "pp_doclayout_v3_block")
+    attempts = [{"step": "flexible_roi_layout_blocks", "block_count": len(regions), "recognized_count": len(result["segments"])}]
 
     return {
-        "text": "\n".join(texts),
-        "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
-        "segments": segments,
-        "attempts": [{"step": "flexible_roi_layout_blocks", "block_count": len(regions), "recognized_count": len(texts)}],
+        "text": result.get("text") or "",
+        "confidence": float(result.get("confidence") or 0.0),
+        "segments": result.get("segments") or [],
+        "resolved_blocks": result.get("segments") or [],
+        "attempts": attempts,
         "engine": "flexible_roi_text",
         "preprocessing": "flexible_roi_search_boundary_layout_blocks",
     }
@@ -3621,6 +3645,7 @@ class AdminTemplateService:
                             "ocr_text": text,
                             "confidence": round(confidence, 4),
                             "raw_segments": ocr_result.get("segments", []),
+                            "resolved_blocks": ocr_result.get("resolved_blocks", []),
                             "ocr_attempts": ocr_result.get("attempts", []),
                             "ocr_preprocessing": ocr_result.get("preprocessing"),
                             "failure_reason": None if text.strip() else str(ocr_result.get("failure_reason") or "flexible_text_empty"),

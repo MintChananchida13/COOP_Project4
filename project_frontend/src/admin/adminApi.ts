@@ -504,6 +504,16 @@ export interface TemplateStepTestItem {
   extractionMethod?: string | null;
   roiSource?: string | null;
   roi?: Record<string, unknown> | null;
+  roiMode?: "fix" | "flexible" | null;
+  expectedContent?: "text" | null;
+  resolvedBlocks?: Array<{
+    index?: number;
+    text?: string | null;
+    confidence?: number | null;
+    roi?: Record<string, unknown> | null;
+    source?: string | null;
+    cropPreviewDataUrl?: string | null;
+  }>;
   ocrText?: string | null;
   actualText?: string | null;
   expectedText?: string | null;
@@ -1633,6 +1643,18 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
     extractionMethod: (item.extraction_method as string | null | undefined) ?? null,
     roiSource: (item.roi_source as string | null | undefined) ?? null,
     roi: (item.roi as Record<string, unknown> | undefined) || null,
+    roiMode: item.roi_mode === "flexible" ? "flexible" : "fix",
+    expectedContent: item.expected_content === "text" ? "text" : null,
+    resolvedBlocks: Array.isArray(item.resolved_blocks)
+      ? (item.resolved_blocks as Record<string, unknown>[]).map((block, index) => ({
+          index: typeof block.index === "number" ? block.index : index,
+          text: (block.text as string | null | undefined) ?? null,
+          confidence: typeof block.confidence === "number" ? block.confidence : null,
+          roi: (block.roi as Record<string, unknown> | undefined) || null,
+          source: (block.source as string | null | undefined) ?? null,
+          cropPreviewDataUrl: (block.crop_preview_data_url as string | null | undefined) ?? (block.cropPreviewDataUrl as string | null | undefined) ?? null,
+        }))
+      : [],
     ocrText: (item.ocr_text as string | null | undefined) ?? null,
     actualText: (item.actual_text as string | null | undefined) ?? null,
     expectedText: (item.expected_text as string | null | undefined) ?? null,
