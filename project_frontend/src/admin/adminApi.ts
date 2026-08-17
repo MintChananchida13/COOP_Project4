@@ -506,6 +506,7 @@ export interface TemplateStepTestItem {
   roi?: Record<string, unknown> | null;
   roiMode?: "fix" | "flexible" | null;
   expectedContent?: "text" | null;
+  flexibleOverlayPreviewDataUrl?: string | null;
   resolvedBlocks?: Array<{
     index?: number;
     text?: string | null;
@@ -1645,6 +1646,7 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
     roi: (item.roi as Record<string, unknown> | undefined) || null,
     roiMode: item.roi_mode === "flexible" ? "flexible" : "fix",
     expectedContent: item.expected_content === "text" ? "text" : null,
+    flexibleOverlayPreviewDataUrl: (item.flexible_overlay_preview_data_url as string | null | undefined) ?? (item.flexibleOverlayPreviewDataUrl as string | null | undefined) ?? null,
     resolvedBlocks: Array.isArray(item.resolved_blocks)
       ? (item.resolved_blocks as Record<string, unknown>[]).map((block, index) => ({
           index: typeof block.index === "number" ? block.index : index,

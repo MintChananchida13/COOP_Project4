@@ -1051,8 +1051,19 @@ export default function WorkspaceTemplateEditorV2({
             </span>
           </div>
           <div className="mt-1 text-[10px] font-semibold leading-relaxed text-sky-800">
-            ใช้ PP-DocLayoutV3 หา Text Content ภายในกรอบ แล้ว OCR แยกตามกรอบที่พบ
+            ใช้ PP-DocLayoutV3 หา Text Content ภายในกรอบ ถ้าไม่พบกรอบย่อยจะใช้ Search Boundary นี้เป็นกรอบเดียว แล้ว OCR แยกตามกรอบที่ใช้
           </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-100 bg-white p-2">
+          <div className="text-[9px] font-black uppercase text-slate-400">ภาพพรีวิวพร้อมกรอบ Auto ROI</div>
+          {item.flexibleOverlayPreviewDataUrl ? (
+            <img src={item.flexibleOverlayPreviewDataUrl} alt="" className="mt-2 max-h-64 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+          ) : (
+            <div className="mt-2 flex h-36 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
+              ไม่มีภาพพรีวิว Auto ROI
+            </div>
+          )}
         </div>
 
         {blocks.length > 0 ? (

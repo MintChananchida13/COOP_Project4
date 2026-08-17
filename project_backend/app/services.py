@@ -744,6 +744,36 @@ def _is_text_content_region(region: Dict[str, Any]) -> bool:
 def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     image = _load_image_source(boundary_image_path)
     image_width, image_height = image.size if image is not None else (1, 1)
+    overlay_preview_data_url = None
+    if image is not None:
+        overlay = image.copy()
+        try:
+            from PIL import ImageDraw, ImageFont
+
+            draw = ImageDraw.Draw(overlay)
+            font = ImageFont.load_default()
+            for index, region in enumerate(regions, start=1):
+                roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+                if not roi:
+                    continue
+                left = max(0, int(round(float(roi.get("x_ratio") or 0.0) * image_width)))
+                top = max(0, int(round(float(roi.get("y_ratio") or 0.0) * image_height)))
+                right = min(image_width, int(round((float(roi.get("x_ratio") or 0.0) + float(roi.get("width_ratio") or 0.0)) * image_width)))
+                bottom = min(image_height, int(round((float(roi.get("y_ratio") or 0.0) + float(roi.get("height_ratio") or 0.0)) * image_height)))
+                if right <= left or bottom <= top:
+                    continue
+                draw.rectangle((left, top, right, bottom), outline=(2, 132, 199), width=3)
+                label = f"ROI {index}"
+                label_bbox = draw.textbbox((left, top), label, font=font)
+                label_width = label_bbox[2] - label_bbox[0] + 8
+                label_height = label_bbox[3] - label_bbox[1] + 6
+                draw.rectangle((left, max(0, top - label_height), left + label_width, top), fill=(2, 132, 199))
+                draw.text((left + 4, max(0, top - label_height + 3)), label, fill=(255, 255, 255), font=font)
+            buffer = io.BytesIO()
+            overlay.save(buffer, format="PNG")
+            overlay_preview_data_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+        except Exception:
+            overlay_preview_data_url = None
     texts: List[str] = []
     confidences: List[float] = []
     segments: List[Dict[str, Any]] = []
@@ -791,6 +821,7 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
         "text": "\n".join(texts),
         "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
         "segments": segments,
+        "overlay_preview_data_url": overlay_preview_data_url,
     }
 
 
@@ -808,6 +839,19 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
         for region in _layout_regions_from_analysis(analysis)
         if _is_text_content_region(region)
     ]
+    if not regions:
+        regions = [
+            {
+                "type": "text",
+                "roi": {
+                    "x_ratio": 0.0,
+                    "y_ratio": 0.0,
+                    "width_ratio": 1.0,
+                    "height_ratio": 1.0,
+                },
+                "source": "pp_doclayout_v3_search_boundary",
+            }
+        ]
     regions.sort(key=lambda region: (
         float((region.get("roi") or {}).get("y_ratio") or 0.0),
         float((region.get("roi") or {}).get("x_ratio") or 0.0),
@@ -821,6 +865,7 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
         "confidence": float(result.get("confidence") or 0.0),
         "segments": result.get("segments") or [],
         "resolved_blocks": result.get("segments") or [],
+        "flexible_overlay_preview_data_url": result.get("overlay_preview_data_url"),
         "attempts": attempts,
         "engine": "flexible_roi_text",
         "preprocessing": "flexible_roi_search_boundary_layout_blocks",
@@ -3669,6 +3714,7 @@ class AdminTemplateService:
                             "confidence": round(confidence, 4),
                             "raw_segments": ocr_result.get("segments", []),
                             "resolved_blocks": ocr_result.get("resolved_blocks", []),
+                            "flexible_overlay_preview_data_url": ocr_result.get("flexible_overlay_preview_data_url"),
                             "ocr_attempts": ocr_result.get("attempts", []),
                             "ocr_preprocessing": ocr_result.get("preprocessing"),
                             "failure_reason": None if text.strip() else str(ocr_result.get("failure_reason") or "flexible_text_empty"),

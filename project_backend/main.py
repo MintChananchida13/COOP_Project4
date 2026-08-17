@@ -504,6 +504,19 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
         for region in _layout_regions_from_analysis(analysis)
         if _is_text_content_region(region)
     ]
+    if not text_regions:
+        text_regions = [
+            {
+                "type": "text",
+                "roi": {
+                    "x_ratio": 0.0,
+                    "y_ratio": 0.0,
+                    "width_ratio": 1.0,
+                    "height_ratio": 1.0,
+                },
+                "source": "pp_doclayout_v3_search_boundary",
+            }
+        ]
     text_regions.sort(key=lambda region: (
         float((region.get("roi") or {}).get("y_ratio") or 0.0),
         float((region.get("roi") or {}).get("x_ratio") or 0.0),
