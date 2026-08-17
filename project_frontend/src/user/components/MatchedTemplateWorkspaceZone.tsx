@@ -64,6 +64,15 @@ export default function MatchedTemplateWorkspaceZone({
     }, 50);
   };
 
+  const hasResolvedChildren = (roi: ROI) =>
+    roi.roiMode === "flexible" &&
+    props.rois.some(
+      (candidate) =>
+        candidate.isResolvedBlock &&
+        candidate.parentRoiId === roi.id &&
+        (candidate.pageIndex ?? 0) === (roi.pageIndex ?? 0)
+    );
+
   return (
     <WorkspaceCustomEditor
       {...props}
@@ -75,6 +84,32 @@ export default function MatchedTemplateWorkspaceZone({
       lockRoiMetadata
       getRoiBadges={() => []}
       getRoiClassName={(roi, selected) => {
+        if (hasResolvedChildren(roi)) {
+          return "hidden pointer-events-none";
+        }
+        if (roi.isResolvedBlock) {
+          const type = roi.type || roi.dataType;
+          const color =
+            type === "table"
+              ? selected
+                ? "border-violet-700 bg-violet-400/20 shadow-lg z-40 ring-4 ring-violet-300/40"
+                : "border-violet-500 bg-violet-400/10 hover:bg-violet-400/15 z-30"
+              : type === "image"
+                ? selected
+                  ? "border-amber-700 bg-amber-400/20 shadow-lg z-40 ring-4 ring-amber-300/40"
+                  : "border-amber-500 bg-amber-400/10 hover:bg-amber-400/15 z-30"
+                : selected
+                  ? "border-cyan-700 bg-cyan-400/20 shadow-lg z-40 ring-4 ring-cyan-300/40"
+                  : "border-cyan-500 bg-cyan-400/10 hover:bg-cyan-400/15 z-30";
+          return `rnd-box-item border-2 border-dashed transition-shadow pointer-events-auto ${color}`;
+        }
+        if (roi.roiMode === "flexible") {
+          return `rnd-box-item border-2 border-dashed transition-shadow pointer-events-auto ${
+            selected
+              ? "border-cyan-700 bg-cyan-300/20 shadow-lg z-30 ring-4 ring-cyan-300/45"
+              : "border-cyan-500 bg-cyan-300/10 hover:bg-cyan-300/15 z-20"
+          }`;
+        }
         const disabled = roi.enabled === false;
         return `rnd-box-item border transition-shadow ${
           disabled
@@ -85,16 +120,29 @@ export default function MatchedTemplateWorkspaceZone({
         }`;
       }}
       getRoiLabelClassName={(roi, selected) =>
-        `absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${
-          roi.enabled === false
+        `${hasResolvedChildren(roi) ? "hidden" : ""} absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${
+          roi.isResolvedBlock
+            ? selected
+              ? "bg-cyan-700 border-cyan-700 text-white font-extrabold"
+              : "bg-white border-cyan-200 text-cyan-700 font-bold"
+            : roi.roiMode === "flexible"
+              ? selected
+                ? "bg-cyan-700 border-cyan-700 text-white font-extrabold"
+                : "bg-white border-cyan-200 text-cyan-700 font-bold"
+              : roi.enabled === false
             ? "bg-slate-100 border-slate-200 text-slate-400"
             : selected
               ? "bg-emerald-600 border-emerald-600 text-white font-extrabold"
               : "bg-white border-emerald-200 text-emerald-700 font-bold"
         }`
       }
+      getRoiLabelText={(roi) => {
+        if (roi.isResolvedBlock) return `${roi.fieldName || "Resolved ROI"}`;
+        return roi.roiMode === "flexible" ? `${roi.fieldName || "(Unnamed)"} · Flexible Search Area` : roi.fieldName || "(Unnamed)";
+      }}
       rightPanelRenderer={({ currentPageRois, selectedId, setSelectedId, updateROI, triggerOCRProcessing }) => {
-        const enabledCount = currentPageRois.filter((roi) => roi.enabled !== false).length;
+        const selectablePageRois = currentPageRois.filter((roi) => !roi.isResolvedBlock);
+        const enabledCount = selectablePageRois.filter((roi) => roi.enabled !== false).length;
         const filteredRois = currentPageRois.filter((roi) =>
           `${roi.fieldName} ${roi.type || ""} ${roi.extractionMethod || ""}`.toLowerCase().includes(fieldQuery.trim().toLowerCase())
         );
@@ -153,21 +201,21 @@ export default function MatchedTemplateWorkspaceZone({
                   </p>
                 </div>
                 <span className="ui-caption ui-tabular shrink-0 rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
-                  {enabledCount}/{currentPageRois.length}
+                  {enabledCount}/{selectablePageRois.length}
                 </span>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: true }))}
+                  onClick={() => selectablePageRois.forEach((roi) => updateROI(roi.id, { enabled: true }))}
                   className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
                   เลือกทั้งหมด
                 </button>
                 <button
                   type="button"
-                  onClick={() => currentPageRois.forEach((roi) => updateROI(roi.id, { enabled: false }))}
+                  onClick={() => selectablePageRois.forEach((roi) => updateROI(roi.id, { enabled: false }))}
                   className="ui-button-text rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 transition-colors hover:bg-white"
                 >
                   ยกเลิกทั้งหมด
@@ -213,6 +261,7 @@ export default function MatchedTemplateWorkspaceZone({
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={roi.isResolvedBlock}
                           onChange={(event) => updateROI(roi.id, { enabled: event.target.checked })}
                           className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                         />

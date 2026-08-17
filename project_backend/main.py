@@ -448,6 +448,21 @@ def _extraction_method_for_resolved_type(data_type: str) -> str:
     return "paddle_thai_ocr"
 
 
+def _expand_table_roi(roi: Dict[str, float], image_width: int, image_height: int) -> Dict[str, float]:
+    pad_x = 4.0 / max(float(image_width), 1.0)
+    pad_y = 4.0 / max(float(image_height), 1.0)
+    x = max(0.0, float(roi.get("x_ratio") or 0.0) - pad_x)
+    y = max(0.0, float(roi.get("y_ratio") or 0.0) - pad_y)
+    right = min(1.0, float(roi.get("x_ratio") or 0.0) + float(roi.get("width_ratio") or 0.0) + pad_x)
+    bottom = min(1.0, float(roi.get("y_ratio") or 0.0) + float(roi.get("height_ratio") or 0.0) + pad_y)
+    return {
+        "x_ratio": x,
+        "y_ratio": y,
+        "width_ratio": max(0.0, right - x),
+        "height_ratio": max(0.0, bottom - y),
+    }
+
+
 def _region_crop_box(region: Dict[str, Any], image_width: int, image_height: int) -> Tuple[int, int, int, int] | None:
     roi = region.get("roi") if isinstance(region, dict) else None
     bbox = region.get("bbox") if isinstance(region, dict) else None
@@ -554,6 +569,14 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
             continue
         data_type = _resolved_layout_region_type(region)
         extraction_method = _extraction_method_for_resolved_type(data_type)
+        if data_type == "table":
+            roi = _region_roi(region, w_img, h_img)
+            if roi:
+                expanded_roi = _expand_table_roi(roi, w_img, h_img)
+                region = {**region, "roi": expanded_roi}
+                box = _region_crop_box(region, w_img, h_img)
+                if not box:
+                    continue
         x, y, w, h = box
         block_img = search_img[y : y + h, x : x + w]
         if block_img.size == 0:

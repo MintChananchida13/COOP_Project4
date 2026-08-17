@@ -15,6 +15,9 @@ export interface ROI {
   extractionMethod?: 'ocr_text' | 'ocr_table' | 'paddle_thai_ocr' | 'table_recognition_v2' | 'extract_image';
   roiMode?: 'fix' | 'flexible';
   expectedContent?: 'text' | null;
+  isResolvedBlock?: boolean;
+  parentRoiId?: number;
+  layoutType?: string;
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
@@ -42,6 +45,22 @@ export interface OCRResult {
   tableHtml?: string;
   tableDebug?: Record<string, unknown>;
   tableExport?: TableExportConfig;
+  resolvedBlocks?: ResolvedLayoutBlock[];
+}
+
+export interface ResolvedLayoutBlock {
+  index?: number;
+  text?: string | null;
+  confidence?: number | null;
+  bbox?: { x?: number; y?: number; width?: number; height?: number } | null;
+  roi?: { x_ratio?: number; y_ratio?: number; width_ratio?: number; height_ratio?: number } | null;
+  type?: 'text' | 'table' | 'image' | string | null;
+  data_type?: 'text' | 'table' | 'image' | string | null;
+  dataType?: 'text' | 'table' | 'image' | string | null;
+  extraction_method?: string | null;
+  extractionMethod?: string | null;
+  layout_type?: string | null;
+  layoutType?: string | null;
 }
 
 export type TableExportMode = 'structure' | 'key_value';

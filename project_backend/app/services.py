@@ -759,6 +759,21 @@ def _extraction_method_for_resolved_type(data_type: str) -> str:
     return "paddle_thai_ocr"
 
 
+def _expand_table_roi(roi: Dict[str, float], image_width: int, image_height: int) -> Dict[str, float]:
+    pad_x = 4.0 / max(float(image_width), 1.0)
+    pad_y = 4.0 / max(float(image_height), 1.0)
+    x = max(0.0, float(roi.get("x_ratio") or 0.0) - pad_x)
+    y = max(0.0, float(roi.get("y_ratio") or 0.0) - pad_y)
+    right = min(1.0, float(roi.get("x_ratio") or 0.0) + float(roi.get("width_ratio") or 0.0) + pad_x)
+    bottom = min(1.0, float(roi.get("y_ratio") or 0.0) + float(roi.get("height_ratio") or 0.0) + pad_y)
+    return {
+        "x_ratio": x,
+        "y_ratio": y,
+        "width_ratio": max(0.0, right - x),
+        "height_ratio": max(0.0, bottom - y),
+    }
+
+
 def _region_roi_from_boundary(region: Dict[str, Any], image_width: int, image_height: int) -> Optional[Dict[str, float]]:
     roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
     if roi:
@@ -886,6 +901,8 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
         if not roi:
             continue
         data_type = _resolved_layout_region_type(region)
+        if data_type == "table":
+            roi = _expand_table_roi(roi, image_width, image_height)
         extraction_method = _extraction_method_for_resolved_type(data_type)
         block_roi = {
             "page_number": 1,

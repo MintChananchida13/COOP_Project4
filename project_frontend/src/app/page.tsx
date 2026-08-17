@@ -788,6 +788,65 @@ const findRoiForOcrResult = (rois: ROI[], result: OCRResult & { pageIndex?: numb
     || pageRois.find((roi) => roi.fieldName === result.fieldName);
 };
 
+const normalizeResolvedBlockType = (block: Record<string, any>): "text" | "table" | "image" => {
+  const rawType = String(block.data_type || block.dataType || block.type || "").toLowerCase();
+  if (rawType === "table") return "table";
+  if (rawType === "image") return "image";
+  return "text";
+};
+
+const createResolvedBlockDisplayRois = (
+  parentRoi: ROI & { pageIndex?: number },
+  blocks: Record<string, any>[] | undefined | null,
+  scaleX: number,
+  scaleY: number,
+  pageIndex: number
+): (ROI & { pageIndex?: number })[] => {
+  if (!Array.isArray(blocks) || parentRoi.roiMode !== "flexible") return [];
+  const resolvedRois: (ROI & { pageIndex?: number })[] = [];
+  blocks.forEach((block, index) => {
+      const type = normalizeResolvedBlockType(block);
+      let localX = 0;
+      let localY = 0;
+      let localWidth = 0;
+      let localHeight = 0;
+      const bbox = block.bbox && typeof block.bbox === "object" ? block.bbox : null;
+      const roi = block.roi && typeof block.roi === "object" ? block.roi : null;
+      if (bbox) {
+        localX = Number(bbox.x || 0) / Math.max(scaleX, 1e-6);
+        localY = Number(bbox.y || 0) / Math.max(scaleY, 1e-6);
+        localWidth = Number(bbox.width || 0) / Math.max(scaleX, 1e-6);
+        localHeight = Number(bbox.height || 0) / Math.max(scaleY, 1e-6);
+      } else if (roi) {
+        localX = Number(roi.x_ratio || 0) * parentRoi.width;
+        localY = Number(roi.y_ratio || 0) * parentRoi.height;
+        localWidth = Number(roi.width_ratio || 0) * parentRoi.width;
+        localHeight = Number(roi.height_ratio || 0) * parentRoi.height;
+      }
+      if (![localX, localY, localWidth, localHeight].every(Number.isFinite) || localWidth <= 1 || localHeight <= 1) {
+        return;
+      }
+      resolvedRois.push({
+        id: Number(`${Math.abs(parentRoi.id)}${index + 1}`.slice(0, 12)) || Date.now() + index,
+        fieldName: `${parentRoi.fieldName} · ${type} ${index + 1}`,
+        x: parentRoi.x + localX,
+        y: parentRoi.y + localY,
+        width: localWidth,
+        height: localHeight,
+        pageIndex,
+        type,
+        dataType: type,
+        extractionMethod: type === "table" ? "table_recognition_v2" : type === "image" ? "extract_image" : "paddle_thai_ocr",
+        roiMode: "fix",
+        parentRoiId: parentRoi.id,
+        isResolvedBlock: true,
+        enabled: false,
+        layoutType: String(block.layout_type || block.layoutType || type),
+      });
+    });
+  return resolvedRois;
+};
+
 type TableRowKind = "header" | "data" | "summary" | "empty";
 type TableSummaryRegion = {
   detected: boolean;
@@ -1523,7 +1582,7 @@ function HomeWorkspace() {
   const handleRunOCR = async () => {
     const runId = ocrRunIdRef.current + 1;
     ocrRunIdRef.current = runId;
-    const activeRois = rois.filter((roi) => roi.enabled !== false);
+    const activeRois = rois.filter((roi) => roi.enabled !== false && !roi.isResolvedBlock);
     if (activeRois.length === 0) {
       setOperationNotice({
         tone: "warning",
@@ -1545,7 +1604,7 @@ function HomeWorkspace() {
         if (ocrRunIdRef.current !== runId) return;
         setOcrProgress({ currentPage: pageIdx + 1, totalPages: imagesList.length, completedPages: pageIdx });
         const pageRois = rois.filter(
-          (roi) => roi.enabled !== false && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
+          (roi) => roi.enabled !== false && !roi.isResolvedBlock && (roi.pageIndex !== undefined ? Number(roi.pageIndex) : 0) === pageIdx
         );
 
         if (pageRois.length === 0) {
@@ -1638,7 +1697,12 @@ function HomeWorkspace() {
               const tableMarkdown = rawTableRows && rawTableRows.length > 0 ? tableRowsToMarkdown(rawTableRows) : "";
               const extractedText = String(resItem.text || tableMarkdown || "");
               const responseRoiId = Number(resItem.roiId ?? roi.id);
-              return {
+              const resolvedBlocks = Array.isArray(resItem.resolved_blocks)
+                ? (resItem.resolved_blocks as Record<string, any>[])
+                : Array.isArray(resItem.resolvedBlocks)
+                  ? (resItem.resolvedBlocks as Record<string, any>[])
+                  : [];
+              const result = {
                 id: Date.now() + pageIdx * 100000 + rIdx + Math.floor(Math.random() * 1000000),
                 roiId: Number.isFinite(responseRoiId) ? responseRoiId : roi.id,
                 fieldName: roi.fieldName,
@@ -1657,7 +1721,18 @@ function HomeWorkspace() {
                 tableStructured: finalTableStructured,
                 tableHtml: typeof resItem.table_html === "string" ? resItem.table_html : undefined,
                 tableDebug: resItem.table_debug && typeof resItem.table_debug === "object" ? resItem.table_debug : undefined,
+                resolvedBlocks,
               };
+              if (roi.roiMode === "flexible" && resolvedBlocks.length > 0) {
+                const blockRois = createResolvedBlockDisplayRois(roi, resolvedBlocks, scaleX, scaleY, pageIdx);
+                if (blockRois.length > 0) {
+                  setRois((previous) => [
+                    ...previous.filter((item) => !(item.isResolvedBlock && item.parentRoiId === roi.id)),
+                    ...blockRois,
+                  ]);
+                }
+              }
+              return result;
             }
             if (isTableRoi) {
               return createTablePlaceholderResult(aiData?.detail || aiData?.error || "Table Recognition did not return table data.");
