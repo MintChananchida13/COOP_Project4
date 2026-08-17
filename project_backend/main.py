@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -31,6 +32,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 
 OUTPUT_DIR = "cropped_rois"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+logger = logging.getLogger(__name__)
 
 
 class ROIModel(BaseModel):
@@ -553,7 +555,7 @@ def _text_line_regions_from_image(image: np.ndarray) -> List[Dict[str, Any]]:
     return lines
 
 
-def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope: str = "flexible") -> List[Dict[str, Any]]:
     prepared = [line for line in lines if isinstance(line.get("roi"), dict) and _roi_area(line["roi"]) > 0]
     if not prepared:
         return []
@@ -579,10 +581,11 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict
     median_height = _median_float(heights, 1.0)
     median_width = _median_float(widths, 1.0)
     median_gap = _median_float(gaps, median_height * 0.35)
+    normal_left_edge = _median_float([float(line["roi"].get("x_ratio") or 0.0) for line in prepared], 0.0)
 
     groups: List[List[Dict[str, Any]]] = []
     current: List[Dict[str, Any]] = []
-    for line in prepared:
+    for line_index, line in enumerate(prepared):
         if not current:
             current = [line]
             continue
@@ -592,14 +595,48 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict
         gap = float(roi.get("y_ratio") or 0.0) - (
             float(prev_roi.get("y_ratio") or 0.0) + float(prev_roi.get("height_ratio") or 0.0)
         )
-        indent_delta = abs(float(roi.get("x_ratio") or 0.0) - float(prev_roi.get("x_ratio") or 0.0))
+        current_x = float(roi.get("x_ratio") or 0.0)
+        prev_x = float(prev_roi.get("x_ratio") or 0.0)
+        indent_delta = abs(current_x - prev_x)
+        first_line_indent = current_x - normal_left_edge
         prev_width = float(prev_roi.get("width_ratio") or 0.0)
+        previous_width_ratio = prev_width / max(median_width, 1e-9)
         overlap = _horizontal_overlap_ratio(prev_roi, roi)
-        gap_evidence = gap > max(median_gap * 1.8, median_height * 0.9)
-        indent_evidence = indent_delta > max(median_height * 1.4, median_width * 0.08)
-        short_previous_evidence = prev_width < median_width * 0.68 and gap > median_gap * 1.2
-        alignment_evidence = overlap < 0.45
-        if gap_evidence and (indent_evidence or short_previous_evidence or alignment_evidence):
+        gap_ratio = gap / max(median_gap, median_height * 0.25, 1e-9)
+        indent_ratio = indent_delta / max(median_width, median_height, 1e-9)
+        first_line_indent_ratio = first_line_indent / max(median_width, median_height, 1e-9)
+        gap_evidence = gap_ratio >= 1.15 or gap >= median_height * 0.55
+        indent_evidence = indent_ratio >= 0.045 or first_line_indent_ratio >= 0.06
+        first_line_evidence = first_line_indent_ratio >= 0.06 and current_x > prev_x
+        short_previous_evidence = previous_width_ratio <= 0.78 and gap_ratio >= 0.85
+        alignment_evidence = overlap <= 0.58 and gap_ratio >= 0.85
+        break_score = 0.0
+        if gap_evidence:
+            break_score += 0.35
+        if indent_evidence:
+            break_score += 0.35
+        if first_line_evidence:
+            break_score += 0.45
+        if short_previous_evidence:
+            break_score += 0.2
+        if alignment_evidence:
+            break_score += 0.15
+        should_break = break_score >= 0.7 or (first_line_evidence and (gap_ratio >= 0.7 or short_previous_evidence))
+        logger.debug(
+            "Flexible paragraph pair scope=%s pair=%s gap=%.5f gap_ratio=%.3f indent=%.5f "
+            "first_line_indent=%.5f previous_width_ratio=%.3f overlap=%.3f break_score=%.3f break=%s",
+            debug_scope,
+            line_index,
+            gap,
+            gap_ratio,
+            indent_delta,
+            first_line_indent,
+            previous_width_ratio,
+            overlap,
+            break_score,
+            should_break,
+        )
+        if should_break:
             groups.append(current)
             current = [line]
         else:
@@ -631,6 +668,10 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict
             }
         )
     return paragraphs
+
+
+def _roi_overlap_ratio(target: Dict[str, float], container: Dict[str, float]) -> float:
+    return _roi_intersection_area(target, container) / max(_roi_area(target), 1e-9)
 
 
 def _roi_area(roi: Dict[str, float]) -> float:
@@ -698,6 +739,7 @@ def _build_flexible_paragraph_regions(image: np.ndarray, analysis: Dict[str, Any
         if _is_supported_layout_region(region)
     ]
     non_text_regions = [region for region in layout_regions if _resolved_layout_region_type(region) != "text"]
+    text_regions = [region for region in layout_regions if _resolved_layout_region_type(region) == "text"]
     blockers = [
         _region_roi(region, w_img, h_img)
         for region in non_text_regions
@@ -713,7 +755,25 @@ def _build_flexible_paragraph_regions(image: np.ndarray, analysis: Dict[str, Any
         if any(_roi_intersection_area(line_roi, blocker) / max(line_area, 1e-9) >= 0.55 for blocker in blockers):
             continue
         line_regions.append(line)
-    paragraph_regions = _paragraph_regions_from_text_lines(line_regions)
+    paragraph_regions: List[Dict[str, Any]] = []
+    used_line_ids: set[int] = set()
+    for text_region_index, text_region in enumerate(text_regions, start=1):
+        text_roi = _region_roi(text_region, w_img, h_img)
+        if not text_roi:
+            continue
+        region_lines = []
+        for line in line_regions:
+            line_roi = _region_roi(line, w_img, h_img)
+            if not line_roi:
+                continue
+            if _roi_overlap_ratio(line_roi, text_roi) >= 0.55:
+                region_lines.append(line)
+                used_line_ids.add(id(line))
+        paragraph_regions.extend(
+            _paragraph_regions_from_text_lines(region_lines, debug_scope=f"text_region_{text_region_index}")
+        )
+    remaining_lines = [line for line in line_regions if id(line) not in used_line_ids]
+    paragraph_regions.extend(_paragraph_regions_from_text_lines(remaining_lines, debug_scope="unscoped_text_region"))
     regions = paragraph_regions + non_text_regions if paragraph_regions else layout_regions
     if not regions:
         regions = [

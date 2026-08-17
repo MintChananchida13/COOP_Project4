@@ -313,6 +313,32 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     imageAnchorCount,
     preferredTextWeight: textWeightDraft,
   });
+  const hasTextAnchors = textAnchorCount > 0;
+  const hasImageAnchors = imageAnchorCount > 0;
+  const remainingMatchingWeight = Math.max(0, 1 - effectiveMatchingWeights.layoutWeight);
+  const remainingMatchingPercent = Math.round(remainingMatchingWeight * 100);
+  const minDualAnchorPercent = hasTextAnchors && hasImageAnchors ? Math.round(MIN_DUAL_ANCHOR_WEIGHT * 100) : 0;
+  const maxDualAnchorPercent = hasTextAnchors && hasImageAnchors
+    ? Math.max(minDualAnchorPercent, remainingMatchingPercent - minDualAnchorPercent)
+    : remainingMatchingPercent;
+  const setTextAnchorWeightPercent = (percent: number) => {
+    if (!hasTextAnchors) return;
+    const minPercent = hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0;
+    const maxPercent = hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent;
+    const nextPercent = Math.max(minPercent, Math.min(maxPercent, percent));
+    setTextWeightDraft(nextPercent / 100);
+  };
+  const setImageAnchorWeightPercent = (percent: number) => {
+    if (!hasImageAnchors) return;
+    if (!hasTextAnchors) {
+      setTextWeightDraft(0);
+      return;
+    }
+    const minPercent = hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0;
+    const maxPercent = hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent;
+    const nextImagePercent = Math.max(minPercent, Math.min(maxPercent, percent));
+    setTextWeightDraft((remainingMatchingPercent - nextImagePercent) / 100);
+  };
   const processSteps = [
     {
       id: "adjust",
@@ -334,8 +360,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     },
     {
       id: "decision",
-      label: "ขั้นตอนที่ 1 ตรวจสอบ ROI และ OCR",
-      description: "ตั้งค่าเกณฑ์ Final Score และน้ำหนักก่อนอัปเดต Template",
+      label: "2.3 ตรวจสอบตั้งค่าเกณฑ์ Template",
+      description: "ตั้งค่าเกณฑ์ Final Score และน้ำหนัก Template",
       status: editorStage === "decision" ? "active" : "next",
     },
   ] as const;
@@ -940,15 +966,15 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onGenerateEmbedding={handleEnterTemplateTestMode}
               onRunTestMode={handleEnterTemplateTestMode}
               onBeforeRunTest={flushFieldDrafts}
-              testModeLabel={selectedTemplate?.status === "active" ? "ไปต่อ" : "Test Mode"}
+              testModeLabel={selectedTemplate?.status === "active" ? "ตั้งค่า" : "Test Mode"}
               onBackToAdjust={() => setEditorStage("adjust")}
             />
           ) : (
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <p className="text-[11px] font-black uppercase tracking-wider text-indigo-600">ขั้นตอนที่ 1</p>
-                  <h2 className="mt-1 text-xl font-black text-slate-950">ตรวจสอบ ROI และ OCR</h2>
+                  <p className="text-[11px] font-black uppercase tracking-wider text-indigo-600">2.3</p>
+                  <h2 className="mt-1 text-xl font-black text-slate-950">ตรวจสอบค่าเกณฑ์ตัดสิน</h2>
                   <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
                     ตั้งค่าการตัดสินใจ ใช้เป็นเกณฑ์ตัดสิน Final Score ในขั้น New Document Test และตอน Publish พร้อมกำหนดน้ำหนัก Layout/Text/Image Anchors ก่อนอัปเดต Template
                   </p>
@@ -1011,30 +1037,54 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                           className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700"
                         />
                       </label>
-                      <label className="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                      <label className={`space-y-2 rounded-xl border p-3 transition ${hasTextAnchors ? "border-slate-100 bg-slate-50" : "border-slate-100 bg-slate-50/50 opacity-55"}`}>
                         <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Text</span>
                         <input
-                          type="number"
-                          min="0"
-                          max="100"
+                          type="range"
+                          min={hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0}
+                          max={hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent}
                           step="1"
                           value={Math.round(effectiveMatchingWeights.textAnchorWeight * 100)}
-                          onChange={(event) => {
-                            const remaining = 1 - effectiveMatchingWeights.layoutWeight;
-                            setTextWeightDraft(Math.max(0, Math.min(remaining, Number(event.target.value) / 100)));
-                          }}
-                          disabled={textAnchorCount === 0}
+                          onChange={(event) => setTextAnchorWeightPercent(Number(event.target.value))}
+                          disabled={!hasTextAnchors}
+                          className="w-full disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="number"
+                          min={hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0}
+                          max={hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent}
+                          step="1"
+                          value={Math.round(effectiveMatchingWeights.textAnchorWeight * 100)}
+                          onChange={(event) => setTextAnchorWeightPercent(Number(event.target.value))}
+                          disabled={!hasTextAnchors}
                           className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
                         />
                         <div className="text-[10px] font-bold text-slate-500">Effective {formatPercent(effectiveMatchingWeights.textAnchorWeight)}</div>
                       </label>
-                      <div className="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                      <label className={`space-y-2 rounded-xl border p-3 transition ${hasImageAnchors ? "border-slate-100 bg-slate-50" : "border-slate-100 bg-slate-50/50 opacity-55"}`}>
                         <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Image</span>
-                        <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700">
-                          {formatPercent(effectiveMatchingWeights.imageAnchorWeight)}
-                        </div>
+                        <input
+                          type="range"
+                          min={hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0}
+                          max={hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent}
+                          step="1"
+                          value={Math.round(effectiveMatchingWeights.imageAnchorWeight * 100)}
+                          onChange={(event) => setImageAnchorWeightPercent(Number(event.target.value))}
+                          disabled={!hasImageAnchors}
+                          className="w-full disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="number"
+                          min={hasTextAnchors && hasImageAnchors ? minDualAnchorPercent : 0}
+                          max={hasTextAnchors && hasImageAnchors ? maxDualAnchorPercent : remainingMatchingPercent}
+                          step="1"
+                          value={Math.round(effectiveMatchingWeights.imageAnchorWeight * 100)}
+                          onChange={(event) => setImageAnchorWeightPercent(Number(event.target.value))}
+                          disabled={!hasImageAnchors}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
+                        />
                         <div className="text-[10px] font-bold text-slate-500">คำนวณจากส่วนที่เหลือ</div>
-                      </div>
+                      </label>
                     </div>
                   </div>
                 </div>
