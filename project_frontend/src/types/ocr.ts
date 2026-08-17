@@ -13,6 +13,8 @@ export interface ROI {
   type?: 'text' | 'table' | 'image';
   dataType?: RoiDataType;
   extractionMethod?: 'ocr_text' | 'ocr_table' | 'paddle_thai_ocr' | 'table_recognition_v2' | 'extract_image';
+  roiMode?: 'fix' | 'flexible';
+  expectedContent?: 'text' | null;
   role?: 'data_extraction';
   weight?: number;
   points?: { x: number; y: number }[];
@@ -194,6 +196,8 @@ export interface TemplateField {
   matchType?: string;
   requiredForVerification: boolean;
   extractionMethod: string;
+  roiMode?: 'fix' | 'flexible';
+  expectedContent?: 'text' | null;
   roiPadding?: number;
   verificationWeight?: number;
   imageCategory?: string | string[];

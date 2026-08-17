@@ -125,6 +125,8 @@ def _fetch_template_fields(template_id: str) -> List[Dict[str, Any]]:
                 "extraction_method": row["extraction_method"],
                 "roi_padding": row["roi_padding"],
                 "verification_weight": row["verification_weight"] if "verification_weight" in row.keys() else 1.0,
+                "roi_mode": row["roi_mode"] if "roi_mode" in row.keys() else "fix",
+                "expected_content": row["expected_content"] if "expected_content" in row.keys() else None,
             }
         )
     return fields
@@ -505,6 +507,8 @@ def _run_extraction_test(
             "page_number": page_number,
             "data_type": data_type,
             "extraction_method": extraction_method,
+            "roi_mode": source_field.get("roi_mode") or "fix",
+            "expected_content": source_field.get("expected_content"),
             "roi_source": roi_source,
             "roi": roi,
             "passed": False,

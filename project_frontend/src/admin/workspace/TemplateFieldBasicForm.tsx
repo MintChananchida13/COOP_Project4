@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Image as ImageIcon, Table } from "lucide-react";
+import { FileText, Image as ImageIcon, Search, Square, Table } from "lucide-react";
 import { RoiDataType, TemplateField } from "../../types/ocr";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
 
@@ -26,6 +26,7 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
   const [fieldNameDraft, setFieldNameDraft] = useState(field.fieldName);
   const selectedDataType = field.dataType === "string" || !field.dataType ? "text" : field.dataType;
   const selectedRoiType = selectedDataType === "table" || selectedDataType === "image" ? selectedDataType : "text";
+  const selectedRoiMode = field.roiMode === "flexible" && selectedRoiType === "text" ? "flexible" : "fix";
 
   useEffect(() => {
     setFieldNameDraft(field.fieldName);
@@ -37,7 +38,20 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
   };
 
   const updateDataType = (dataType: RoiDataType) => {
+    const nextMode = dataType === "text" ? selectedRoiMode : "fix";
     onUpdate(field.id, {
+      dataType,
+      extractionMethod: defaultExtractionMethodForDataType(dataType),
+      roiMode: nextMode,
+      expectedContent: nextMode === "flexible" ? "text" : null,
+    });
+  };
+
+  const updateRoiMode = (roiMode: "fix" | "flexible") => {
+    const dataType = roiMode === "flexible" ? "text" : selectedRoiType;
+    onUpdate(field.id, {
+      roiMode,
+      expectedContent: roiMode === "flexible" ? "text" : null,
       dataType,
       extractionMethod: defaultExtractionMethodForDataType(dataType),
     });
@@ -54,8 +68,8 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
     <section className={compact ? "space-y-2 rounded-lg border border-indigo-100 bg-white p-2" : "space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3"}>
       <h3 className="text-xs font-black uppercase tracking-wider text-indigo-800">{compact ? "Field ที่เลือก" : "Template Field"}</h3>
 
-      <label className="space-y-1 block">
-        <span className="text-[9px] font-black uppercase text-slate-400">ชื่อ field</span>
+      <label className="block space-y-1">
+        <span className="text-[9px] font-black uppercase text-slate-400">ชื่อ Field</span>
         <input
           className={inputClass}
           value={fieldNameDraft}
@@ -70,7 +84,7 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
       </label>
 
       <div className="space-y-1">
-        <span className="text-[9px] font-black uppercase text-slate-400">ปรเภท ROI</span>
+        <span className="text-[9px] font-black uppercase text-slate-400">ประเภทข้อมูล</span>
         <div className="grid grid-cols-3 gap-1">
           {roiTypes.map(({ label, value, icon: Icon }) => (
             <button
@@ -88,6 +102,45 @@ export default function TemplateFieldBasicForm({ field, onUpdate, onDelete, comp
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="text-[9px] font-black uppercase text-slate-400">รูปแบบ ROI</span>
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            onClick={() => updateRoiMode("fix")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-black transition-all ${
+              selectedRoiMode === "fix"
+                ? "bg-slate-800 text-white shadow-sm shadow-slate-500/20"
+                : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Square size={11} />
+            Fix
+          </button>
+          <button
+            type="button"
+            onClick={() => updateRoiMode("flexible")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-black transition-all ${
+              selectedRoiMode === "flexible"
+                ? "bg-sky-600 text-white shadow-sm shadow-sky-500/20"
+                : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Search size={11} />
+            Flexible
+          </button>
+        </div>
+        {selectedRoiMode === "flexible" ? (
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-sky-800">
+            กรอบนี้คือพื้นที่ค้นหา ไม่ใช่กรอบ OCR โดยตรง ระบบจะหา Text Content ภายในพื้นที่นี้ก่อนแล้วค่อย OCR เป็นบล็อกตามลำดับ
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-slate-500">
+            ใช้ตำแหน่ง ROI เดิมหลัง align เอกสาร แล้วส่งเข้า OCR ตามประเภทข้อมูล
+          </div>
+        )}
       </div>
 
       <div className={compact ? "grid grid-cols-1 gap-2" : "grid grid-cols-2 gap-2"}>

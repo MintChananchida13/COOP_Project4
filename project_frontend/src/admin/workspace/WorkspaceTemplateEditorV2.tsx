@@ -203,8 +203,8 @@ const fieldToRoiType = (field: TemplateField): ROI["type"] => {
 };
 
 const roiTypeToFieldPatch = (type?: ROI["type"]): Partial<TemplateField> => {
-  if (type === "table") return { dataType: "table", extractionMethod: "table_recognition_v2" };
-  if (type === "image") return { dataType: "image", extractionMethod: "extract_image" };
+  if (type === "table") return { dataType: "table", extractionMethod: "table_recognition_v2", roiMode: "fix", expectedContent: null };
+  if (type === "image") return { dataType: "image", extractionMethod: "extract_image", roiMode: "fix", expectedContent: null };
   return { dataType: "text", extractionMethod: "paddle_thai_ocr" };
 };
 
@@ -284,6 +284,8 @@ const fieldToRoi = (field: TemplateField, metrics: WorkspaceImageMetrics): Admin
     height: box.height,
     pageIndex: field.pageNumber - 1,
     type: fieldToRoiType(field),
+    roiMode: field.roiMode === "flexible" ? "flexible" : "fix",
+    expectedContent: field.roiMode === "flexible" ? "text" : null,
   };
 };
 
@@ -530,6 +532,8 @@ export default function WorkspaceTemplateEditorV2({
             useForVerification: false,
             requiredForVerification: false,
             extractionMethod: "paddle_thai_ocr",
+            roiMode: "fix",
+            expectedContent: null,
             roiPadding: 0,
           });
           setSelectedId(stableNumericId(`field:${optimisticFieldId}`));
@@ -1173,7 +1177,11 @@ export default function WorkspaceTemplateEditorV2({
         hideStepProgress
         rootClassName="max-w-7xl mx-auto space-y-3"
         onImageMetricsChange={setImageMetrics}
-        getRoiBadges={() => []}
+        getRoiBadges={(roi) => {
+          const adminRoi = roi as AdminRoi;
+          if (adminRoi.workspaceKind !== "extraction_fields") return [];
+          return adminRoi.roiMode === "flexible" ? ["Flexible Search Area"] : [];
+        }}
         allowedRoiTypes={step === "verification_anchors" ? ["text", "image"] : ["text", "table", "image"]}
         getRoiClassName={(roi, selected) => {
           const adminRoi = roi as AdminRoi;

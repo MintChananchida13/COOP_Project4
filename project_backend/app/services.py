@@ -80,6 +80,14 @@ def _normalize_data_type(value: Optional[str]) -> str:
     return "text"
 
 
+def _normalize_roi_mode(value: Optional[str]) -> str:
+    return "flexible" if value == "flexible" else "fix"
+
+
+def _normalize_expected_content(value: Optional[str]) -> Optional[str]:
+    return "text" if value == "text" else None
+
+
 def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
@@ -224,6 +232,10 @@ def _ensure_template_field_verification_columns(conn: Any) -> None:
         conn.execute("ALTER TABLE template_fields ADD COLUMN verification_weight REAL DEFAULT 1.0")
     if columns and "image_category" not in columns:
         conn.execute("ALTER TABLE template_fields ADD COLUMN image_category TEXT")
+    if columns and "roi_mode" not in columns:
+        conn.execute("ALTER TABLE template_fields ADD COLUMN roi_mode TEXT DEFAULT 'fix'")
+    if columns and "expected_content" not in columns:
+        conn.execute("ALTER TABLE template_fields ADD COLUMN expected_content TEXT")
     conn.commit()
 
 
@@ -393,6 +405,8 @@ def _template_field_row_to_api(row: Any) -> Dict[str, Any]:
         "match_type": item["match_type"],
         "required_for_verification": bool(item["required_for_verification"]),
         "extraction_method": _normalize_extraction_method(item["extraction_method"]),
+        "roi_mode": item.get("roi_mode") or "fix",
+        "expected_content": item.get("expected_content"),
         "roi_padding": item["roi_padding"],
         "verification_weight": item.get("verification_weight", 1.0),
         "image_category": item.get("image_category"),
@@ -698,6 +712,72 @@ def _image_path_to_data_url(path_value: Optional[str]) -> Optional[str]:
     except OSError:
         return None
     return f"data:image/png;base64,{encoded}"
+
+
+def _layout_region_type(region: Dict[str, Any]) -> str:
+    return str(region.get("type") or region.get("data_type") or "").lower()
+
+
+def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict[str, Any]:
+    if not boundary_image_path:
+        return {"text": "", "confidence": 0.0, "segments": [], "failure_reason": "boundary_crop_failed"}
+    image = _load_image_source(boundary_image_path)
+    opencv_img = _image_to_bgr_array(image) if image is not None else None
+    if opencv_img is None:
+        return {"text": "", "confidence": 0.0, "segments": [], "failure_reason": "boundary_image_unreadable"}
+
+    analysis = analyze_layout(opencv_img, expand_text_rois=False, auto_roi_mode="text_line")
+    regions = [
+        region
+        for region in analysis.get("regions", [])
+        if isinstance(region, dict) and _layout_region_type(region) in {"text", "title", "plain text", "text_block", "content"}
+    ]
+    regions.sort(key=lambda region: (
+        float((region.get("roi") or {}).get("y_ratio") or 0.0),
+        float((region.get("roi") or {}).get("x_ratio") or 0.0),
+    ))
+
+    texts: List[str] = []
+    confidences: List[float] = []
+    segments: List[Dict[str, Any]] = []
+    for index, region in enumerate(regions):
+        roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+        if not roi:
+            continue
+        block_roi = {
+            "page_number": 1,
+            "x_ratio": float(roi.get("x_ratio") or 0.0),
+            "y_ratio": float(roi.get("y_ratio") or 0.0),
+            "width_ratio": float(roi.get("width_ratio") or 0.0),
+            "height_ratio": float(roi.get("height_ratio") or 0.0),
+        }
+        if block_roi["width_ratio"] <= 0 or block_roi["height_ratio"] <= 0:
+            continue
+        ocr_result = ocr_roi(boundary_image_path, block_roi)
+        text = normalize_ocr_text(ocr_result.get("text"))
+        if not text:
+            continue
+        confidence = float(ocr_result.get("confidence") or 0.0)
+        texts.append(text)
+        confidences.append(confidence)
+        segments.append(
+            {
+                "index": index,
+                "text": text,
+                "confidence": confidence,
+                "roi": block_roi,
+                "source": "flexible_resolved_block",
+            }
+        )
+
+    return {
+        "text": "\n".join(texts),
+        "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
+        "segments": segments,
+        "attempts": [{"step": "flexible_roi_layout_blocks", "block_count": len(regions), "recognized_count": len(texts)}],
+        "engine": "flexible_roi_text",
+        "preprocessing": "flexible_roi_search_boundary_layout_blocks",
+    }
 
 
 def _save_prepublish_test_image(test_id: str, file_bytes: bytes, page_index: int = 1) -> Path:
@@ -3490,12 +3570,16 @@ class AdminTemplateService:
             image_path = page_paths.get(page_number)
             data_type = field.get("data_type") or "text"
             extraction_method = field.get("extraction_method") or ("table_recognition_v2" if data_type == "table" else "ocr_text")
+            roi_mode = field.get("roi_mode") or "fix"
+            expected_content = field.get("expected_content")
             result = {
                 "field_id": field["id"],
                 "field_name": field.get("field_name"),
                 "display_label": field.get("display_label"),
                 "page_number": page_number,
                 "extraction_method": extraction_method,
+                "roi_mode": roi_mode,
+                "expected_content": expected_content,
                 "passed": False,
                 "status": "failed",
                 "ocr_text": "",
@@ -3524,6 +3608,22 @@ class AdminTemplateService:
                             "ocr_text": "(image crop)",
                             "confidence": 1.0 if cropped else 0.0,
                             "failure_reason": None if cropped else "roi_crop_failed",
+                        }
+                    )
+                elif roi_mode == "flexible" and expected_content == "text":
+                    ocr_result = _flexible_text_ocr_from_boundary(cropped)
+                    text = str(ocr_result.get("text") or "")
+                    confidence = float(ocr_result.get("confidence") or 0.0)
+                    result.update(
+                        {
+                            "passed": bool(text.strip()),
+                            "status": "passed" if text.strip() else "failed",
+                            "ocr_text": text,
+                            "confidence": round(confidence, 4),
+                            "raw_segments": ocr_result.get("segments", []),
+                            "ocr_attempts": ocr_result.get("attempts", []),
+                            "ocr_preprocessing": ocr_result.get("preprocessing"),
+                            "failure_reason": None if text.strip() else str(ocr_result.get("failure_reason") or "flexible_text_empty"),
                         }
                     )
                 elif data_type == "table" or extraction_method in {"table_recognition_v2", "ocr_table"}:
@@ -3784,7 +3884,7 @@ class AdminTemplateService:
                     roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
                     data_type, user_selectable, default_selected,
                     use_for_verification, expected_text, match_type,
-                    required_for_verification, extraction_method,
+                    required_for_verification, extraction_method, roi_mode, expected_content,
                     anchor_text, regex_pattern, roi_padding, verification_weight, image_category, sort_order,
                     created_at, updated_at
                 )
@@ -3794,7 +3894,7 @@ class AdminTemplateService:
                     ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
-                    ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
@@ -3818,6 +3918,8 @@ class AdminTemplateService:
                     payload.match_type,
                     int(payload.required_for_verification),
                     _normalize_extraction_method(payload.extraction_method),
+                    _normalize_roi_mode(payload.roi_mode),
+                    _normalize_expected_content(payload.expected_content),
                     payload.anchor_text,
                     payload.regex_pattern,
                     payload.roi_padding if payload.roi_padding is not None else 0,
@@ -3847,6 +3949,8 @@ class AdminTemplateService:
             "match_type": "match_type",
             "required_for_verification": "required_for_verification",
             "extraction_method": "extraction_method",
+            "roi_mode": "roi_mode",
+            "expected_content": "expected_content",
             "anchor_text": "anchor_text",
             "regex_pattern": "regex_pattern",
             "roi_padding": "roi_padding",
@@ -3861,6 +3965,10 @@ class AdminTemplateService:
                     value = int(value)
                 if key == "extraction_method":
                     value = _normalize_extraction_method(value)
+                if key == "roi_mode":
+                    value = _normalize_roi_mode(value)
+                if key == "expected_content":
+                    value = _normalize_expected_content(value)
                 column_values[column] = value
         if payload.roi is not None:
             column_values.update(
@@ -4222,7 +4330,7 @@ class AdminTemplateService:
                         roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
                         data_type, user_selectable, default_selected,
                         use_for_verification, expected_text, match_type,
-                        required_for_verification, extraction_method,
+                        required_for_verification, extraction_method, roi_mode, expected_content,
                         anchor_text, regex_pattern, roi_padding, sort_order,
                         verification_weight, image_category,
                         created_at, updated_at
@@ -4233,7 +4341,7 @@ class AdminTemplateService:
                         ?, ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?,
+                        ?, ?, ?, ?,
                         ?, ?, ?, ?,
                         ?, ?,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -4258,6 +4366,8 @@ class AdminTemplateService:
                         field["match_type"],
                         field["required_for_verification"],
                         _normalize_extraction_method(field.get("extraction_method")),
+                        _normalize_roi_mode(field.get("roi_mode")),
+                        _normalize_expected_content(field.get("expected_content")),
                         field["anchor_text"],
                         field["regex_pattern"],
                         field["roi_padding"],
@@ -4500,7 +4610,7 @@ class AdminTemplateService:
                         roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
                         data_type, user_selectable, default_selected,
                         use_for_verification, expected_text, match_type,
-                        required_for_verification, extraction_method,
+                        required_for_verification, extraction_method, roi_mode, expected_content,
                         anchor_text, regex_pattern, roi_padding, sort_order,
                         created_at, updated_at
                     )
@@ -4510,7 +4620,7 @@ class AdminTemplateService:
                         ?, ?, ?, ?,
                         ?, 1, 1,
                         0, NULL, NULL,
-                        0, ?,
+                        0, ?, 'fix', NULL,
                         NULL, NULL, 0, ?,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )

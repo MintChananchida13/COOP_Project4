@@ -145,6 +145,8 @@ interface ApiTemplateField {
   match_type?: string | null;
   required_for_verification: boolean;
   extraction_method: string;
+  roi_mode?: "fix" | "flexible" | null;
+  expected_content?: "text" | null;
   roi_padding?: number | null;
   verification_weight?: number | null;
   image_category?: string | null;
@@ -321,6 +323,8 @@ export interface DetectionProjectedField {
   fieldName?: string | null;
   displayLabel?: string | null;
   pageNumber?: number | null;
+  roiMode?: "fix" | "flexible" | null;
+  expectedContent?: "text" | null;
   templateRoi?: Record<string, unknown>;
   projectedRoiBeforeClip?: DetectionProjectedField["projectedRoi"];
   projectedRoi?: {
@@ -725,6 +729,8 @@ function mapProjectedField(field: Record<string, unknown>): DetectionProjectedFi
     fieldName: (field.field_name as string | null | undefined) ?? null,
     displayLabel: (field.display_label as string | null | undefined) ?? null,
     pageNumber: typeof field.page_number === "number" ? field.page_number : null,
+    roiMode: field.roi_mode === "flexible" ? "flexible" : "fix",
+    expectedContent: field.expected_content === "text" ? "text" : null,
     templateRoi: (field.template_roi as Record<string, unknown> | undefined) || undefined,
     projectedRoiBeforeClip: (field.projected_roi_before_clip as DetectionProjectedField["projectedRoiBeforeClip"]) || null,
     projectedRoi: (field.projected_roi as DetectionProjectedField["projectedRoi"]) || null,
@@ -888,6 +894,8 @@ const mapApiTemplateField = (field: ApiTemplateField): TemplateField => ({
   matchType: field.match_type || undefined,
   requiredForVerification: field.required_for_verification,
   extractionMethod: normalizeExtractionMethod(field.extraction_method),
+  roiMode: field.roi_mode === "flexible" ? "flexible" : "fix",
+  expectedContent: field.expected_content === "text" ? "text" : null,
   roiPadding: field.roi_padding ?? undefined,
   verificationWeight: field.verification_weight ?? undefined,
   imageCategory: parseImageCategoryValue(field.image_category),
@@ -1794,6 +1802,8 @@ const fieldToApiPayload = (
   match_type: field.matchType,
   required_for_verification: field.requiredForVerification ?? false,
   extraction_method: normalizeExtractionMethod(field.extractionMethod),
+  roi_mode: field.roiMode === "flexible" ? "flexible" : "fix",
+  expected_content: field.roiMode === "flexible" ? "text" : null,
   roi_padding: field.roiPadding ?? 0,
   verification_weight: field.verificationWeight ?? 1,
   image_category: serializeImageCategoryValue(field.imageCategory),
@@ -1827,6 +1837,8 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
     match_type: patch.matchType,
     required_for_verification: patch.requiredForVerification,
     extraction_method: patch.extractionMethod ? normalizeExtractionMethod(patch.extractionMethod) : undefined,
+    roi_mode: patch.roiMode,
+    expected_content: patch.expectedContent,
     roi_padding: patch.roiPadding,
     verification_weight: patch.verificationWeight,
     image_category: serializeImageCategoryValue(patch.imageCategory),

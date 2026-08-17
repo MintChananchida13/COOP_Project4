@@ -336,6 +336,8 @@ async function templateFieldsToWorkspaceRois(
       type,
       dataType: field.dataType || type,
       extractionMethod: getWorkspaceExtractionMethod(field),
+      roiMode: field.roiMode === "flexible" ? "flexible" : "fix",
+      expectedContent: field.roiMode === "flexible" ? "text" : null,
       role: "data_extraction",
       enabled: field.defaultSelected !== false,
       roiCoordinateSource: "template_roi",
@@ -1602,6 +1604,8 @@ function HomeWorkspace() {
                   height: roi.height * scaleY,
                   type: roiFieldType,
                   extractionMethod: roiExtractionMethod,
+                  roiMode: roi.roiMode === "flexible" ? "flexible" : "fix",
+                  expectedContent: roi.roiMode === "flexible" ? "text" : null,
                 },
               ],
             });

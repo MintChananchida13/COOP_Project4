@@ -204,6 +204,8 @@ _POSTGRES_SCHEMA = [
         match_type TEXT,
         required_for_verification INTEGER NOT NULL DEFAULT 0,
         extraction_method TEXT NOT NULL DEFAULT 'fixed_roi',
+        roi_mode TEXT NOT NULL DEFAULT 'fix',
+        expected_content TEXT,
         anchor_text TEXT,
         regex_pattern TEXT,
         roi_padding DOUBLE PRECISION,

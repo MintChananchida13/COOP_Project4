@@ -42,6 +42,8 @@ class ROIModel(BaseModel):
     roiId: int | None = None
     type: str | None = None
     extractionMethod: str | None = None
+    roiMode: str | None = None
+    expectedContent: str | None = None
 
 
 class DocumentPayload(BaseModel):
@@ -402,6 +404,92 @@ def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, An
     return recognize_text_crop_with_detection(crop_img)
 
 
+def _region_type(region: Dict[str, Any]) -> str:
+    return str(region.get("type") or region.get("data_type") or "").lower()
+
+
+def _region_crop_box(region: Dict[str, Any], image_width: int, image_height: int) -> Tuple[int, int, int, int] | None:
+    roi = region.get("roi") if isinstance(region, dict) else None
+    bbox = region.get("bbox") if isinstance(region, dict) else None
+    try:
+        if isinstance(roi, dict):
+            x = int(float(roi.get("x_ratio") or 0.0) * image_width)
+            y = int(float(roi.get("y_ratio") or 0.0) * image_height)
+            w = int(float(roi.get("width_ratio") or 0.0) * image_width)
+            h = int(float(roi.get("height_ratio") or 0.0) * image_height)
+        elif isinstance(bbox, dict):
+            x = int(float(bbox.get("x") or 0.0))
+            y = int(float(bbox.get("y") or 0.0))
+            w = int(float(bbox.get("width") or 0.0))
+            h = int(float(bbox.get("height") or 0.0))
+        else:
+            return None
+    except (TypeError, ValueError):
+        return None
+    x = max(0, min(x, image_width - 1))
+    y = max(0, min(y, image_height - 1))
+    w = max(1, min(w, image_width - x))
+    h = max(1, min(h, image_height - y))
+    return (x, y, w, h)
+
+
+def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
+    if search_img.size == 0:
+        return {"text": "", "confidence": 0.0, "segments": [], "attempts": [], "engine": "flexible_roi_text"}
+
+    h_img, w_img = search_img.shape[:2]
+    analysis = analyze_layout(search_img, expand_text_rois=False, auto_roi_mode="text_line")
+    text_regions = [
+        region
+        for region in analysis.get("regions", [])
+        if isinstance(region, dict) and _region_type(region) in {"text", "title", "plain text", "text_block", "content"}
+    ]
+    text_regions.sort(key=lambda region: (
+        float((region.get("roi") or {}).get("y_ratio") or 0.0),
+        float((region.get("roi") or {}).get("x_ratio") or 0.0),
+    ))
+
+    texts: List[str] = []
+    confidences: List[float] = []
+    segments: List[Dict[str, Any]] = []
+    for index, region in enumerate(text_regions):
+        box = _region_crop_box(region, w_img, h_img)
+        if not box:
+            continue
+        x, y, w, h = box
+        block_img = search_img[y : y + h, x : x + w]
+        if block_img.size == 0:
+            continue
+        ocr_result = recognize_text_crop_with_detection(block_img)
+        text = normalize_ocr_text(ocr_result.get("text"))
+        if not text:
+            continue
+        confidence = float(ocr_result.get("confidence") or 0.0)
+        texts.append(text)
+        confidences.append(confidence)
+        segments.append(
+            {
+                "index": index,
+                "text": text,
+                "confidence": confidence,
+                "bbox": {"x": x, "y": y, "width": w, "height": h},
+                "source": "flexible_resolved_block",
+                "raw_segments": ocr_result.get("segments", []),
+            }
+        )
+
+    return {
+        "text": "\n".join(texts),
+        "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
+        "segments": segments,
+        "attempts": [{"step": "flexible_roi_layout_blocks", "block_count": len(text_regions), "recognized_count": len(texts)}],
+        "preprocessing": "flexible_roi_search_boundary_layout_blocks",
+        "engine": "flexible_roi_text",
+        "model": "PP-DocLayoutV3 + text_ocr_pipeline",
+        "resolved_blocks": segments,
+    }
+
+
 def _payload_to_json(payload: DocumentPayload) -> str:
     if hasattr(payload, "model_dump"):
         data = payload.model_dump()
@@ -567,7 +655,12 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
             filepath = os.path.join(OUTPUT_DIR, filename)
             cv2.imwrite(filepath, crop_img)
 
-            ocr_result = process_roi_with_engine(crop_img, roi)
+            roi_mode = (roi.roiMode or "fix").lower()
+            expected_content = (roi.expectedContent or "").lower()
+            if roi_mode == "flexible" and expected_content == "text":
+                ocr_result = process_flexible_text_roi(crop_img)
+            else:
+                ocr_result = process_roi_with_engine(crop_img, roi)
             extracted_text = normalize_ocr_text(ocr_result.get("text"))
             confidence_score = float(ocr_result.get("confidence") or 0.0)
             if not extracted_text and (roi.type or "").lower() != "image":
@@ -583,6 +676,8 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
                     "saved_path": filepath,
                     "type": roi.type,
                     "extraction_method": roi.extractionMethod,
+                    "roi_mode": roi.roiMode or "fix",
+                    "expected_content": roi.expectedContent,
                     "raw_segments": ocr_result.get("segments", []),
                     "ocr_attempts": ocr_result.get("attempts", []),
                     "ocr_preprocessing": ocr_result.get("preprocessing", "none"),

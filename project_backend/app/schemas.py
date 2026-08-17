@@ -185,6 +185,8 @@ class TemplateFieldCreate(BaseModel):
     match_type: Optional[str] = None
     required_for_verification: bool = False
     extraction_method: str = "fixed_roi"
+    roi_mode: str = Field(default="fix", validation_alias=AliasChoices("roi_mode", "roiMode"))
+    expected_content: Optional[str] = Field(default=None, validation_alias=AliasChoices("expected_content", "expectedContent"))
     anchor_text: Optional[str] = None
     regex_pattern: Optional[str] = None
     roi_padding: Optional[float] = None
@@ -207,6 +209,8 @@ class TemplateFieldUpdate(BaseModel):
     match_type: Optional[str] = None
     required_for_verification: Optional[bool] = None
     extraction_method: Optional[str] = None
+    roi_mode: Optional[str] = Field(default=None, validation_alias=AliasChoices("roi_mode", "roiMode"))
+    expected_content: Optional[str] = Field(default=None, validation_alias=AliasChoices("expected_content", "expectedContent"))
     anchor_text: Optional[str] = None
     regex_pattern: Optional[str] = None
     roi_padding: Optional[float] = None
