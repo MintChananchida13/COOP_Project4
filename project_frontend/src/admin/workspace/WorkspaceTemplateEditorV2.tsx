@@ -1045,18 +1045,6 @@ export default function WorkspaceTemplateEditorV2({
     const nonTableBlocks = blocks.filter((block) => (block.dataType || block.type) !== "table");
     return (
       <div className="space-y-3">
-        <div className="rounded-lg border border-sky-100 bg-sky-50/70 p-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[9px] font-black uppercase text-sky-700">Flexible Search Result</div>
-            <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-sky-600">
-              {blocks.length} blocks
-            </span>
-          </div>
-          <div className="mt-1 text-[10px] font-semibold leading-relaxed text-sky-800">
-            ใช้ PP-DocLayoutV3 หาองค์ประกอบภายในกรอบ แล้วส่งต่อเข้ากระบวนการตาม type ของแต่ละ ROI ย่อย
-          </div>
-        </div>
-
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
           <div className="rounded-lg border border-slate-100 bg-white p-2">
             <div className="text-[9px] font-black uppercase text-slate-400">ภาพพรีวิวที่ PP-DocLayoutV3 หาองค์ประกอบได้</div>
@@ -1301,18 +1289,26 @@ export default function WorkspaceTemplateEditorV2({
         getRoiBadges={(roi) => {
           const adminRoi = roi as AdminRoi;
           if (adminRoi.workspaceKind !== "extraction_fields") return [];
-          return adminRoi.roiMode === "flexible" ? ["Flexible Search Area"] : [];
+          return [];
         }}
         allowedRoiTypes={step === "verification_anchors" ? ["text", "image"] : ["text", "table", "image"]}
         getRoiClassName={(roi, selected) => {
           const adminRoi = roi as AdminRoi;
           const isAnchorRoi = adminRoi.workspaceKind === "verification_anchors";
           const isIgnore = adminRoi.workspaceKind === "ignore_regions";
+          const isFlexible = adminRoi.workspaceKind === "extraction_fields" && adminRoi.roiMode === "flexible";
           if (isAnchorRoi || isIgnore) {
             return `rnd-box-item border transition-shadow pointer-events-auto ${
               selected
                 ? "border-amber-700 bg-amber-400/30 shadow-lg z-30 ring-4 ring-amber-300/45"
                 : "border-amber-500 bg-amber-400/10 hover:bg-amber-400/15 z-20"
+            }`;
+          }
+          if (isFlexible) {
+            return `rnd-box-item border-2 border-dashed transition-shadow pointer-events-auto ${
+              selected
+                ? "border-cyan-700 bg-cyan-300/20 shadow-lg z-30 ring-4 ring-cyan-300/45"
+                : "border-cyan-500 bg-cyan-300/10 hover:bg-cyan-300/15 z-20"
             }`;
           }
           return `rnd-box-item border transition-shadow pointer-events-auto ${
@@ -1324,11 +1320,27 @@ export default function WorkspaceTemplateEditorV2({
         getRoiLabelClassName={(roi, selected) => {
           const adminRoi = roi as AdminRoi;
           const amber = adminRoi.workspaceKind === "verification_anchors" || adminRoi.workspaceKind === "ignore_regions";
+          const flexible = adminRoi.workspaceKind === "extraction_fields" && adminRoi.roiMode === "flexible";
           return `absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${
             selected
-              ? amber ? "bg-amber-700 border-amber-700 text-white font-extrabold" : "bg-sky-600 border-sky-600 text-white font-extrabold"
-              : amber ? "bg-white border-amber-200 text-amber-700 font-bold" : "bg-white border-indigo-200 text-indigo-700 font-bold"
+              ? amber
+                ? "bg-amber-700 border-amber-700 text-white font-extrabold"
+                : flexible
+                  ? "bg-cyan-700 border-cyan-700 text-white font-extrabold"
+                  : "bg-sky-600 border-sky-600 text-white font-extrabold"
+              : amber
+                ? "bg-white border-amber-200 text-amber-700 font-bold"
+                : flexible
+                  ? "bg-white border-cyan-200 text-cyan-700 font-bold"
+                  : "bg-white border-indigo-200 text-indigo-700 font-bold"
           }`;
+        }}
+        getRoiLabelText={(roi) => {
+          const adminRoi = roi as AdminRoi;
+          const name = roi.fieldName || "(Unnamed)";
+          return adminRoi.workspaceKind === "extraction_fields" && adminRoi.roiMode === "flexible"
+            ? `${name} · Flexible Search Area`
+            : name;
         }}
         rightPanelRenderer={({ currentPageRois: panelRois }) => (
           <div className="flex h-full min-h-0 flex-col">

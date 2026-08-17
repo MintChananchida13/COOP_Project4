@@ -134,6 +134,7 @@ export interface WorkspaceCustomEditorProps {
   }) => React.ReactNode;
   getRoiClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean, activeTool: 'pan' | 'box' | 'polygon') => string;
   getRoiLabelClassName?: (roi: ROI & { pageIndex?: number }, selected: boolean) => string;
+  getRoiLabelText?: (roi: ROI & { pageIndex?: number }) => string;
   getRoiBadges?: (roi: ROI & { pageIndex?: number }) => string[];
   allowedRoiTypes?: Array<"text" | "table" | "image">;
   onImageMetricsChange?: (metrics: WorkspaceImageMetrics) => void;
@@ -175,6 +176,7 @@ export default function WorkspaceCustomEditor({
   canvasActionRenderer,
   getRoiClassName,
   getRoiLabelClassName,
+  getRoiLabelText,
   getRoiBadges,
   allowedRoiTypes = ["text", "table", "image"],
   onImageMetricsChange,
@@ -1111,7 +1113,7 @@ export default function WorkspaceCustomEditor({
                             className={getRoiLabelClassName?.(roi, selected) || `absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${selectedId === roi.id ? "bg-indigo-600 border-indigo-600 text-white font-extrabold" : "bg-white border-indigo-200 text-indigo-700 font-bold"}`}
                           >
                             {renderTypeIcon(roi.type, 10)}
-                            <span>{roi.fieldName || "(Unnamed)"}</span>
+                            <span>{getRoiLabelText?.(roi) || roi.fieldName || "(Unnamed)"}</span>
                           </span>
                         )}
 

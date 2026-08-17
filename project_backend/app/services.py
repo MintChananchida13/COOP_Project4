@@ -788,6 +788,63 @@ def _region_roi_from_boundary(region: Dict[str, Any], image_width: int, image_he
     }
 
 
+def _roi_area(roi: Dict[str, float]) -> float:
+    return max(0.0, float(roi.get("width_ratio") or 0.0)) * max(0.0, float(roi.get("height_ratio") or 0.0))
+
+
+def _roi_intersection_area(left: Dict[str, float], right: Dict[str, float]) -> float:
+    left_x = float(left.get("x_ratio") or 0.0)
+    left_y = float(left.get("y_ratio") or 0.0)
+    left_right = left_x + float(left.get("width_ratio") or 0.0)
+    left_bottom = left_y + float(left.get("height_ratio") or 0.0)
+    right_x = float(right.get("x_ratio") or 0.0)
+    right_y = float(right.get("y_ratio") or 0.0)
+    right_right = right_x + float(right.get("width_ratio") or 0.0)
+    right_bottom = right_y + float(right.get("height_ratio") or 0.0)
+    width = max(0.0, min(left_right, right_right) - max(left_x, right_x))
+    height = max(0.0, min(left_bottom, right_bottom) - max(left_y, right_y))
+    return width * height
+
+
+def _filter_nested_flexible_regions(regions: List[Dict[str, Any]], image_width: int, image_height: int) -> List[Dict[str, Any]]:
+    prepared: List[Dict[str, Any]] = []
+    for region in regions:
+        roi = _region_roi_from_boundary(region, image_width, image_height)
+        if not roi:
+            continue
+        data_type = _resolved_layout_region_type(region)
+        prepared.append({"region": region, "roi": roi, "data_type": data_type, "area": _roi_area(roi)})
+
+    kept: List[Dict[str, Any]] = []
+    for item in sorted(prepared, key=lambda value: value["area"], reverse=True):
+        if item["area"] <= 0:
+            continue
+        nested_in_existing = False
+        for existing in kept:
+            if existing["data_type"] != item["data_type"]:
+                continue
+            overlap = _roi_intersection_area(item["roi"], existing["roi"])
+            item_overlap = overlap / max(item["area"], 1e-9)
+            existing_overlap = overlap / max(existing["area"], 1e-9)
+            if item["data_type"] in {"table", "image"}:
+                if item_overlap >= 0.72 or existing_overlap >= 0.72:
+                    nested_in_existing = True
+                    break
+                continue
+            if item_overlap >= 0.88:
+                nested_in_existing = True
+                break
+        if not nested_in_existing:
+            kept.append(item)
+
+    kept_regions = [item["region"] for item in kept]
+    kept_regions.sort(key=lambda region: (
+        float((_region_roi_from_boundary(region, image_width, image_height) or {}).get("y_ratio") or 0.0),
+        float((_region_roi_from_boundary(region, image_width, image_height) or {}).get("x_ratio") or 0.0),
+    ))
+    return kept_regions
+
+
 def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     image = _load_image_source(boundary_image_path)
     image_width, image_height = image.size if image is not None else (1, 1)
@@ -941,10 +998,7 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
                 "extraction_method": "paddle_thai_ocr",
             }
         ]
-    regions.sort(key=lambda region: (
-        float((region.get("roi") or {}).get("y_ratio") or 0.0),
-        float((region.get("roi") or {}).get("x_ratio") or 0.0),
-    ))
+    regions = _filter_nested_flexible_regions(regions, opencv_img.shape[1], opencv_img.shape[0])
 
     result = _ocr_flexible_regions(boundary_image_path, regions, "pp_doclayout_v3_block")
     attempts = [{"step": "flexible_roi_layout_blocks", "block_count": len(regions), "recognized_count": len(result["segments"])}]
