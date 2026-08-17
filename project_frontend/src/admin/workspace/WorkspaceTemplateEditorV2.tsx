@@ -1041,6 +1041,8 @@ export default function WorkspaceTemplateEditorV2({
   const renderFlexibleTextPreview = (item: TemplateStepTestItem) => {
     if (item.roiMode !== "flexible") return null;
     const blocks = item.resolvedBlocks || [];
+    const tableBlocks = blocks.filter((block) => (block.dataType || block.type) === "table");
+    const nonTableBlocks = blocks.filter((block) => (block.dataType || block.type) !== "table");
     return (
       <div className="space-y-3">
         <div className="rounded-lg border border-sky-100 bg-sky-50/70 p-2">
@@ -1071,12 +1073,12 @@ export default function WorkspaceTemplateEditorV2({
             <div className="flex items-center justify-between gap-2">
               <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อยและผลตาม Type</div>
               <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
-                {blocks.length} รายการ
+                {nonTableBlocks.length} รายการ
               </span>
             </div>
-            {blocks.length > 0 ? (
+            {nonTableBlocks.length > 0 ? (
               <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
-                {blocks.map((block, index) => (
+                {nonTableBlocks.map((block, index) => (
                   <div key={`flexible-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-2">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อย #{index + 1}</div>
@@ -1102,11 +1104,6 @@ export default function WorkspaceTemplateEditorV2({
                         <div className="mt-1 max-h-24 overflow-y-auto rounded bg-white px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-700 ring-1 ring-slate-100">
                           <p className="whitespace-pre-wrap break-words">{block.text || "-"}</p>
                         </div>
-                        {(block.dataType || block.type) === "table" && (block.tableStructured || block.tableRows) && (
-                          <div className="mt-2">
-                            {renderStructuredTable(block.tableStructured, block.tableRows || null, `ตารางจาก ROI ย่อย #${index + 1}`)}
-                          </div>
-                        )}
                         {block.ocrError && (
                           <div className="mt-1 rounded bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
                             OCR error: {block.ocrError}
@@ -1125,11 +1122,36 @@ export default function WorkspaceTemplateEditorV2({
               </div>
             ) : (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">
-                ยังไม่พบกรอบ Text Content ภายใน Search Boundary
+                ยังไม่พบ ROI ย่อยประเภทข้อความหรือรูปภาพภายใน Search Boundary
               </div>
             )}
           </div>
         </div>
+
+        {tableBlocks.length > 0 && (
+          <div className="space-y-3 rounded-lg border border-slate-100 bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[9px] font-black uppercase text-slate-400">ตารางที่ PP-DocLayoutV3 แยกได้</div>
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                {tableBlocks.length} ตาราง
+              </span>
+            </div>
+            {tableBlocks.map((block, index) => (
+              <div key={`flexible-table-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-2">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-[9px] font-black uppercase text-slate-400">ตาราง #{index + 1}</div>
+                  <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                    {block.extractionMethod || "table_recognition_v2"}
+                  </span>
+                </div>
+                {block.cropPreviewDataUrl && (
+                  <img src={block.cropPreviewDataUrl} alt="" className="mb-2 max-h-44 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+                )}
+                {renderStructuredTable(block.tableStructured, block.tableRows || null, `ผลลัพธ์ตาราง ${index + 1}`)}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
