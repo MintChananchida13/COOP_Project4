@@ -514,6 +514,7 @@ export interface TemplateStepTestItem {
     roi?: Record<string, unknown> | null;
     source?: string | null;
     cropPreviewDataUrl?: string | null;
+    ocrError?: string | null;
   }>;
   ocrText?: string | null;
   actualText?: string | null;
@@ -1655,6 +1656,7 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
           roi: (block.roi as Record<string, unknown> | undefined) || null,
           source: (block.source as string | null | undefined) ?? null,
           cropPreviewDataUrl: (block.crop_preview_data_url as string | null | undefined) ?? (block.cropPreviewDataUrl as string | null | undefined) ?? null,
+          ocrError: (block.ocr_error as string | null | undefined) ?? (block.ocrError as string | null | undefined) ?? null,
         }))
       : [],
     ocrText: (item.ocr_text as string | null | undefined) ?? null,

@@ -741,6 +741,35 @@ def _is_text_content_region(region: Dict[str, Any]) -> bool:
     return bool(region.get("roi")) or bool(region.get("bbox"))
 
 
+def _region_roi_from_boundary(region: Dict[str, Any], image_width: int, image_height: int) -> Optional[Dict[str, float]]:
+    roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+    if roi:
+        return {
+            "x_ratio": float(roi.get("x_ratio") or 0.0),
+            "y_ratio": float(roi.get("y_ratio") or 0.0),
+            "width_ratio": float(roi.get("width_ratio") or 0.0),
+            "height_ratio": float(roi.get("height_ratio") or 0.0),
+        }
+    bbox = region.get("bbox") if isinstance(region.get("bbox"), dict) else None
+    if not bbox:
+        return None
+    try:
+        x = max(0.0, float(bbox.get("x") or 0.0))
+        y = max(0.0, float(bbox.get("y") or 0.0))
+        width = max(0.0, float(bbox.get("width") or 0.0))
+        height = max(0.0, float(bbox.get("height") or 0.0))
+    except (TypeError, ValueError):
+        return None
+    right = min(float(image_width), x + width)
+    bottom = min(float(image_height), y + height)
+    return {
+        "x_ratio": x / max(float(image_width), 1.0),
+        "y_ratio": y / max(float(image_height), 1.0),
+        "width_ratio": max(0.0, right - x) / max(float(image_width), 1.0),
+        "height_ratio": max(0.0, bottom - y) / max(float(image_height), 1.0),
+    }
+
+
 def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     image = _load_image_source(boundary_image_path)
     image_width, image_height = image.size if image is not None else (1, 1)
@@ -753,7 +782,7 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
             draw = ImageDraw.Draw(overlay)
             font = ImageFont.load_default()
             for index, region in enumerate(regions, start=1):
-                roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+                roi = _region_roi_from_boundary(region, image_width, image_height)
                 if not roi:
                     continue
                 left = max(0, int(round(float(roi.get("x_ratio") or 0.0) * image_width)))
@@ -778,7 +807,7 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
     confidences: List[float] = []
     segments: List[Dict[str, Any]] = []
     for index, region in enumerate(regions):
-        roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+        roi = _region_roi_from_boundary(region, image_width, image_height)
         if not roi:
             continue
         block_roi = {
@@ -800,13 +829,18 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
                 buffer = io.BytesIO()
                 image.crop((left, top, right, bottom)).save(buffer, format="PNG")
                 crop_preview_data_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
-        ocr_result = ocr_roi(boundary_image_path, block_roi)
-        text = normalize_ocr_text(ocr_result.get("text"))
-        if not text:
-            continue
-        confidence = float(ocr_result.get("confidence") or 0.0)
-        texts.append(text)
-        confidences.append(confidence)
+        try:
+            ocr_result = ocr_roi(boundary_image_path, block_roi)
+            text = normalize_ocr_text(ocr_result.get("text"))
+            confidence = float(ocr_result.get("confidence") or 0.0)
+            error_message = None
+        except Exception as error:
+            text = ""
+            confidence = 0.0
+            error_message = str(error)
+        if text:
+            texts.append(text)
+            confidences.append(confidence)
         segments.append(
             {
                 "index": index,
@@ -815,6 +849,7 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
                 "roi": block_roi,
                 "source": source,
                 "crop_preview_data_url": crop_preview_data_url,
+                "ocr_error": error_message,
             }
         )
     return {

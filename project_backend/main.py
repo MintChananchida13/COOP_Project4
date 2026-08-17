@@ -469,13 +469,20 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
         block_img = search_img[y : y + h, x : x + w]
         if block_img.size == 0:
             continue
-        ocr_result = recognize_text_crop_with_detection(block_img)
-        text = normalize_ocr_text(ocr_result.get("text"))
-        if not text:
-            continue
-        confidence = float(ocr_result.get("confidence") or 0.0)
-        texts.append(text)
-        confidences.append(confidence)
+        try:
+            ocr_result = recognize_text_crop_with_detection(block_img)
+            text = normalize_ocr_text(ocr_result.get("text"))
+            confidence = float(ocr_result.get("confidence") or 0.0)
+            raw_segments = ocr_result.get("segments", [])
+            error_message = None
+        except Exception as error:
+            text = ""
+            confidence = 0.0
+            raw_segments = []
+            error_message = str(error)
+        if text:
+            texts.append(text)
+            confidences.append(confidence)
         segments.append(
             {
                 "index": index,
@@ -483,7 +490,8 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
                 "confidence": confidence,
                 "bbox": {"x": x, "y": y, "width": w, "height": h},
                 "source": source,
-                "raw_segments": ocr_result.get("segments", []),
+                "raw_segments": raw_segments,
+                "ocr_error": error_message,
             }
         )
     return {

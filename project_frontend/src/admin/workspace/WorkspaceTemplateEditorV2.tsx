@@ -1042,7 +1042,7 @@ export default function WorkspaceTemplateEditorV2({
     if (item.roiMode !== "flexible") return null;
     const blocks = item.resolvedBlocks || [];
     return (
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div className="rounded-lg border border-sky-100 bg-sky-50/70 p-2">
           <div className="flex items-center justify-between gap-2">
             <div className="text-[9px] font-black uppercase text-sky-700">Flexible Search Result</div>
@@ -1055,53 +1055,68 @@ export default function WorkspaceTemplateEditorV2({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-100 bg-white p-2">
-          <div className="text-[9px] font-black uppercase text-slate-400">ภาพพรีวิวพร้อมกรอบ Auto ROI</div>
-          {item.flexibleOverlayPreviewDataUrl ? (
-            <img src={item.flexibleOverlayPreviewDataUrl} alt="" className="mt-2 max-h-64 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
-          ) : (
-            <div className="mt-2 flex h-36 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
-              ไม่มีภาพพรีวิว Auto ROI
-            </div>
-          )}
-        </div>
-
-        {blocks.length > 0 ? (
-          <div className="space-y-2">
-            {blocks.map((block, index) => (
-              <div key={`flexible-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-white p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[9px] font-black uppercase text-slate-400">กรอบที่ใช้ #{index + 1}</div>
-                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
-                    PP-DocLayoutV3
-                  </span>
-                </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-[140px_1fr]">
-                  {block.cropPreviewDataUrl ? (
-                    <img src={block.cropPreviewDataUrl} alt="" className="h-24 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
-                  ) : (
-                    <div className="flex h-24 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
-                      ไม่มีภาพกรอบ
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-[9px] font-black uppercase text-slate-400">ผล OCR ของกรอบนี้</div>
-                    <div className="mt-1 max-h-24 overflow-y-auto rounded bg-slate-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-700">
-                      <p className="whitespace-pre-wrap break-words">{block.text || "-"}</p>
-                    </div>
-                    {block.confidence !== null && block.confidence !== undefined && (
-                      <div className="mt-1 text-[9px] font-black uppercase text-slate-400">Conf {block.confidence.toFixed(2)}</div>
-                    )}
-                  </div>
-                </div>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+          <div className="rounded-lg border border-slate-100 bg-white p-2">
+            <div className="text-[9px] font-black uppercase text-slate-400">ภาพพรีวิวที่ PP-DocLayoutV3 หาองค์ประกอบได้</div>
+            {item.flexibleOverlayPreviewDataUrl ? (
+              <img src={item.flexibleOverlayPreviewDataUrl} alt="" className="mt-2 max-h-[520px] w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+            ) : (
+              <div className="mt-2 flex h-80 items-center justify-center rounded-md bg-slate-50 text-[10px] font-semibold text-slate-400">
+                ไม่มีภาพพรีวิวจาก PP-DocLayoutV3
               </div>
-            ))}
+            )}
           </div>
-        ) : (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">
-            ยังไม่พบกรอบ Text Content ภายใน Search Boundary
+
+          <div className="min-h-0 space-y-2 rounded-lg border border-slate-100 bg-white p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อยและผล OCR</div>
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                {blocks.length} รายการ
+              </span>
+            </div>
+            {blocks.length > 0 ? (
+              <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+                {blocks.map((block, index) => (
+                  <div key={`flexible-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อย #{index + 1}</div>
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                        PP-DocLayoutV3
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-[112px_1fr] lg:grid-cols-1 xl:grid-cols-[112px_1fr]">
+                      {block.cropPreviewDataUrl ? (
+                        <img src={block.cropPreviewDataUrl} alt="" className="h-24 w-full rounded-md bg-white object-contain ring-1 ring-slate-100" />
+                      ) : (
+                        <div className="flex h-24 items-center justify-center rounded-md bg-white text-[10px] font-semibold text-slate-400 ring-1 ring-slate-100">
+                          ไม่มีภาพกรอบ
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-[9px] font-black uppercase text-slate-400">ข้อมูลที่ดึงได้</div>
+                        <div className="mt-1 max-h-24 overflow-y-auto rounded bg-white px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-700 ring-1 ring-slate-100">
+                          <p className="whitespace-pre-wrap break-words">{block.text || "-"}</p>
+                        </div>
+                        {block.ocrError && (
+                          <div className="mt-1 rounded bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
+                            OCR error: {block.ocrError}
+                          </div>
+                        )}
+                        {block.confidence !== null && block.confidence !== undefined && (
+                          <div className="mt-1 text-[9px] font-black uppercase text-slate-400">Conf {block.confidence.toFixed(2)}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">
+                ยังไม่พบกรอบ Text Content ภายใน Search Boundary
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     );
   };
@@ -1134,7 +1149,7 @@ export default function WorkspaceTemplateEditorV2({
           {items.map((item, index) => (
             <div
               key={`${item.fieldId || item.anchorId || index}-test-result`}
-              className={`rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs ${isTableTestItem(item) ? "md:col-span-2 xl:col-span-3" : ""}`}
+              className={`rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs ${isTableTestItem(item) || item.roiMode === "flexible" ? "md:col-span-2 xl:col-span-3" : ""}`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -1148,11 +1163,13 @@ export default function WorkspaceTemplateEditorV2({
                 </span>
               </div>
               <div className={`mt-3 grid gap-3 ${
-                isTableTestItem(item)
+                item.roiMode === "flexible"
+                  ? "grid-cols-1"
+                  : isTableTestItem(item)
                   ? "lg:grid-cols-[220px_1fr]"
                   : "sm:grid-cols-[180px_1fr]"
               }`}>
-                {renderRoiCropPreview(item)}
+                {item.roiMode !== "flexible" && renderRoiCropPreview(item)}
                 <div className="min-w-0">
                   {isImageTestItem(item) && renderImageFieldPreview(item)}
                   {isTableTestItem(item) && renderTablePreview(item)}
