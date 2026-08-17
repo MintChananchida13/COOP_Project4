@@ -24,7 +24,7 @@ from .image_verification_category_service import (
     get_image_verification_category,
     list_image_verification_categories,
 )
-from .layout_analysis_service import analyze_layout
+from .layout_analysis_service import analyze_layout, detect_text_boxes
 from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_from_json, signature_to_json
 from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
@@ -803,6 +803,134 @@ def _region_roi_from_boundary(region: Dict[str, Any], image_width: int, image_he
     }
 
 
+def _median_float(values: List[float], fallback: float = 0.0) -> float:
+    prepared = sorted(float(value) for value in values if math.isfinite(float(value)))
+    if not prepared:
+        return fallback
+    middle = len(prepared) // 2
+    if len(prepared) % 2:
+        return prepared[middle]
+    return (prepared[middle - 1] + prepared[middle]) / 2.0
+
+
+def _horizontal_overlap_ratio(left: Dict[str, float], right: Dict[str, float]) -> float:
+    left_x = float(left.get("x_ratio") or 0.0)
+    left_right = left_x + float(left.get("width_ratio") or 0.0)
+    right_x = float(right.get("x_ratio") or 0.0)
+    right_right = right_x + float(right.get("width_ratio") or 0.0)
+    overlap = max(0.0, min(left_right, right_right) - max(left_x, right_x))
+    denominator = max(1e-9, min(float(left.get("width_ratio") or 0.0), float(right.get("width_ratio") or 0.0)))
+    return overlap / denominator
+
+
+def _text_line_regions_from_detection(boundary_image_path: str, image_width: int, image_height: int) -> List[Dict[str, Any]]:
+    try:
+        detection = detect_text_boxes(boundary_image_path)
+    except Exception:
+        return []
+    regions: List[Dict[str, Any]] = []
+    for index, region in enumerate(_layout_regions_from_analysis(detection), start=1):
+        roi = _region_roi_from_boundary(region, image_width, image_height)
+        if not roi or _roi_area(roi) <= 0:
+            continue
+        regions.append(
+            {
+                "type": "text",
+                "data_type": "text",
+                "layout_type": "text_line",
+                "source": "paddle_text_detection_line",
+                "confidence": region.get("confidence", 0.0),
+                "roi": roi,
+                "_line_index": index,
+            }
+        )
+    return regions
+
+
+def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    prepared = [
+        line
+        for line in lines
+        if isinstance(line.get("roi"), dict) and _roi_area(line["roi"]) > 0
+    ]
+    if not prepared:
+        return []
+    prepared.sort(
+        key=lambda line: (
+            float(line["roi"].get("y_ratio") or 0.0) + float(line["roi"].get("height_ratio") or 0.0) / 2.0,
+            float(line["roi"].get("x_ratio") or 0.0),
+        )
+    )
+    heights = [float(line["roi"].get("height_ratio") or 0.0) for line in prepared]
+    widths = [float(line["roi"].get("width_ratio") or 0.0) for line in prepared]
+    gaps = [
+        max(
+            0.0,
+            float(prepared[index]["roi"].get("y_ratio") or 0.0)
+            - (
+                float(prepared[index - 1]["roi"].get("y_ratio") or 0.0)
+                + float(prepared[index - 1]["roi"].get("height_ratio") or 0.0)
+            ),
+        )
+        for index in range(1, len(prepared))
+    ]
+    median_height = _median_float(heights, 1.0)
+    median_width = _median_float(widths, 1.0)
+    median_gap = _median_float(gaps, median_height * 0.35)
+
+    groups: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    for line in prepared:
+        if not current:
+            current = [line]
+            continue
+        prev = current[-1]
+        prev_roi = prev["roi"]
+        roi = line["roi"]
+        gap = float(roi.get("y_ratio") or 0.0) - (
+            float(prev_roi.get("y_ratio") or 0.0) + float(prev_roi.get("height_ratio") or 0.0)
+        )
+        indent_delta = abs(float(roi.get("x_ratio") or 0.0) - float(prev_roi.get("x_ratio") or 0.0))
+        prev_width = float(prev_roi.get("width_ratio") or 0.0)
+        overlap = _horizontal_overlap_ratio(prev_roi, roi)
+        gap_evidence = gap > max(median_gap * 1.8, median_height * 0.9)
+        indent_evidence = indent_delta > max(median_height * 1.4, median_width * 0.08)
+        short_previous_evidence = prev_width < median_width * 0.68 and gap > median_gap * 1.2
+        alignment_evidence = overlap < 0.45
+        if gap_evidence and (indent_evidence or short_previous_evidence or alignment_evidence):
+            groups.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        groups.append(current)
+
+    paragraph_regions: List[Dict[str, Any]] = []
+    for index, group in enumerate(groups, start=1):
+        left = min(float(line["roi"].get("x_ratio") or 0.0) for line in group)
+        top = min(float(line["roi"].get("y_ratio") or 0.0) for line in group)
+        right = max(float(line["roi"].get("x_ratio") or 0.0) + float(line["roi"].get("width_ratio") or 0.0) for line in group)
+        bottom = max(float(line["roi"].get("y_ratio") or 0.0) + float(line["roi"].get("height_ratio") or 0.0) for line in group)
+        paragraph_regions.append(
+            {
+                "type": "text",
+                "data_type": "text",
+                "layout_type": "paragraph",
+                "source": "flexible_paragraph_geometry",
+                "confidence": min(1.0, sum(float(line.get("confidence") or 0.0) for line in group) / max(len(group), 1)),
+                "roi": {
+                    "x_ratio": max(0.0, left),
+                    "y_ratio": max(0.0, top),
+                    "width_ratio": max(0.0, min(1.0, right) - max(0.0, left)),
+                    "height_ratio": max(0.0, min(1.0, bottom) - max(0.0, top)),
+                },
+                "line_count": len(group),
+                "paragraph_index": index,
+            }
+        )
+    return paragraph_regions
+
+
 def _roi_area(roi: Dict[str, float]) -> float:
     return max(0.0, float(roi.get("width_ratio") or 0.0)) * max(0.0, float(roi.get("height_ratio") or 0.0))
 
@@ -858,6 +986,44 @@ def _filter_nested_flexible_regions(regions: List[Dict[str, Any]], image_width: 
         float((_region_roi_from_boundary(region, image_width, image_height) or {}).get("x_ratio") or 0.0),
     ))
     return kept_regions
+
+
+def _build_flexible_paragraph_regions(boundary_image_path: str, opencv_img: Any, analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    image_height, image_width = opencv_img.shape[:2]
+    layout_regions = [
+        region
+        for region in _layout_regions_from_analysis(analysis)
+        if _is_supported_layout_region(region)
+    ]
+    non_text_regions = [region for region in layout_regions if _resolved_layout_region_type(region) != "text"]
+    blockers = [
+        _region_roi_from_boundary(region, image_width, image_height)
+        for region in non_text_regions
+        if _resolved_layout_region_type(region) in {"table", "image"}
+    ]
+    blockers = [roi for roi in blockers if roi]
+    line_regions = []
+    for line in _text_line_regions_from_detection(boundary_image_path, image_width, image_height):
+        line_roi = _region_roi_from_boundary(line, image_width, image_height)
+        if not line_roi:
+            continue
+        line_area = _roi_area(line_roi)
+        if any(_roi_intersection_area(line_roi, blocker) / max(line_area, 1e-9) >= 0.55 for blocker in blockers):
+            continue
+        line_regions.append(line)
+    paragraph_regions = _paragraph_regions_from_text_lines(line_regions)
+    regions = paragraph_regions + non_text_regions if paragraph_regions else layout_regions
+    if not regions:
+        regions = [
+            {
+                "type": "text",
+                "roi": {"x_ratio": 0.0, "y_ratio": 0.0, "width_ratio": 1.0, "height_ratio": 1.0},
+                "source": "pp_doclayout_v3_search_boundary",
+                "data_type": "text",
+                "extraction_method": "paddle_thai_ocr",
+            }
+        ]
+    return _filter_nested_flexible_regions(regions, image_width, image_height)
 
 
 def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
@@ -994,31 +1160,10 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
         return {"text": "", "confidence": 0.0, "segments": [], "failure_reason": "boundary_image_unreadable"}
 
     analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode="text_line")
-    regions = [
-        region
-        for region in _layout_regions_from_analysis(analysis)
-        if _is_supported_layout_region(region)
-    ]
-    if not regions:
-        regions = [
-            {
-                "type": "text",
-                "roi": {
-                    "x_ratio": 0.0,
-                    "y_ratio": 0.0,
-                    "width_ratio": 1.0,
-                    "height_ratio": 1.0,
-                },
-                "source": "pp_doclayout_v3_search_boundary",
-                "type": "text",
-                "data_type": "text",
-                "extraction_method": "paddle_thai_ocr",
-            }
-        ]
-    regions = _filter_nested_flexible_regions(regions, opencv_img.shape[1], opencv_img.shape[0])
+    regions = _build_flexible_paragraph_regions(boundary_image_path, opencv_img, analysis)
 
-    result = _ocr_flexible_regions(boundary_image_path, regions, "pp_doclayout_v3_block")
-    attempts = [{"step": "flexible_roi_layout_blocks", "block_count": len(regions), "recognized_count": len(result["segments"])}]
+    result = _ocr_flexible_regions(boundary_image_path, regions, "flexible_paragraph_layout_blocks")
+    attempts = [{"step": "flexible_roi_paragraph_blocks", "block_count": len(regions), "recognized_count": len(result["segments"])}]
 
     return {
         "text": result.get("text") or "",
@@ -1028,7 +1173,7 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
         "flexible_overlay_preview_data_url": result.get("overlay_preview_data_url"),
         "attempts": attempts,
         "engine": "flexible_roi_text",
-        "preprocessing": "flexible_roi_search_boundary_layout_blocks",
+        "preprocessing": "flexible_roi_search_boundary_paragraph_blocks",
     }
 
 
@@ -2176,7 +2321,7 @@ class DecisionService:
     MIN_RETRIEVAL_SCORE = 0.50
     HIGH_RETRIEVAL_SCORE = 0.95
     STRONG_VERIFICATION_SCORE = 0.75
-    DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.8
+    DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.75
     DEFAULT_LAYOUT_WEIGHT = 0.50
     DEFAULT_TEXT_ANCHOR_WEIGHT = 0.35
     DEFAULT_IMAGE_ANCHOR_WEIGHT = 0.15
@@ -4042,7 +4187,7 @@ class AdminTemplateService:
         with _connect() as conn:
             template_row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
             similarity_threshold = template_row["similarity_threshold"] if template_row else 0.75
-            final_confidence_threshold = template_row["final_confidence_threshold"] if template_row else 0.8
+            final_confidence_threshold = template_row["final_confidence_threshold"] if template_row else 0.75
             conn.execute(
                 """
                 INSERT INTO template_pages (
@@ -4738,7 +4883,7 @@ class AdminTemplateService:
                     similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, NULL, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, NULL, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', 0.75, 0.75, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -4780,7 +4925,7 @@ class AdminTemplateService:
                         similarity_threshold, final_confidence_threshold,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0.75, 0.8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0.75, 0.75, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (
                         page_id,

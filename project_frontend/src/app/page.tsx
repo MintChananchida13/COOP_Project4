@@ -286,6 +286,7 @@ async function analyzeLayoutForUserImage(imageDataUrl: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       auto_roi_mode: "text_line",
+      context: "flexible",
       images: [{ page_index: 0, image: imageDataUrl }],
     }),
   });

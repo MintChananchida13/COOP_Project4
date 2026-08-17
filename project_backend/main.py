@@ -60,6 +60,7 @@ class LayoutImagePayload(BaseModel):
 class LayoutAnalysisPayload(BaseModel):
     images: List[LayoutImagePayload]
     auto_roi_mode: str = "text_line"
+    context: str | None = None
 
 
 app = FastAPI(title="OCR AI Engine")
@@ -501,6 +502,137 @@ def _region_roi(region: Dict[str, Any], image_width: int, image_height: int) -> 
     }
 
 
+def _median_float(values: List[float], fallback: float = 0.0) -> float:
+    prepared = sorted(float(value) for value in values if np.isfinite(float(value)))
+    if not prepared:
+        return fallback
+    middle = len(prepared) // 2
+    if len(prepared) % 2:
+        return prepared[middle]
+    return (prepared[middle - 1] + prepared[middle]) / 2.0
+
+
+def _horizontal_overlap_ratio(left: Dict[str, float], right: Dict[str, float]) -> float:
+    left_x = float(left.get("x_ratio") or 0.0)
+    left_right = left_x + float(left.get("width_ratio") or 0.0)
+    right_x = float(right.get("x_ratio") or 0.0)
+    right_right = right_x + float(right.get("width_ratio") or 0.0)
+    overlap = max(0.0, min(left_right, right_right) - max(left_x, right_x))
+    denominator = max(1e-9, min(float(left.get("width_ratio") or 0.0), float(right.get("width_ratio") or 0.0)))
+    return overlap / denominator
+
+
+def _text_line_regions_from_image(image: np.ndarray) -> List[Dict[str, Any]]:
+    h_img, w_img = image.shape[:2]
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+        temp_path = temp_file.name
+    try:
+        cv2.imwrite(temp_path, image)
+        detection = detect_text_boxes(temp_path)
+    except Exception:
+        return []
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+    lines: List[Dict[str, Any]] = []
+    for index, region in enumerate(_layout_regions_from_analysis(detection), start=1):
+        roi = _region_roi(region, w_img, h_img)
+        if not roi or _roi_area(roi) <= 0:
+            continue
+        lines.append(
+            {
+                "type": "text",
+                "data_type": "text",
+                "layout_type": "text_line",
+                "source": "paddle_text_detection_line",
+                "confidence": region.get("confidence", 0.0),
+                "roi": roi,
+                "_line_index": index,
+            }
+        )
+    return lines
+
+
+def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    prepared = [line for line in lines if isinstance(line.get("roi"), dict) and _roi_area(line["roi"]) > 0]
+    if not prepared:
+        return []
+    prepared.sort(
+        key=lambda line: (
+            float(line["roi"].get("y_ratio") or 0.0) + float(line["roi"].get("height_ratio") or 0.0) / 2.0,
+            float(line["roi"].get("x_ratio") or 0.0),
+        )
+    )
+    heights = [float(line["roi"].get("height_ratio") or 0.0) for line in prepared]
+    widths = [float(line["roi"].get("width_ratio") or 0.0) for line in prepared]
+    gaps = [
+        max(
+            0.0,
+            float(prepared[index]["roi"].get("y_ratio") or 0.0)
+            - (
+                float(prepared[index - 1]["roi"].get("y_ratio") or 0.0)
+                + float(prepared[index - 1]["roi"].get("height_ratio") or 0.0)
+            ),
+        )
+        for index in range(1, len(prepared))
+    ]
+    median_height = _median_float(heights, 1.0)
+    median_width = _median_float(widths, 1.0)
+    median_gap = _median_float(gaps, median_height * 0.35)
+
+    groups: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    for line in prepared:
+        if not current:
+            current = [line]
+            continue
+        prev = current[-1]
+        prev_roi = prev["roi"]
+        roi = line["roi"]
+        gap = float(roi.get("y_ratio") or 0.0) - (
+            float(prev_roi.get("y_ratio") or 0.0) + float(prev_roi.get("height_ratio") or 0.0)
+        )
+        indent_delta = abs(float(roi.get("x_ratio") or 0.0) - float(prev_roi.get("x_ratio") or 0.0))
+        prev_width = float(prev_roi.get("width_ratio") or 0.0)
+        overlap = _horizontal_overlap_ratio(prev_roi, roi)
+        gap_evidence = gap > max(median_gap * 1.8, median_height * 0.9)
+        indent_evidence = indent_delta > max(median_height * 1.4, median_width * 0.08)
+        short_previous_evidence = prev_width < median_width * 0.68 and gap > median_gap * 1.2
+        alignment_evidence = overlap < 0.45
+        if gap_evidence and (indent_evidence or short_previous_evidence or alignment_evidence):
+            groups.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        groups.append(current)
+
+    paragraphs: List[Dict[str, Any]] = []
+    for index, group in enumerate(groups, start=1):
+        left = min(float(line["roi"].get("x_ratio") or 0.0) for line in group)
+        top = min(float(line["roi"].get("y_ratio") or 0.0) for line in group)
+        right = max(float(line["roi"].get("x_ratio") or 0.0) + float(line["roi"].get("width_ratio") or 0.0) for line in group)
+        bottom = max(float(line["roi"].get("y_ratio") or 0.0) + float(line["roi"].get("height_ratio") or 0.0) for line in group)
+        paragraphs.append(
+            {
+                "type": "text",
+                "data_type": "text",
+                "layout_type": "paragraph",
+                "source": "flexible_paragraph_geometry",
+                "confidence": min(1.0, sum(float(line.get("confidence") or 0.0) for line in group) / max(len(group), 1)),
+                "roi": {
+                    "x_ratio": max(0.0, left),
+                    "y_ratio": max(0.0, top),
+                    "width_ratio": max(0.0, min(1.0, right) - max(0.0, left)),
+                    "height_ratio": max(0.0, min(1.0, bottom) - max(0.0, top)),
+                },
+                "line_count": len(group),
+                "paragraph_index": index,
+            }
+        )
+    return paragraphs
+
+
 def _roi_area(roi: Dict[str, float]) -> float:
     return max(0.0, float(roi.get("width_ratio") or 0.0)) * max(0.0, float(roi.get("height_ratio") or 0.0))
 
@@ -556,6 +688,44 @@ def _filter_nested_flexible_regions(regions: List[Dict[str, Any]], image_width: 
         float((_region_roi(region, image_width, image_height) or {}).get("x_ratio") or 0.0),
     ))
     return kept_regions
+
+
+def _build_flexible_paragraph_regions(image: np.ndarray, analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    h_img, w_img = image.shape[:2]
+    layout_regions = [
+        region
+        for region in _layout_regions_from_analysis(analysis)
+        if _is_supported_layout_region(region)
+    ]
+    non_text_regions = [region for region in layout_regions if _resolved_layout_region_type(region) != "text"]
+    blockers = [
+        _region_roi(region, w_img, h_img)
+        for region in non_text_regions
+        if _resolved_layout_region_type(region) in {"table", "image"}
+    ]
+    blockers = [roi for roi in blockers if roi]
+    line_regions: List[Dict[str, Any]] = []
+    for line in _text_line_regions_from_image(image):
+        line_roi = _region_roi(line, w_img, h_img)
+        if not line_roi:
+            continue
+        line_area = _roi_area(line_roi)
+        if any(_roi_intersection_area(line_roi, blocker) / max(line_area, 1e-9) >= 0.55 for blocker in blockers):
+            continue
+        line_regions.append(line)
+    paragraph_regions = _paragraph_regions_from_text_lines(line_regions)
+    regions = paragraph_regions + non_text_regions if paragraph_regions else layout_regions
+    if not regions:
+        regions = [
+            {
+                "type": "text",
+                "roi": {"x_ratio": 0.0, "y_ratio": 0.0, "width_ratio": 1.0, "height_ratio": 1.0},
+                "source": "pp_doclayout_v3_search_boundary",
+                "data_type": "text",
+                "extraction_method": "paddle_thai_ocr",
+            }
+        ]
+    return _filter_nested_flexible_regions(regions, w_img, h_img)
 
 
 def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
@@ -642,38 +812,17 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
 
     h_img, w_img = search_img.shape[:2]
     analysis = analyze_layout(search_img, expand_text_rois=True, auto_roi_mode="text_line")
-    text_regions = [
-        region
-        for region in _layout_regions_from_analysis(analysis)
-        if _is_supported_layout_region(region)
-    ]
-    if not text_regions:
-        text_regions = [
-            {
-                "type": "text",
-                "roi": {
-                    "x_ratio": 0.0,
-                    "y_ratio": 0.0,
-                    "width_ratio": 1.0,
-                    "height_ratio": 1.0,
-                },
-                "source": "pp_doclayout_v3_search_boundary",
-                "type": "text",
-                "data_type": "text",
-                "extraction_method": "paddle_thai_ocr",
-            }
-        ]
-    text_regions = _filter_nested_flexible_regions(text_regions, w_img, h_img)
+    text_regions = _build_flexible_paragraph_regions(search_img, analysis)
 
-    result = _ocr_flexible_regions(search_img, text_regions, "pp_doclayout_v3_block")
-    attempts = [{"step": "flexible_roi_layout_blocks", "block_count": len(text_regions), "recognized_count": len(result["segments"])}]
+    result = _ocr_flexible_regions(search_img, text_regions, "flexible_paragraph_layout_blocks")
+    attempts = [{"step": "flexible_roi_paragraph_blocks", "block_count": len(text_regions), "recognized_count": len(result["segments"])}]
 
     return {
         "text": result.get("text") or "",
         "confidence": float(result.get("confidence") or 0.0),
         "segments": result.get("segments") or [],
         "attempts": attempts,
-        "preprocessing": "flexible_roi_search_boundary_layout_blocks",
+        "preprocessing": "flexible_roi_search_boundary_paragraph_blocks",
         "engine": "flexible_roi_text",
         "model": "PP-DocLayoutV3 + text_ocr_pipeline",
         "resolved_blocks": result.get("segments") or [],
@@ -953,8 +1102,13 @@ async def analyze_document_layout(payload: LayoutAnalysisPayload):
         for page in payload.images:
             _, opencv_img = decode_base64_image(page.image)
             analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode="text_line")
+            analysis_regions = (
+                _build_flexible_paragraph_regions(opencv_img, analysis)
+                if (payload.context or "").strip().lower() == "flexible"
+                else analysis.get("regions", [])
+            )
             regions = []
-            for index, region in enumerate(analysis["regions"], start=1):
+            for index, region in enumerate(analysis_regions, start=1):
                 region_type = region["type"]
                 extraction_method = (
                     "extract_image"

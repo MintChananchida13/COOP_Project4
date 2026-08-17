@@ -158,7 +158,7 @@ _POSTGRES_SCHEMA = [
         creation_type TEXT NOT NULL DEFAULT 'new_template',
         page_count INTEGER NOT NULL DEFAULT 1,
         similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
-        final_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+        final_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
         layout_weight DOUBLE PRECISION NOT NULL DEFAULT 0.50,
         text_anchor_weight DOUBLE PRECISION NOT NULL DEFAULT 0.35,
         image_anchor_weight DOUBLE PRECISION NOT NULL DEFAULT 0.15,

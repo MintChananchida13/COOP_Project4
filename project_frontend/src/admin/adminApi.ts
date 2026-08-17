@@ -888,7 +888,7 @@ const mapApiTemplatePage = (page: ApiTemplatePage): TemplatePage => ({
   normalizedImageUrl: page.normalized_image_url || undefined,
   layoutSignatureJson: page.layout_signature_json || undefined,
   similarityThreshold: page.similarity_threshold ?? 0.75,
-  finalConfidenceThreshold: page.final_confidence_threshold ?? 0.8,
+  finalConfidenceThreshold: page.final_confidence_threshold ?? 0.75,
 });
 
 const mapApiTemplateField = (field: ApiTemplateField): TemplateField => ({

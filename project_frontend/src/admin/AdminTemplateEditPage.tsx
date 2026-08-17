@@ -21,7 +21,7 @@ import {
 import type { IgnoreRegion, RoiRatio, Template, TemplateField, TemplatePage } from "../types/ocr";
 
 type LoadStatus = "loading" | "loaded" | "error";
-type AdminEditorStage = "adjust" | "roi";
+type AdminEditorStage = "adjust" | "roi" | "decision";
 
 const samplePage =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1000' viewBox='0 0 750 1000'%3E%3Crect width='750' height='1000' fill='%23ffffff'/%3E%3Crect x='70' y='70' width='610' height='90' rx='8' fill='%23e2e8f0'/%3E%3Crect x='70' y='210' width='270' height='34' rx='5' fill='%23cbd5e1'/%3E%3Crect x='70' y='275' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='325' width='610' height='22' rx='4' fill='%23e2e8f0'/%3E%3Crect x='70' y='420' width='610' height='220' rx='8' fill='%23f1f5f9' stroke='%23cbd5e1'/%3E%3Ctext x='375' y='910' text-anchor='middle' font-family='Arial' font-size='24' fill='%2364758b'%3ETemplate Sample Page%3C/text%3E%3C/svg%3E";
@@ -64,6 +64,50 @@ const defaultRoi = (pageNumber: number): RoiRatio => ({
   heightRatio: 0.06,
 });
 
+const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+const roundWeight = (value: number) => Number(clampUnit(value).toFixed(4));
+const DEFAULT_FINAL_CONFIDENCE_THRESHOLD = 0.75;
+const DEFAULT_MATCHING_WEIGHTS = {
+  layoutWeight: 0.4,
+  textAnchorWeight: 0.3,
+  imageAnchorWeight: 0.3,
+};
+const MIN_DUAL_ANCHOR_WEIGHT = 0.2;
+
+const calculateMatchingWeights = ({
+  layoutWeight,
+  textAnchorCount,
+  imageAnchorCount,
+  preferredTextWeight,
+}: {
+  layoutWeight: number;
+  textAnchorCount: number;
+  imageAnchorCount: number;
+  preferredTextWeight?: number;
+}) => {
+  const hasText = textAnchorCount > 0;
+  const hasImage = imageAnchorCount > 0;
+  if (!hasText && !hasImage) {
+    return { layoutWeight: 1, textAnchorWeight: 0, imageAnchorWeight: 0 };
+  }
+  const layout = roundWeight(Math.max(0.3, Math.min(0.5, layoutWeight)));
+  const remaining = roundWeight(1 - layout);
+  if (hasText && hasImage) {
+    const text = preferredTextWeight === undefined
+      ? roundWeight(remaining / 2)
+      : roundWeight(Math.max(MIN_DUAL_ANCHOR_WEIGHT, Math.min(remaining - MIN_DUAL_ANCHOR_WEIGHT, preferredTextWeight)));
+    return {
+      layoutWeight: layout,
+      textAnchorWeight: text,
+      imageAnchorWeight: roundWeight(remaining - text),
+    };
+  }
+  if (hasText) return { layoutWeight: layout, textAnchorWeight: remaining, imageAnchorWeight: 0 };
+  return { layoutWeight: layout, textAnchorWeight: 0, imageAnchorWeight: remaining };
+};
+
+const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
+
 const defaultAdjustPageConfig = (): AdminAdjustPageConfig => ({
   rotation: 0,
   brightness: 100,
@@ -91,6 +135,9 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const [showUpdateSuccessDialog, setShowUpdateSuccessDialog] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [editorStage, setEditorStage] = useState<AdminEditorStage>("adjust");
+  const [finalConfidenceDraft, setFinalConfidenceDraft] = useState(DEFAULT_FINAL_CONFIDENCE_THRESHOLD);
+  const [layoutWeightDraft, setLayoutWeightDraft] = useState(DEFAULT_MATCHING_WEIGHTS.layoutWeight);
+  const [textWeightDraft, setTextWeightDraft] = useState(DEFAULT_MATCHING_WEIGHTS.textAnchorWeight);
   const [adjustPageConfigs, setAdjustPageConfigs] = useState<AdminAdjustPageConfig[]>([]);
   const localFieldSequenceRef = useRef(0);
   const fieldUpdateSequenceRef = useRef(new Map<string, number>());
@@ -110,6 +157,25 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   useEffect(() => {
     selectedTemplateFieldsRef.current = selectedTemplateFields;
   }, [selectedTemplateFields]);
+
+  useEffect(() => {
+    if (!selectedTemplate) return;
+    setFinalConfidenceDraft(
+      typeof selectedTemplate.finalConfidenceThreshold === "number" && Number.isFinite(selectedTemplate.finalConfidenceThreshold)
+        ? selectedTemplate.finalConfidenceThreshold
+        : DEFAULT_FINAL_CONFIDENCE_THRESHOLD
+    );
+    setLayoutWeightDraft(
+      typeof selectedTemplate.layoutWeight === "number" && Number.isFinite(selectedTemplate.layoutWeight)
+        ? selectedTemplate.layoutWeight
+        : DEFAULT_MATCHING_WEIGHTS.layoutWeight
+    );
+    setTextWeightDraft(
+      typeof selectedTemplate.textAnchorWeight === "number" && Number.isFinite(selectedTemplate.textAnchorWeight)
+        ? selectedTemplate.textAnchorWeight
+        : DEFAULT_MATCHING_WEIGHTS.textAnchorWeight
+    );
+  }, [selectedTemplate?.id]);
 
   const trackFieldSave = <T,>(promise: Promise<T>) => {
     const tracked = promise.finally(() => {
@@ -239,24 +305,38 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const currentTemplatePage = selectedTemplatePages[safeCurrentPage];
   const extractionFieldCount = selectedTemplateFields.filter((field) => !field.useForVerification).length;
   const verificationAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification).length;
+  const textAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification && field.dataType !== "image").length;
+  const imageAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification && field.dataType === "image").length;
+  const effectiveMatchingWeights = calculateMatchingWeights({
+    layoutWeight: layoutWeightDraft,
+    textAnchorCount,
+    imageAnchorCount,
+    preferredTextWeight: textWeightDraft,
+  });
   const processSteps = [
     {
       id: "adjust",
       label: "2.0 ปรับแต่งภาพ",
       description: "ตรวจภาพและ Crop เอกสาร",
-      status: editorStage === "roi" ? "done" : "active",
+      status: editorStage === "roi" || editorStage === "decision" ? "done" : "active",
     },
     {
       id: "roi",
       label: "2.1 กำหนด Extraction ROI",
       description: "วาดพื้นที่ข้อมูลสำหรับ OCR และทดสอบ OCR",
-      status: editorStage === "roi" ? "active" : "next",
+      status: editorStage === "roi" ? "active" : editorStage === "decision" ? "done" : "next",
     },
     {
       id: "verification",
       label: "2.2 กำหนด Verification ROI",
       description: "เลือกจุดอ้างอิงสำหรับยืนยัน Template",
-      status: editorStage === "roi" && verificationAnchorCount > 0 ? "active" : "next",
+      status: editorStage === "roi" && verificationAnchorCount > 0 ? "active" : editorStage === "decision" ? "done" : "next",
+    },
+    {
+      id: "decision",
+      label: "ขั้นตอนที่ 1 ตรวจสอบ ROI และ OCR",
+      description: "ตั้งค่าเกณฑ์ Final Score และน้ำหนักก่อนอัปเดต Template",
+      status: editorStage === "decision" ? "active" : "next",
     },
   ] as const;
 
@@ -326,7 +406,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
       sampleImageUrl: samplePage,
       normalizedImageUrl: samplePage,
       similarityThreshold: selectedTemplate?.similarityThreshold ?? 0.75,
-      finalConfidenceThreshold: selectedTemplate?.finalConfidenceThreshold ?? 0.8,
+      finalConfidenceThreshold: selectedTemplate?.finalConfidenceThreshold ?? DEFAULT_FINAL_CONFIDENCE_THRESHOLD,
     };
     setSelectedTemplatePages((prev) => [...prev, optimisticPage]);
 
@@ -492,10 +572,42 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
     void (async () => {
       await flushFieldDrafts();
       if (selectedTemplate?.status === "active") {
-        setShowUpdateSuccessDialog(true);
+        setEditorStage("decision");
+        setSaveStatus("");
         return;
       }
       router.push(`/admin/templates/${templateId}/test`);
+    })();
+  };
+
+  const handleConfirmTemplateUpdate = () => {
+    void (async () => {
+      await flushFieldDrafts();
+      const nextFinalThreshold = Math.max(0, Math.min(1, finalConfidenceDraft));
+      const nextWeights = calculateMatchingWeights({
+        layoutWeight: layoutWeightDraft,
+        textAnchorCount,
+        imageAnchorCount,
+        preferredTextWeight: textWeightDraft,
+      });
+      const patch: Partial<Template> = {
+        finalConfidenceThreshold: nextFinalThreshold,
+        layoutWeight: nextWeights.layoutWeight,
+        textAnchorWeight: nextWeights.textAnchorWeight,
+        imageAnchorWeight: nextWeights.imageAnchorWeight,
+      };
+      setSelectedTemplate((current) => (current ? { ...current, ...patch } : current));
+      if (canPersistToBackend) {
+        try {
+          const bundle = await updateTemplateApi(templateId, patch);
+          applyBundle(bundle);
+        } catch (error) {
+          console.warn("Template update settings save failed.", error);
+          setLocalOnly("Template update settings kept locally.");
+          return;
+        }
+      }
+      setShowUpdateSuccessDialog(true);
     })();
   };
 
@@ -765,7 +877,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-3">
+          <div className="mt-4 grid gap-2 md:grid-cols-4">
             {processSteps.map((item, index) => {
                 const isActive = item.status === "active";
                 const isDone = item.status === "done";
@@ -808,7 +920,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                 void handleConfirmAdjustedImages(finalImages);
               }}
             />
-          ) : (
+          ) : editorStage === "roi" ? (
             <WorkspaceTemplateEditor
               templateId={templateId}
               pages={workspacePages}
@@ -828,9 +940,125 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
               onGenerateEmbedding={handleEnterTemplateTestMode}
               onRunTestMode={handleEnterTemplateTestMode}
               onBeforeRunTest={flushFieldDrafts}
-              testModeLabel={selectedTemplate?.status === "active" ? "อัปเดต Template" : "Test Mode"}
+              testModeLabel={selectedTemplate?.status === "active" ? "ไปต่อ" : "Test Mode"}
               onBackToAdjust={() => setEditorStage("adjust")}
             />
+          ) : (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-wider text-indigo-600">ขั้นตอนที่ 1</p>
+                  <h2 className="mt-1 text-xl font-black text-slate-950">ตรวจสอบ ROI และ OCR</h2>
+                  <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
+                    ตั้งค่าการตัดสินใจ ใช้เป็นเกณฑ์ตัดสิน Final Score ในขั้น New Document Test และตอน Publish พร้อมกำหนดน้ำหนัก Layout/Text/Image Anchors ก่อนอัปเดต Template
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditorStage("roi")}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-50"
+                >
+                  กลับไปแก้ ROI
+                </button>
+              </div>
+
+              <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">การตั้งค่าการตัดสินใจ</h3>
+                    <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
+                      ใช้เป็นเกณฑ์ตัดสิน Final Score ในขั้น New Document Test และตอน Publish
+                    </p>
+                    <label className="mt-3 block max-w-xs space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Final Confidence Threshold</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={finalConfidenceDraft}
+                        onChange={(event) => setFinalConfidenceDraft(Math.max(0, Math.min(1, Number(event.target.value))))}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-800"
+                      />
+                      <span className="block text-[10px] font-semibold text-slate-500">ค่าเดิม: {(selectedTemplate?.finalConfidenceThreshold ?? DEFAULT_FINAL_CONFIDENCE_THRESHOLD).toFixed(2)}</span>
+                    </label>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">กำหนดค่าน้ำหนัก</h3>
+                    <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
+                      กำหนดน้ำหนัก Layout แล้วระบบจะคำนวณส่วนที่เหลือให้ Text/Image Anchors อัตโนมัติ
+                    </p>
+                    <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                      <label className="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Layout</span>
+                        <input
+                          type="range"
+                          min="30"
+                          max="50"
+                          step="5"
+                          value={Math.round(layoutWeightDraft * 100)}
+                          onChange={(event) => setLayoutWeightDraft(Number(event.target.value) / 100)}
+                          className="w-full"
+                        />
+                        <input
+                          type="number"
+                          min="30"
+                          max="50"
+                          step="5"
+                          value={Math.round(layoutWeightDraft * 100)}
+                          onChange={(event) => setLayoutWeightDraft(Math.max(0.3, Math.min(0.5, Number(event.target.value) / 100)))}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700"
+                        />
+                      </label>
+                      <label className="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Text</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={Math.round(effectiveMatchingWeights.textAnchorWeight * 100)}
+                          onChange={(event) => {
+                            const remaining = 1 - effectiveMatchingWeights.layoutWeight;
+                            setTextWeightDraft(Math.max(0, Math.min(remaining, Number(event.target.value) / 100)));
+                          }}
+                          disabled={textAnchorCount === 0}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
+                        />
+                        <div className="text-[10px] font-bold text-slate-500">Effective {formatPercent(effectiveMatchingWeights.textAnchorWeight)}</div>
+                      </label>
+                      <div className="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Image</span>
+                        <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700">
+                          {formatPercent(effectiveMatchingWeights.imageAnchorWeight)}
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-500">คำนวณจากส่วนที่เหลือ</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <aside className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/70 p-4">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-900">Effective Matching Weights</h3>
+                  <div className="grid gap-2">
+                    <div className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-700">Layout {formatPercent(effectiveMatchingWeights.layoutWeight)}</div>
+                    <div className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-700">Text {formatPercent(effectiveMatchingWeights.textAnchorWeight)}</div>
+                    <div className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-700">Image {formatPercent(effectiveMatchingWeights.imageAnchorWeight)}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/80 px-3 py-2 text-[11px] font-semibold leading-5 text-indigo-800">
+                    Text Anchors: {textAnchorCount} · Image Anchors: {imageAnchorCount}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleConfirmTemplateUpdate}
+                    className="mt-2 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+                  >
+                    อัปเดต Template
+                  </button>
+                </aside>
+              </div>
+            </section>
           )}
         </div>
       )}
