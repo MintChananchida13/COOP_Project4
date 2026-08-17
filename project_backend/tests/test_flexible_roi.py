@@ -83,7 +83,7 @@ class FlexibleRoiTests(unittest.TestCase):
         lines = [
             {"roi": {"x_ratio": 0.10, "y_ratio": 0.10, "width_ratio": 0.62, "height_ratio": 0.05}},
             {"roi": {"x_ratio": 0.10, "y_ratio": 0.16, "width_ratio": 0.58, "height_ratio": 0.05}},
-            {"roi": {"x_ratio": 0.18, "y_ratio": 0.24, "width_ratio": 0.54, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.20, "y_ratio": 0.25, "width_ratio": 0.54, "height_ratio": 0.05}},
             {"roi": {"x_ratio": 0.10, "y_ratio": 0.30, "width_ratio": 0.59, "height_ratio": 0.05}},
         ]
 
@@ -91,6 +91,19 @@ class FlexibleRoiTests(unittest.TestCase):
 
         self.assertEqual(len(paragraphs), 2)
         self.assertEqual([paragraph["line_count"] for paragraph in paragraphs], [2, 2])
+
+    def test_paragraph_geometry_does_not_split_on_indent_signal_alone(self):
+        lines = [
+            {"roi": {"x_ratio": 0.10, "y_ratio": 0.10, "width_ratio": 0.62, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.10, "y_ratio": 0.16, "width_ratio": 0.58, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.18, "y_ratio": 0.22, "width_ratio": 0.54, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.10, "y_ratio": 0.28, "width_ratio": 0.59, "height_ratio": 0.05}},
+        ]
+
+        paragraphs = _paragraph_regions_from_text_lines(lines)
+
+        self.assertEqual(len(paragraphs), 1)
+        self.assertEqual(paragraphs[0]["line_count"], 4)
 
 
 if __name__ == "__main__":

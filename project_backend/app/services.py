@@ -905,11 +905,14 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope:
         gap_ratio = gap / max(median_gap, median_height * 0.25, 1e-9)
         indent_ratio = indent_delta / max(median_width, median_height, 1e-9)
         first_line_indent_ratio = first_line_indent / max(median_width, median_height, 1e-9)
-        gap_evidence = gap_ratio >= 1.15 or gap >= median_height * 0.55
-        indent_evidence = indent_ratio >= 0.045 or first_line_indent_ratio >= 0.06
-        first_line_evidence = first_line_indent_ratio >= 0.06 and current_x > prev_x
-        short_previous_evidence = previous_width_ratio <= 0.78 and gap_ratio >= 0.85
-        alignment_evidence = overlap <= 0.58 and gap_ratio >= 0.85
+        gap_evidence = gap_ratio >= 1.65 and gap >= median_height * 0.65
+        indent_evidence = indent_ratio >= 0.09
+        first_line_evidence = first_line_indent_ratio >= 0.12 and current_x > prev_x
+        short_previous_evidence = previous_width_ratio <= 0.68
+        alignment_break_evidence = overlap <= 0.42
+        alignment_merge_evidence = overlap >= 0.68 and indent_ratio < 0.12
+        primary_signal_count = sum(1 for value in (gap_evidence, indent_evidence, first_line_evidence, alignment_break_evidence) if value)
+        supporting_signal_count = primary_signal_count + (1 if short_previous_evidence and gap_ratio >= 1.1 else 0)
         break_score = 0.0
         if gap_evidence:
             break_score += 0.35
@@ -917,22 +920,30 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope:
             break_score += 0.35
         if first_line_evidence:
             break_score += 0.45
-        if short_previous_evidence:
+        if short_previous_evidence and gap_ratio >= 1.1:
             break_score += 0.2
-        if alignment_evidence:
+        if alignment_break_evidence:
             break_score += 0.15
-        should_break = break_score >= 0.7 or (first_line_evidence and (gap_ratio >= 0.7 or short_previous_evidence))
+        should_break = (
+            supporting_signal_count >= 2
+            and primary_signal_count >= 1
+            and break_score >= 0.75
+            and not (alignment_merge_evidence and not gap_evidence)
+        )
         logger.debug(
             "Flexible paragraph pair scope=%s pair=%s gap=%.5f gap_ratio=%.3f indent=%.5f "
-            "first_line_indent=%.5f previous_width_ratio=%.3f overlap=%.3f break_score=%.3f break=%s",
+            "indent_ratio=%.3f first_line_indent=%.5f width_ratio=%.3f overlap=%.3f "
+            "signals=%s break_score=%.3f break=%s",
             debug_scope,
             line_index,
             gap,
             gap_ratio,
             indent_delta,
+            indent_ratio,
             first_line_indent,
             previous_width_ratio,
             overlap,
+            supporting_signal_count,
             break_score,
             should_break,
         )

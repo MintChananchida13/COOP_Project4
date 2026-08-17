@@ -281,6 +281,24 @@ def _box_area(box: List[float]) -> float:
     return max(0.0, abs(float(box[2]) - float(box[0]))) * max(0.0, abs(float(box[3]) - float(box[1])))
 
 
+def _box_width(box: List[float]) -> float:
+    return max(0.0, abs(float(box[2]) - float(box[0])))
+
+
+def _box_height(box: List[float]) -> float:
+    return max(0.0, abs(float(box[3]) - float(box[1])))
+
+
+def _median(values: List[float], fallback: float = 0.0) -> float:
+    prepared = sorted(float(value) for value in values if np.isfinite(float(value)) and float(value) > 0)
+    if not prepared:
+        return fallback
+    middle = len(prepared) // 2
+    if len(prepared) % 2:
+        return prepared[middle]
+    return (prepared[middle - 1] + prepared[middle]) / 2.0
+
+
 def _clip_box_to_image(box: List[float], image_width: int, image_height: int) -> List[float]:
     left = max(0.0, min(float(image_width), min(float(box[0]), float(box[2]))))
     top = max(0.0, min(float(image_height), min(float(box[1]), float(box[3]))))
@@ -429,6 +447,120 @@ def _text_box_belongs_to_table(text_box: List[float], table_boxes: List[List[flo
     return False
 
 
+def _is_tiny_text_fragment(box: List[float], median_height: float, median_area: float) -> bool:
+    if median_height <= 0 or median_area <= 0:
+        return False
+    height = _box_height(box)
+    area = _box_area(box)
+    width = _box_width(box)
+    return (
+        height <= median_height * 0.42
+        and area <= median_area * 0.28
+        and width <= median_height * 2.5
+    )
+
+
+def _filter_tiny_text_fragments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    text_boxes = [item["box"] for item in items if item.get("type") == "text"]
+    if len(text_boxes) < 2:
+        return items
+    median_height = _median([_box_height(box) for box in text_boxes], 0.0)
+    median_area = _median([_box_area(box) for box in text_boxes], 0.0)
+    filtered: List[Dict[str, Any]] = []
+    for item in items:
+        if item.get("type") == "text" and _is_tiny_text_fragment(item["box"], median_height, median_area):
+            logger.debug(
+                "Auto ROI dropped tiny text fragment box=%s median_height=%.2f median_area=%.2f",
+                item["box"],
+                median_height,
+                median_area,
+            )
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _filter_nested_same_type_regions(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered = sorted(items, key=lambda item: _box_area(item["box"]), reverse=True)
+    kept: List[Dict[str, Any]] = []
+    for item in ordered:
+        box = item["box"]
+        area = max(_box_area(box), 1.0)
+        region_type = item.get("type")
+        nested = False
+        for existing in kept:
+            if existing.get("type") != region_type:
+                continue
+            existing_box = existing["box"]
+            existing_area = max(_box_area(existing_box), 1.0)
+            overlap_ratio = _intersection_area(box, existing_box) / area
+            area_ratio = area / existing_area
+            if overlap_ratio >= 0.88 and area_ratio <= 0.72:
+                nested = True
+                logger.debug(
+                    "Auto ROI dropped nested %s box=%s inside=%s overlap=%.3f area_ratio=%.3f",
+                    region_type,
+                    box,
+                    existing_box,
+                    overlap_ratio,
+                    area_ratio,
+                )
+                break
+        if not nested:
+            kept.append(item)
+    kept.sort(key=lambda item: (min(item["box"][1], item["box"][3]), min(item["box"][0], item["box"][2])))
+    return kept
+
+
+def _filter_auto_roi_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return _filter_nested_same_type_regions(_filter_tiny_text_fragments(items))
+
+
+def _response_region_to_item(region: Dict[str, Any], image_width: int, image_height: int) -> Optional[Dict[str, Any]]:
+    roi = region.get("roi") if isinstance(region.get("roi"), dict) else None
+    bbox = region.get("bbox") if isinstance(region.get("bbox"), dict) else None
+    try:
+        if roi:
+            left = float(roi.get("x_ratio") or 0.0) * image_width
+            top = float(roi.get("y_ratio") or 0.0) * image_height
+            right = left + float(roi.get("width_ratio") or 0.0) * image_width
+            bottom = top + float(roi.get("height_ratio") or 0.0) * image_height
+        elif bbox:
+            left = float(bbox.get("x") or 0.0)
+            top = float(bbox.get("y") or 0.0)
+            right = left + float(bbox.get("width") or 0.0)
+            bottom = top + float(bbox.get("height") or 0.0)
+        else:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return {
+        "box": _clip_box_to_image([left, top, right, bottom], image_width, image_height),
+        "type": _normalize_region_type(region.get("type") or region.get("data_type") or region.get("label")),
+        "confidence": _extract_score(region),
+        "region": region,
+    }
+
+
+def _filter_response_regions(regions: List[Dict[str, Any]], image_width: int, image_height: int) -> List[Dict[str, Any]]:
+    items = []
+    passthrough: List[Dict[str, Any]] = []
+    for region in regions:
+        item = _response_region_to_item(region, image_width, image_height)
+        if item:
+            items.append(item)
+        else:
+            passthrough.append(region)
+    filtered_items = _filter_auto_roi_items(items)
+    kept_regions = [item["region"] for item in filtered_items]
+    kept_regions.extend(passthrough)
+    kept_regions.sort(key=lambda region: (
+        float(((region.get("roi") if isinstance(region.get("roi"), dict) else {}) or {}).get("y_ratio") or 0.0),
+        float(((region.get("roi") if isinstance(region.get("roi"), dict) else {}) or {}).get("x_ratio") or 0.0),
+    ))
+    return kept_regions
+
+
 def _image_box_contains_text(image_box: List[float], text_boxes: List[List[float]]) -> bool:
     for text_box in text_boxes:
         text_area = max(_box_area(text_box), 1.0)
@@ -457,6 +589,13 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_m
             raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned no result.")
         if not isinstance(remote_result, dict):
             raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned an invalid response.")
+        remote_regions = remote_result.get("regions")
+        if isinstance(remote_regions, list):
+            height, width = image.shape[:2]
+            remote_result = {
+                **remote_result,
+                "regions": _filter_response_regions([region for region in remote_regions if isinstance(region, dict)], width, height),
+            }
         return remote_result
 
     logger.info("Using local TextDetection")
@@ -496,6 +635,8 @@ def analyze_layout(image: np.ndarray, expand_text_rois: bool = False, auto_roi_m
             continue
 
         filtered_items.append(item)
+
+    filtered_items = _filter_auto_roi_items(filtered_items)
 
     layout_blocker_boxes = [item["box"] for item in filtered_items if item["type"] in {"table", "image"}]
     original_boxes = [_clip_box_to_image(item["box"], width, height) for item in filtered_items]
@@ -578,6 +719,15 @@ def detect_text_boxes(image_path: str) -> Dict[str, Any]:
             raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned no result.")
         if not isinstance(remote_result, dict):
             raise LayoutAnalysisUnavailableError("Remote TextDetection runtime returned an invalid response.")
+        remote_regions = remote_result.get("regions")
+        if isinstance(remote_regions, list):
+            image = cv2.imread(image_path)
+            if image is not None and image.size > 0:
+                height, width = image.shape[:2]
+                remote_result = {
+                    **remote_result,
+                    "regions": _filter_response_regions([region for region in remote_regions if isinstance(region, dict)], width, height),
+                }
         return remote_result
 
     logger.info("Using local TextDetection")
@@ -587,11 +737,16 @@ def detect_text_boxes(image_path: str) -> Dict[str, Any]:
 
     height, width = image.shape[:2]
     raw_items = _run_text_detection(image_path)
-    regions: List[Dict[str, Any]] = []
+    parsed_items: List[Dict[str, Any]] = []
     for item in raw_items:
         box = _extract_box(item)
         if not box:
             continue
+        parsed_items.append({"box": _clip_box_to_image(box, width, height), "type": "text", "confidence": _extract_score(item)})
+    parsed_items = _filter_auto_roi_items(parsed_items)
+    regions: List[Dict[str, Any]] = []
+    for item in parsed_items:
+        box = item["box"]
         x1, y1, x2, y2 = box
         left = max(0.0, min(float(width), min(float(x1), float(x2))))
         top = max(0.0, min(float(height), min(float(y1), float(y2))))
@@ -604,7 +759,7 @@ def detect_text_boxes(image_path: str) -> Dict[str, Any]:
         regions.append(
             {
                 "text": "",
-                "confidence": _extract_score(item),
+                "confidence": item.get("confidence", 0.0),
                 "bbox": {
                     "x": left,
                     "y": top,

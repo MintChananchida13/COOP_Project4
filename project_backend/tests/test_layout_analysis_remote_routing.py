@@ -145,6 +145,41 @@ class LayoutAnalysisRemoteRoutingTest(unittest.TestCase):
 
         self.assertEqual([region["type"] for region in result["regions"]], ["image", "text"])
 
+    def test_auto_roi_drops_nested_text_region_inside_larger_text_region(self) -> None:
+        image = np.zeros((160, 240, 3), dtype=np.uint8)
+        raw_items = [
+            {"bbox": [20, 20, 200, 70], "label": "text", "score": 0.95},
+            {"bbox": [50, 32, 90, 48], "label": "text", "score": 0.9},
+            {"bbox": [20, 90, 200, 130], "label": "text", "score": 0.92},
+        ]
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch(
+            "app.layout_analysis_service._run_pipeline",
+            return_value=raw_items,
+        ):
+            result = analyze_layout(image, expand_text_rois=True, auto_roi_mode="text_line")
+
+        self.assertEqual(len(result["regions"]), 2)
+        self.assertTrue(all(region["type"] == "text" for region in result["regions"]))
+
+    def test_auto_roi_drops_tiny_text_fragment_like_diacritic(self) -> None:
+        image = np.zeros((160, 240, 3), dtype=np.uint8)
+        raw_items = [
+            {"bbox": [20, 20, 200, 42], "label": "text", "score": 0.95},
+            {"bbox": [20, 55, 200, 77], "label": "text", "score": 0.94},
+            {"bbox": [86, 50, 92, 56], "label": "text", "score": 0.91},
+        ]
+
+        with patch.dict("os.environ", {"MODEL_SERVICE_URL": ""}, clear=False), patch(
+            "app.layout_analysis_service._run_pipeline",
+            return_value=raw_items,
+        ):
+            result = analyze_layout(image, expand_text_rois=True, auto_roi_mode="text_line")
+
+        self.assertEqual(len(result["regions"]), 2)
+        heights = [region["roi"]["height_ratio"] for region in result["regions"]]
+        self.assertTrue(all(height > 0.08 for height in heights))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -307,6 +307,7 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
   const verificationAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification).length;
   const textAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification && field.dataType !== "image").length;
   const imageAnchorCount = selectedTemplateFields.filter((field) => field.useForVerification && field.dataType === "image").length;
+  const isUpdatingPublishedTemplate = selectedTemplate?.status === "active";
   const effectiveMatchingWeights = calculateMatchingWeights({
     layoutWeight: layoutWeightDraft,
     textAnchorCount,
@@ -903,8 +904,8 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-4">
-            {processSteps.map((item, index) => {
+          <div className={`mt-4 grid gap-2 ${isUpdatingPublishedTemplate ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+            {processSteps.filter((item) => isUpdatingPublishedTemplate || item.id !== "decision").map((item, index) => {
                 const isActive = item.status === "active";
                 const isDone = item.status === "done";
                 return (
@@ -1027,15 +1028,17 @@ export default function AdminTemplateEditPage({ templateId }: { templateId: stri
                           onChange={(event) => setLayoutWeightDraft(Number(event.target.value) / 100)}
                           className="w-full"
                         />
-                        <input
-                          type="number"
-                          min="30"
-                          max="50"
-                          step="5"
+                        <select
                           value={Math.round(layoutWeightDraft * 100)}
-                          onChange={(event) => setLayoutWeightDraft(Math.max(0.3, Math.min(0.5, Number(event.target.value) / 100)))}
+                          onChange={(event) => setLayoutWeightDraft(Number(event.target.value) / 100)}
                           className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-black text-slate-700"
-                        />
+                        >
+                          {[30, 35, 40, 45, 50].map((value) => (
+                            <option key={value} value={value}>
+                              {value}%
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className={`space-y-2 rounded-xl border p-3 transition ${hasTextAnchors ? "border-slate-100 bg-slate-50" : "border-slate-100 bg-slate-50/50 opacity-55"}`}>
                         <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Text</span>

@@ -192,6 +192,7 @@ def _recognize_text_crops_with_detection(text_items: List[Tuple[str, Any]]) -> D
     if not text_items:
         return {}
 
+    source_crops = {key: bgr_crop for key, bgr_crop in text_items}
     recognition_crops = []
     recognition_meta: List[Dict[str, Any]] = []
     per_key_detection: Dict[str, Dict[str, Any]] = {}
@@ -239,12 +240,56 @@ def _recognize_text_crops_with_detection(text_items: List[Tuple[str, Any]]) -> D
     for key, _ in text_items:
         segments = grouped.get(key, [])
         text_segments = [segment["text"] for segment in segments if segment.get("text")]
-        confidences = [float(segment.get("confidence") or 0.0) for segment in segments]
+        confidences = [float(segment.get("confidence") or 0.0) for segment in segments if segment.get("text")]
         detection_meta = per_key_detection.get(key, {})
         fallback_used = bool(detection_meta.get("fallback_used")) or any(segment.get("fallback") for segment in segments)
+        detected_text = normalize_ocr_text(" ".join(text_segments))
+        detected_confidence = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+        detection_meta = {
+            **detection_meta,
+            "recognized_segment_count": len(text_segments),
+            "empty_segment_count": len([segment for segment in segments if not segment.get("text")]),
+            "detected_text_length": len(detected_text),
+        }
+
+        if not fallback_used and (not detected_text or len(detected_text) <= 2):
+            full_crop = source_crops.get(key)
+            if full_crop is not None and getattr(full_crop, "size", 0) > 0:
+                full_result = run_paddle_thai_ocr(full_crop)
+                full_text = normalize_ocr_text(full_result.get("text"))
+                full_confidence = round(float(full_result.get("confidence") or 0.0), 4)
+                detection_meta = {
+                    **detection_meta,
+                    "fallback_used": True,
+                    "fallback_reason": "detected_boxes_recognized_empty_or_too_short",
+                    "full_roi_confidence": full_confidence,
+                    "full_roi_text_length": len(full_text),
+                }
+                if full_text and (not detected_text or len(full_text) > len(detected_text) or full_confidence >= detected_confidence):
+                    segments.append(
+                        {
+                            "text": full_text,
+                            "confidence": full_confidence,
+                            "bbox": {
+                                "x": 0,
+                                "y": 0,
+                                "width": int(full_crop.shape[1]),
+                                "height": int(full_crop.shape[0]),
+                            },
+                            "engine": full_result.get("engine") or "paddle_thai_ocr",
+                            "model": full_result.get("model"),
+                            "fallback": True,
+                            "fallback_reason": "full_roi_after_empty_detected_boxes",
+                            "error": full_result.get("error"),
+                        }
+                    )
+                    detected_text = full_text
+                    detected_confidence = full_confidence
+                    fallback_used = True
+
         results[key] = {
-            "text": normalize_ocr_text(" ".join(text_segments)),
-            "confidence": round(sum(confidences) / len(confidences), 4) if confidences else 0.0,
+            "text": detected_text,
+            "confidence": detected_confidence,
             "preprocessing": "paddle_text_detection_then_recognition"
             if not fallback_used
             else "paddle_text_detection_fallback_then_recognition",
