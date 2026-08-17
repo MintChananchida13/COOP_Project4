@@ -1051,7 +1051,7 @@ export default function WorkspaceTemplateEditorV2({
             </span>
           </div>
           <div className="mt-1 text-[10px] font-semibold leading-relaxed text-sky-800">
-            ใช้ PP-DocLayoutV3 หา Text Content ภายในกรอบ ถ้าไม่พบกรอบย่อยจะใช้ Search Boundary นี้เป็นกรอบเดียว แล้ว OCR แยกตามกรอบที่ใช้
+            ใช้ PP-DocLayoutV3 หาองค์ประกอบภายในกรอบ แล้วส่งต่อเข้ากระบวนการตาม type ของแต่ละ ROI ย่อย
           </div>
         </div>
 
@@ -1069,7 +1069,7 @@ export default function WorkspaceTemplateEditorV2({
 
           <div className="min-h-0 space-y-2 rounded-lg border border-slate-100 bg-white p-2">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อยและผล OCR</div>
+              <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อยและผลตาม Type</div>
               <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
                 {blocks.length} รายการ
               </span>
@@ -1080,9 +1080,14 @@ export default function WorkspaceTemplateEditorV2({
                   <div key={`flexible-block-${item.fieldId || item.fieldName}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-2">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-[9px] font-black uppercase text-slate-400">ROI ย่อย #{index + 1}</div>
-                      <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
-                        PP-DocLayoutV3
-                      </span>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <span className="rounded bg-white px-1.5 py-0.5 text-[8px] font-black uppercase text-slate-500">
+                          {block.dataType || block.type || "text"}
+                        </span>
+                        <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-sky-700">
+                          PP-DocLayoutV3
+                        </span>
+                      </div>
                     </div>
                     <div className="mt-2 grid gap-2 sm:grid-cols-[112px_1fr] lg:grid-cols-1 xl:grid-cols-[112px_1fr]">
                       {block.cropPreviewDataUrl ? (
@@ -1097,6 +1102,11 @@ export default function WorkspaceTemplateEditorV2({
                         <div className="mt-1 max-h-24 overflow-y-auto rounded bg-white px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-700 ring-1 ring-slate-100">
                           <p className="whitespace-pre-wrap break-words">{block.text || "-"}</p>
                         </div>
+                        {(block.dataType || block.type) === "table" && (block.tableStructured || block.tableRows) && (
+                          <div className="mt-2">
+                            {renderStructuredTable(block.tableStructured, block.tableRows || null, `ตารางจาก ROI ย่อย #${index + 1}`)}
+                          </div>
+                        )}
                         {block.ocrError && (
                           <div className="mt-1 rounded bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700">
                             OCR error: {block.ocrError}
@@ -1105,6 +1115,9 @@ export default function WorkspaceTemplateEditorV2({
                         {block.confidence !== null && block.confidence !== undefined && (
                           <div className="mt-1 text-[9px] font-black uppercase text-slate-400">Conf {block.confidence.toFixed(2)}</div>
                         )}
+                        <div className="mt-1 text-[9px] font-black uppercase text-slate-400">
+                          Method {block.extractionMethod || "paddle_thai_ocr"}
+                        </div>
                       </div>
                     </div>
                   </div>

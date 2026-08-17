@@ -424,11 +424,28 @@ def _layout_regions_from_analysis(analysis: Dict[str, Any]) -> List[Dict[str, An
     return []
 
 
-def _is_text_content_region(region: Dict[str, Any]) -> bool:
+def _is_supported_layout_region(region: Dict[str, Any]) -> bool:
     region_type = _region_type(region).replace("_", " ").replace("-", " ")
-    if any(token in region_type for token in ("table", "image", "figure", "pic", "seal", "logo", "chart")):
+    if any(token in region_type for token in ("header", "footer", "page number")):
         return False
     return bool(region.get("roi")) or bool(region.get("bbox"))
+
+
+def _resolved_layout_region_type(region: Dict[str, Any]) -> str:
+    region_type = _region_type(region).replace("_", " ").replace("-", " ")
+    if "table" in region_type and "title" not in region_type and "caption" not in region_type:
+        return "table"
+    if any(token in region_type for token in ("image", "figure", "pic", "seal", "logo", "chart")):
+        return "image"
+    return "text"
+
+
+def _extraction_method_for_resolved_type(data_type: str) -> str:
+    if data_type == "table":
+        return "table_recognition_v2"
+    if data_type == "image":
+        return "extract_image"
+    return "paddle_thai_ocr"
 
 
 def _region_crop_box(region: Dict[str, Any], image_width: int, image_height: int) -> Tuple[int, int, int, int] | None:
@@ -465,15 +482,33 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
         box = _region_crop_box(region, w_img, h_img)
         if not box:
             continue
+        data_type = _resolved_layout_region_type(region)
+        extraction_method = _extraction_method_for_resolved_type(data_type)
         x, y, w, h = box
         block_img = search_img[y : y + h, x : x + w]
         if block_img.size == 0:
             continue
+        table_rows = None
+        table_structured = None
+        table_html = None
         try:
-            ocr_result = recognize_text_crop_with_detection(block_img)
-            text = normalize_ocr_text(ocr_result.get("text"))
-            confidence = float(ocr_result.get("confidence") or 0.0)
-            raw_segments = ocr_result.get("segments", [])
+            if data_type == "image":
+                text = "(image crop)"
+                confidence = 1.0
+                raw_segments = []
+            elif data_type == "table":
+                ocr_result = process_table_roi_v2_with_fallback(block_img)
+                text = normalize_ocr_text(ocr_result.get("text"))
+                confidence = float(ocr_result.get("confidence") or 0.0)
+                raw_segments = ocr_result.get("segments", [])
+                table_rows = ocr_result.get("table_rows")
+                table_structured = ocr_result.get("table_structured")
+                table_html = ocr_result.get("table_html")
+            else:
+                ocr_result = recognize_text_crop_with_detection(block_img)
+                text = normalize_ocr_text(ocr_result.get("text"))
+                confidence = float(ocr_result.get("confidence") or 0.0)
+                raw_segments = ocr_result.get("segments", [])
             error_message = None
         except Exception as error:
             text = ""
@@ -489,8 +524,15 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
                 "text": text,
                 "confidence": confidence,
                 "bbox": {"x": x, "y": y, "width": w, "height": h},
+                "type": data_type,
+                "data_type": data_type,
+                "extraction_method": extraction_method,
+                "layout_type": _region_type(region) or data_type,
                 "source": source,
                 "raw_segments": raw_segments,
+                "table_rows": table_rows,
+                "table_structured": table_structured,
+                "table_html": table_html,
                 "ocr_error": error_message,
             }
         )
@@ -510,7 +552,7 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
     text_regions = [
         region
         for region in _layout_regions_from_analysis(analysis)
-        if _is_text_content_region(region)
+        if _is_supported_layout_region(region)
     ]
     if not text_regions:
         text_regions = [
@@ -523,6 +565,9 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
                     "height_ratio": 1.0,
                 },
                 "source": "pp_doclayout_v3_search_boundary",
+                "type": "text",
+                "data_type": "text",
+                "extraction_method": "paddle_thai_ocr",
             }
         ]
     text_regions.sort(key=lambda region: (

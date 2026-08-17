@@ -28,6 +28,7 @@ from .layout_analysis_service import analyze_layout
 from .layout_signature_service import build_layout_signature, compare_layout_signatures, signature_from_json, signature_to_json
 from .layout_template_matcher import search_layout_candidates
 from .ocr_adapter import OcrUnavailableError, ocr_roi, ocr_rois
+from .ocr_postprocess import normalize_ocr_text
 from .siglip_image_verification_adapter import (
     verify_image_category,
 )
@@ -734,11 +735,28 @@ def _layout_regions_from_analysis(analysis: Dict[str, Any]) -> List[Dict[str, An
     return []
 
 
-def _is_text_content_region(region: Dict[str, Any]) -> bool:
+def _is_supported_layout_region(region: Dict[str, Any]) -> bool:
     region_type = _layout_region_type(region).replace("_", " ").replace("-", " ")
-    if any(token in region_type for token in ("table", "image", "figure", "pic", "seal", "logo", "chart")):
+    if any(token in region_type for token in ("header", "footer", "page number")):
         return False
     return bool(region.get("roi")) or bool(region.get("bbox"))
+
+
+def _resolved_layout_region_type(region: Dict[str, Any]) -> str:
+    region_type = _layout_region_type(region).replace("_", " ").replace("-", " ")
+    if "table" in region_type and "title" not in region_type and "caption" not in region_type:
+        return "table"
+    if any(token in region_type for token in ("image", "figure", "pic", "seal", "logo", "chart")):
+        return "image"
+    return "text"
+
+
+def _extraction_method_for_resolved_type(data_type: str) -> str:
+    if data_type == "table":
+        return "table_recognition_v2"
+    if data_type == "image":
+        return "extract_image"
+    return "paddle_thai_ocr"
 
 
 def _region_roi_from_boundary(region: Dict[str, Any], image_width: int, image_height: int) -> Optional[Dict[str, float]]:
@@ -810,6 +828,8 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
         roi = _region_roi_from_boundary(region, image_width, image_height)
         if not roi:
             continue
+        data_type = _resolved_layout_region_type(region)
+        extraction_method = _extraction_method_for_resolved_type(data_type)
         block_roi = {
             "page_number": 1,
             "x_ratio": float(roi.get("x_ratio") or 0.0),
@@ -829,10 +849,34 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
                 buffer = io.BytesIO()
                 image.crop((left, top, right, bottom)).save(buffer, format="PNG")
                 crop_preview_data_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+        table_rows = None
+        table_structured = None
+        table_html = None
         try:
-            ocr_result = ocr_roi(boundary_image_path, block_roi)
-            text = normalize_ocr_text(ocr_result.get("text"))
-            confidence = float(ocr_result.get("confidence") or 0.0)
+            if data_type == "image":
+                text = "(image crop)"
+                confidence = 1.0
+            elif data_type == "table":
+                ocr_result = ocr_rois(
+                    boundary_image_path,
+                    [
+                        {
+                            "id": f"flexible_block_{index}",
+                            "roi": block_roi,
+                            "data_type": "table",
+                            "extraction_method": "table_recognition_v2",
+                        }
+                    ],
+                ).get(f"flexible_block_{index}", {})
+                text = normalize_ocr_text(ocr_result.get("text"))
+                confidence = float(ocr_result.get("confidence") or 0.0)
+                table_rows = ocr_result.get("table_rows")
+                table_structured = ocr_result.get("table_structured")
+                table_html = ocr_result.get("table_html")
+            else:
+                ocr_result = ocr_roi(boundary_image_path, block_roi)
+                text = normalize_ocr_text(ocr_result.get("text"))
+                confidence = float(ocr_result.get("confidence") or 0.0)
             error_message = None
         except Exception as error:
             text = ""
@@ -847,8 +891,15 @@ def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]
                 "text": text,
                 "confidence": confidence,
                 "roi": block_roi,
+                "type": data_type,
+                "data_type": data_type,
+                "extraction_method": extraction_method,
+                "layout_type": _layout_region_type(region) or data_type,
                 "source": source,
                 "crop_preview_data_url": crop_preview_data_url,
+                "table_rows": table_rows,
+                "table_structured": table_structured,
+                "table_html": table_html,
                 "ocr_error": error_message,
             }
         )
@@ -872,7 +923,7 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
     regions = [
         region
         for region in _layout_regions_from_analysis(analysis)
-        if _is_text_content_region(region)
+        if _is_supported_layout_region(region)
     ]
     if not regions:
         regions = [
@@ -885,6 +936,9 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
                     "height_ratio": 1.0,
                 },
                 "source": "pp_doclayout_v3_search_boundary",
+                "type": "text",
+                "data_type": "text",
+                "extraction_method": "paddle_thai_ocr",
             }
         ]
     regions.sort(key=lambda region: (

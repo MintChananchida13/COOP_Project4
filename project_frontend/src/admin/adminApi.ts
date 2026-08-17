@@ -512,6 +512,13 @@ export interface TemplateStepTestItem {
     text?: string | null;
     confidence?: number | null;
     roi?: Record<string, unknown> | null;
+    type?: string | null;
+    dataType?: string | null;
+    extractionMethod?: string | null;
+    layoutType?: string | null;
+    tableRows?: string[][] | null;
+    tableStructured?: TemplateStepTestItem["tableStructured"];
+    tableHtml?: string | null;
     source?: string | null;
     cropPreviewDataUrl?: string | null;
     ocrError?: string | null;
@@ -1654,6 +1661,22 @@ function mapTemplateStepTestItem(item: Record<string, unknown>): TemplateStepTes
           text: (block.text as string | null | undefined) ?? null,
           confidence: typeof block.confidence === "number" ? block.confidence : null,
           roi: (block.roi as Record<string, unknown> | undefined) || null,
+          type: (block.type as string | null | undefined) ?? null,
+          dataType: (block.data_type as string | null | undefined) ?? (block.dataType as string | null | undefined) ?? null,
+          extractionMethod: (block.extraction_method as string | null | undefined) ?? (block.extractionMethod as string | null | undefined) ?? null,
+          layoutType: (block.layout_type as string | null | undefined) ?? (block.layoutType as string | null | undefined) ?? null,
+          tableRows: Array.isArray(block.table_rows)
+            ? (block.table_rows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+            : Array.isArray(block.tableRows)
+              ? (block.tableRows as unknown[][]).map((row) => row.map((cell) => String(cell ?? "")))
+              : null,
+          tableStructured:
+            block.table_structured && typeof block.table_structured === "object"
+              ? (block.table_structured as TemplateStepTestItem["tableStructured"])
+              : block.tableStructured && typeof block.tableStructured === "object"
+                ? (block.tableStructured as TemplateStepTestItem["tableStructured"])
+                : undefined,
+          tableHtml: (block.table_html as string | null | undefined) ?? (block.tableHtml as string | null | undefined) ?? null,
           source: (block.source as string | null | undefined) ?? null,
           cropPreviewDataUrl: (block.crop_preview_data_url as string | null | undefined) ?? (block.cropPreviewDataUrl as string | null | undefined) ?? null,
           ocrError: (block.ocr_error as string | null | undefined) ?? (block.ocrError as string | null | undefined) ?? null,
