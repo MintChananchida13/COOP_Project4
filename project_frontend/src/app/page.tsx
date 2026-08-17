@@ -815,7 +815,8 @@ const createResolvedBlockDisplayRois = (
   blocks: Record<string, any>[] | undefined | null,
   scaleX: number,
   scaleY: number,
-  pageIndex: number
+  pageIndex: number,
+  startingFieldNumber = 1
 ): (ROI & { pageIndex?: number })[] => {
   if (!Array.isArray(blocks) || parentRoi.roiMode !== "flexible") return [];
   const resolvedRois: (ROI & { pageIndex?: number })[] = [];
@@ -843,7 +844,7 @@ const createResolvedBlockDisplayRois = (
       }
       resolvedRois.push({
         id: Number(`${Math.abs(parentRoi.id)}${index + 1}`.slice(0, 12)) || Date.now() + index,
-        fieldName: `${parentRoi.fieldName} · ${type} ${index + 1}`,
+        fieldName: `field_${startingFieldNumber + resolvedRois.length}`,
         x: parentRoi.x + localX,
         y: parentRoi.y + localY,
         width: localWidth,
@@ -895,7 +896,10 @@ async function buildFlexibleResolvedDisplayRois(
             roi: { x_ratio: 0, y_ratio: 0, width_ratio: 1, height_ratio: 1 },
           },
         ];
-    resolved.push(...createResolvedBlockDisplayRois(roi, blocks, scaleX, scaleY, pageIndex));
+    const existingFieldCountOnPage =
+      sourceRois.filter((item) => Number(item.pageIndex ?? 0) === pageIndex && !item.isResolvedBlock).length +
+      resolved.filter((item) => Number(item.pageIndex ?? 0) === pageIndex).length;
+    resolved.push(...createResolvedBlockDisplayRois(roi, blocks, scaleX, scaleY, pageIndex, existingFieldCountOnPage + 1));
   }
   return resolved;
 }

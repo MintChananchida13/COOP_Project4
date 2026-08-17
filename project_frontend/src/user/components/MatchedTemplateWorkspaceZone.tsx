@@ -72,10 +72,14 @@ export default function MatchedTemplateWorkspaceZone({
         candidate.parentRoiId === roi.id &&
         (candidate.pageIndex ?? 0) === (roi.pageIndex ?? 0)
     );
+  const visibleRois = props.rois.filter((roi) => !hasResolvedChildren(roi));
+  const selectedVisibleId = visibleRois.some((roi) => roi.id === props.selectedId) ? props.selectedId : null;
 
   return (
     <WorkspaceCustomEditor
       {...props}
+      rois={visibleRois}
+      selectedId={selectedVisibleId}
       onCanvasRoiSelect={scrollRightPanelToField}
       readOnly={false}
       hideOcrActions
@@ -87,26 +91,17 @@ export default function MatchedTemplateWorkspaceZone({
           return "hidden pointer-events-none";
         }
         if (roi.isResolvedBlock) {
-          const type = roi.type || roi.dataType;
-          const color =
-            type === "table"
-              ? selected
-                ? "border-violet-700 bg-violet-400/20 shadow-lg z-40 ring-4 ring-violet-300/40"
-                : "border-violet-500 bg-violet-400/10 hover:bg-violet-400/15 z-30"
-              : type === "image"
-                ? selected
-                  ? "border-amber-700 bg-amber-400/20 shadow-lg z-40 ring-4 ring-amber-300/40"
-                  : "border-amber-500 bg-amber-400/10 hover:bg-amber-400/15 z-30"
-                : selected
-                  ? "border-cyan-700 bg-cyan-400/20 shadow-lg z-40 ring-4 ring-cyan-300/40"
-                  : "border-cyan-500 bg-cyan-400/10 hover:bg-cyan-400/15 z-30";
-          return `rnd-box-item border-2 border-dashed transition-shadow pointer-events-auto ${color}`;
+          return `rnd-box-item border transition-shadow pointer-events-auto ${
+            selected
+              ? "border-emerald-600 bg-emerald-500/10 shadow-md z-30 ring-2 ring-emerald-500/20"
+              : "border-emerald-400/90 bg-emerald-50/10 hover:border-emerald-500 z-20"
+          }`;
         }
         if (roi.roiMode === "flexible") {
-          return `rnd-box-item border-2 border-dashed transition-shadow pointer-events-auto ${
+          return `rnd-box-item border transition-shadow pointer-events-auto ${
             selected
-              ? "border-cyan-700 bg-cyan-300/20 shadow-lg z-30 ring-4 ring-cyan-300/45"
-              : "border-cyan-500 bg-cyan-300/10 hover:bg-cyan-300/15 z-20"
+              ? "border-emerald-600 bg-emerald-500/10 shadow-md z-30 ring-2 ring-emerald-500/20"
+              : "border-emerald-400/90 bg-emerald-50/10 hover:border-emerald-500 z-20"
           }`;
         }
         const disabled = roi.enabled === false;
@@ -122,12 +117,12 @@ export default function MatchedTemplateWorkspaceZone({
         `${hasResolvedChildren(roi) ? "hidden" : ""} absolute -top-5 left-0 px-1.5 py-0.5 text-[9px] font-sans rounded shadow border flex items-center gap-1.5 pointer-events-auto cursor-pointer ${
           roi.isResolvedBlock
             ? selected
-              ? "bg-cyan-700 border-cyan-700 text-white font-extrabold"
-              : "bg-white border-cyan-200 text-cyan-700 font-bold"
+              ? "bg-emerald-600 border-emerald-600 text-white font-extrabold"
+              : "bg-white border-emerald-200 text-emerald-700 font-bold"
             : roi.roiMode === "flexible"
               ? selected
-                ? "bg-cyan-700 border-cyan-700 text-white font-extrabold"
-                : "bg-white border-cyan-200 text-cyan-700 font-bold"
+                ? "bg-emerald-600 border-emerald-600 text-white font-extrabold"
+                : "bg-white border-emerald-200 text-emerald-700 font-bold"
               : roi.enabled === false
             ? "bg-slate-100 border-slate-200 text-slate-400"
             : selected
