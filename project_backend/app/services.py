@@ -718,6 +718,29 @@ def _layout_region_type(region: Dict[str, Any]) -> str:
     return str(region.get("type") or region.get("data_type") or "").lower()
 
 
+def _layout_regions_from_analysis(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if isinstance(analysis.get("regions"), list):
+        return [region for region in analysis["regions"] if isinstance(region, dict)]
+    data = analysis.get("data")
+    if isinstance(data, dict) and isinstance(data.get("regions"), list):
+        return [region for region in data["regions"] if isinstance(region, dict)]
+    pages = analysis.get("pages")
+    if isinstance(pages, list):
+        regions: List[Dict[str, Any]] = []
+        for page in pages:
+            if isinstance(page, dict) and isinstance(page.get("regions"), list):
+                regions.extend(region for region in page["regions"] if isinstance(region, dict))
+        return regions
+    return []
+
+
+def _is_text_content_region(region: Dict[str, Any]) -> bool:
+    region_type = _layout_region_type(region).replace("_", " ").replace("-", " ")
+    if any(token in region_type for token in ("table", "image", "figure", "pic", "seal", "logo", "chart")):
+        return False
+    return bool(region.get("roi")) or bool(region.get("bbox"))
+
+
 def _ocr_flexible_regions(boundary_image_path: str, regions: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     image = _load_image_source(boundary_image_path)
     image_width, image_height = image.size if image is not None else (1, 1)
@@ -779,11 +802,11 @@ def _flexible_text_ocr_from_boundary(boundary_image_path: Optional[str]) -> Dict
     if opencv_img is None:
         return {"text": "", "confidence": 0.0, "segments": [], "failure_reason": "boundary_image_unreadable"}
 
-    analysis = analyze_layout(opencv_img, expand_text_rois=False, auto_roi_mode="text_line")
+    analysis = analyze_layout(opencv_img, expand_text_rois=True, auto_roi_mode="text_line")
     regions = [
         region
-        for region in analysis.get("regions", [])
-        if isinstance(region, dict) and _layout_region_type(region) in {"text", "title", "plain text", "text_block", "content"}
+        for region in _layout_regions_from_analysis(analysis)
+        if _is_text_content_region(region)
     ]
     regions.sort(key=lambda region: (
         float((region.get("roi") or {}).get("y_ratio") or 0.0),
