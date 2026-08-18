@@ -367,6 +367,28 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_selected_method"], "slanext")
         self.assertEqual(result["table_rows"], [["A", "B"]])
 
+    def test_table_debug_trace_captures_slanext_stages_without_changing_selection(self) -> None:
+        image = np.zeros((120, 260, 3), dtype=np.uint8)
+        fake_paddleocr = types.SimpleNamespace(TableRecognitionPipelineV2=FakeTableRecognitionPipelineV2)
+
+        with patch.dict(os.environ, {"TABLE_DEBUG_TRACE": "1", "TABLE_DEBUG_TRACE_DIR": ""}, clear=False), patch.dict(
+            sys.modules,
+            {"paddleocr": fake_paddleocr},
+        ), patch("app.table_recognition_v2_adapter.cv2.imwrite", return_value=True), patch(
+            "app.table_recognition_v2_adapter.Path.unlink"
+        ):
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(result["table_selected_method"], "slanext")
+        trace = result["table_debug"]["table_recognition_trace"]
+        self.assertEqual(trace["input"]["image_size"], {"width": 260, "height": 120})
+        self.assertEqual(len(trace["input"]["sha256"]), 64)
+        self.assertEqual(trace["paddle_raw"]["model_fields"]["table_type"], "not_available")
+        self.assertEqual(trace["parsed"]["table_rows"], [["A", "B"]])
+        self.assertEqual(trace["postprocessed"]["table_rows"], [["A", "B"]])
+        self.assertFalse(trace["ocr_assignment"]["changed"])
+        self.assertEqual(trace["final"]["table_selected_method"], "slanext")
+
     def test_no_rows_quality_score_is_zero(self) -> None:
         quality = _calculate_table_quality([], None, "slanext")
 

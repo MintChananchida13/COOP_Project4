@@ -1811,6 +1811,10 @@ export default function GroundTruthEditorZone({
                         const isSelected = activeFieldId === res.id;
                         const normalizedTable = normalizeResultTableForEditor(res);
                         const editableRows = normalizedTable.rows || [["Column 1"], [""]];
+                        const tableRecognitionTrace =
+                          res.tableDebug && typeof res.tableDebug.table_recognition_trace === "object"
+                            ? res.tableDebug.table_recognition_trace
+                            : null;
                         return (
                           <article
                             key={res.id}
@@ -1857,6 +1861,17 @@ export default function GroundTruthEditorZone({
                                 }
                               />
                             </div>
+
+                            {tableRecognitionTrace && (
+                              <details onClick={(e) => e.stopPropagation()} className="mt-3 rounded-xl border border-slate-200 bg-slate-950 text-slate-100">
+                                <summary className="cursor-pointer px-3 py-2 text-[11px] font-black text-slate-200">
+                                  Table Debug Trace
+                                </summary>
+                                <pre className="max-h-80 overflow-auto border-t border-slate-800 p-3 text-[10px] leading-relaxed text-slate-200">
+                                  {JSON.stringify(tableRecognitionTrace, null, 2)}
+                                </pre>
+                              </details>
+                            )}
                           </article>
                         );
                       })}

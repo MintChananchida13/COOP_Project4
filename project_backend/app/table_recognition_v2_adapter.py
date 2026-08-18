@@ -2,6 +2,7 @@ import os
 import tempfile
 import logging
 import time
+import hashlib
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -49,6 +50,20 @@ _TABLE_CANDIDATE_TIE_EPSILON = 0.03
 _TABLE_LOW_OCR_CONFIDENCE_THRESHOLD = 0.65
 _SEMI_TABLE_MIN_CONFIDENCE = 0.72
 _SEMI_TABLE_MIN_TOPOLOGY_CHANGE_RATIO = 0.33
+_TABLE_DEBUG_RAW_MODEL_FIELDS = (
+    "table_type",
+    "model_name",
+    "structure_model",
+    "structure_model_name",
+    "table_structure_model",
+    "table_structure_model_name",
+    "cls_result",
+    "class_result",
+    "classifier_result",
+    "classification",
+    "score",
+    "confidence",
+)
 
 
 def _model_service_url() -> str:
@@ -57,6 +72,126 @@ def _model_service_url() -> str:
 
 def _use_remote_runtime() -> bool:
     return bool(_model_service_url())
+
+
+def _table_debug_trace_enabled() -> bool:
+    return os.getenv("TABLE_DEBUG_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _json_safe(value: Any, depth: int = 0) -> Any:
+    if depth > 8:
+        return "<max_depth>"
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return {
+            "type": "ndarray",
+            "shape": [int(item) for item in value.shape],
+            "dtype": str(value.dtype),
+        }
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item, depth + 1) for item in value]
+    return str(value)
+
+
+def _table_snapshot(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "table_rows": _json_safe(result.get("table_rows")),
+        "table_structured": _json_safe(result.get("table_structured")),
+        "table_html": result.get("table_html"),
+    }
+
+
+def _debug_input_trace(image: np.ndarray) -> Dict[str, Any]:
+    height, width = image.shape[:2]
+    encoded_ok, encoded = cv2.imencode(".png", image)
+    sha256 = "not_available"
+    if encoded_ok:
+        sha256 = hashlib.sha256(encoded.tobytes()).hexdigest()
+    trace: Dict[str, Any] = {
+        "image_size": {"width": int(width), "height": int(height)},
+        "sha256": sha256,
+        "debug_png_path": "not_saved",
+    }
+    debug_dir = os.getenv("TABLE_DEBUG_TRACE_DIR", "").strip()
+    if debug_dir and encoded_ok:
+        try:
+            output_dir = Path(debug_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"table_roi_{sha256[:16]}.png"
+            output_path.write_bytes(encoded.tobytes())
+            trace["debug_png_path"] = str(output_path)
+        except Exception as error:
+            trace["debug_png_path"] = f"save_failed:{error}"
+    return trace
+
+
+def _extract_raw_model_fields(dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {key: "not_available" for key in _TABLE_DEBUG_RAW_MODEL_FIELDS}
+    for item in dicts:
+        for key in _TABLE_DEBUG_RAW_MODEL_FIELDS:
+            if fields[key] == "not_available" and key in item:
+                fields[key] = _json_safe(item.get(key))
+    return fields
+
+
+def _paddle_raw_trace(dicts: List[Dict[str, Any]], html: str, rows: List[List[str]], structured_table: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw_keys = sorted({str(key) for item in dicts for key in item.keys()})
+    raw_cells: List[Any] = []
+    for item in dicts:
+        for key in ("cells", "table_cells", "cell_bbox", "cell_bboxes", "bbox", "boxes"):
+            if key in item:
+                raw_cells.append({key: _json_safe(item.get(key))})
+    return {
+        "keys": raw_keys,
+        "html": html or "not_available",
+        "rows": _json_safe(rows) if rows else "not_available",
+        "structured": _json_safe(structured_table) if structured_table else "not_available",
+        "cells_bbox": raw_cells if raw_cells else "not_available",
+        "model_fields": _extract_raw_model_fields(dicts),
+    }
+
+
+def _ensure_table_trace(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    debug = result.get("table_debug")
+    if not isinstance(debug, dict):
+        return None
+    trace = debug.get("table_recognition_trace")
+    if isinstance(trace, dict):
+        return trace
+    trace = {}
+    debug["table_recognition_trace"] = trace
+    return trace
+
+
+def _copy_slanext_trace(target: Dict[str, Any], source_trace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not _table_debug_trace_enabled() or not isinstance(source_trace, dict):
+        return target
+    debug = target.get("table_debug")
+    if not isinstance(debug, dict):
+        debug = {}
+    debug.setdefault("table_recognition_trace", source_trace)
+    target["table_debug"] = debug
+    return target
+
+
+def _set_final_table_trace(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not _table_debug_trace_enabled():
+        return result
+    trace = _ensure_table_trace(result)
+    if isinstance(trace, dict):
+        debug = result.get("table_debug") if isinstance(result.get("table_debug"), dict) else {}
+        trace["final"] = {
+            "table_selected_method": result.get("table_selected_method"),
+            "table_rows": _json_safe(result.get("table_rows")),
+            "table_structured": _json_safe(result.get("table_structured")),
+            "semi_skipped_reason": debug.get("semi_skipped_reason", "not_available"),
+        }
+    return result
 
 
 def _common_model_kwargs() -> Dict[str, Any]:
@@ -2276,6 +2411,15 @@ def _build_table_candidate(result: Dict[str, Any], method: str) -> Dict[str, Any
     debug["candidate_method"] = method
     candidate["table_debug"] = debug
     candidate["table_selected_method"] = method
+    if _table_debug_trace_enabled() and method == "slanext":
+        trace = _ensure_table_trace(candidate)
+        if isinstance(trace, dict):
+            trace["postprocessed"] = {
+                "table_rows": _json_safe(candidate.get("table_rows")),
+                "table_structured": _json_safe(candidate.get("table_structured")),
+                "quality": _json_safe(quality),
+                "final_confidence": final_confidence,
+            }
     return candidate
 
 
@@ -2491,7 +2635,7 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
     }
     if region_debug:
         debug["region"] = region_debug
-    return {
+    result = {
         "text": text,
         "confidence": 0.0,
         "segments": [],
@@ -2505,6 +2649,12 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
         "table_debug": debug,
         "raw_results": dicts,
     }
+    if _table_debug_trace_enabled() and not region_debug:
+        debug["table_recognition_trace"] = {
+            "paddle_raw": _paddle_raw_trace(dicts, html, rows, structured_table),
+            "parsed": _table_snapshot(result),
+        }
+    return result
 
 
 def _remap_bbox_value(value: Any, offset_x: float, offset_y: float) -> Any:
@@ -3422,16 +3572,34 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     whole_started = time.perf_counter()
     model = _load_table_model()
     model_inference_count += 1
+    input_trace = _debug_input_trace(image) if _table_debug_trace_enabled() else None
     output = _predict_table_model(model, image)
     logger.info(
         "Table Recognition phase timing: phase=Whole ROI SLANeXt elapsed=%.3fs",
         time.perf_counter() - whole_started,
     )
     slanext_result = _slanext_result_from_output(output, image, started)
+    if _table_debug_trace_enabled():
+        slanext_trace = _ensure_table_trace(slanext_result)
+        if isinstance(slanext_trace, dict):
+            slanext_trace["input"] = input_trace
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
     slanext_assignment_quality = _structured_assignment_quality(
         slanext_candidate.get("table_structured") if isinstance(slanext_candidate.get("table_structured"), dict) else None
     )
+    if _table_debug_trace_enabled():
+        slanext_trace = _ensure_table_trace(slanext_candidate)
+        if isinstance(slanext_trace, dict):
+            slanext_trace["ocr_assignment"] = {
+                "before": _table_snapshot(slanext_candidate),
+                "after": _table_snapshot(slanext_candidate),
+                "changed": False,
+                "quality": _json_safe(slanext_assignment_quality),
+                "assigned_text_boxes": 0,
+                "unassigned_text_boxes": 0,
+                "ambiguous_text_boxes": 0,
+                "attempted": False,
+            }
     slanext_candidate.setdefault("table_debug", {})
     if isinstance(slanext_candidate["table_debug"], dict):
         slanext_candidate["table_debug"]["ocr_cell_assignment"] = {
@@ -3441,7 +3609,24 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             "reason": "initial_quality_gate",
         }
     if not bool(slanext_assignment_quality.get("passed")):
+        assignment_before = _table_snapshot(slanext_candidate) if _table_debug_trace_enabled() else None
         reassigned_candidate, reassignment_debug = _reassign_ocr_text_to_slanext_cells(slanext_candidate)
+        if _table_debug_trace_enabled():
+            assignment_trace_target = reassigned_candidate if bool(reassignment_debug.get("selected")) else slanext_candidate
+            trace = _ensure_table_trace(assignment_trace_target)
+            if isinstance(trace, dict):
+                trace["ocr_assignment"] = {
+                    "before": assignment_before,
+                    "after": _table_snapshot(reassigned_candidate),
+                    "changed": _json_safe(assignment_before) != _json_safe(_table_snapshot(reassigned_candidate)),
+                    "quality": _json_safe(reassignment_debug.get("quality")),
+                    "assigned_text_boxes": int(reassignment_debug.get("assigned_text_boxes") or 0),
+                    "unassigned_text_boxes": int(reassignment_debug.get("unassigned_text_boxes") or 0),
+                    "ambiguous_text_boxes": int(reassignment_debug.get("ambiguous_text_boxes") or 0),
+                    "attempted": bool(reassignment_debug.get("attempted")),
+                    "selected": bool(reassignment_debug.get("selected")),
+                    "reason": reassignment_debug.get("reason"),
+                }
         if bool(reassignment_debug.get("selected")):
             slanext_candidate = _build_table_candidate(reassigned_candidate, "slanext")
             slanext_candidate.setdefault("table_debug", {})
@@ -3459,6 +3644,11 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
     slanext_has_structured_grid = bool(slanext_quality.get("has_structured_cells")) and int(slanext_quality.get("row_count") or 0) > 0 and int(slanext_quality.get("column_count") or 0) > 0
     slanext_needs_fallback = _should_try_borderless_candidate(slanext_quality, slanext_confidence)
     slanext_assignment_needs_fallback = bool(slanext_has_structured_grid) and not bool((slanext_assignment.get("quality") or {}).get("passed"))
+    slanext_trace_for_final = (
+        slanext_debug.get("table_recognition_trace")
+        if _table_debug_trace_enabled() and isinstance(slanext_debug.get("table_recognition_trace"), dict)
+        else None
+    )
 
     if slanext_usable and not slanext_needs_fallback and not slanext_assignment_needs_fallback:
         selected = _attach_candidate_competition(slanext_candidate, candidates, "slanext_passed_quality_gate")
@@ -3476,7 +3666,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
             ocr_inference_count,
             time.perf_counter() - started,
         )
-        return selected
+        return _set_final_table_trace(selected)
 
     try:
         grid_started = time.perf_counter()
@@ -3541,7 +3731,8 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
                         ocr_inference_count,
                         time.perf_counter() - started,
                     )
-                    return selected
+                    selected = _copy_slanext_trace(selected, slanext_trace_for_final)
+                    return _set_final_table_trace(selected)
         except Exception as error:
             logger.info("Forced Semi Table after empty SLANeXt failed: %s", error)
 
@@ -3574,7 +3765,8 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
                         ocr_inference_count,
                         time.perf_counter() - started,
                     )
-                    return selected
+                    selected = _copy_slanext_trace(selected, slanext_trace_for_final)
+                    return _set_final_table_trace(selected)
             logger.info(
                 "Table Recognition phase timing: phase=Geometry Reconstruction elapsed=%.3fs used=%s",
                 time.perf_counter() - geometry_started,
@@ -3585,6 +3777,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
 
     selected, selection_reason = _select_best_table_candidate(candidates)
     selected = _attach_candidate_competition(selected, candidates, selection_reason)
+    selected = _copy_slanext_trace(selected, slanext_trace_for_final)
     selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
     if not _has_usable_table_result(selected):
         try:
@@ -3603,6 +3796,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
                     [*candidates, raw_candidate],
                     "raw_ocr_geometry_after_unusable_structure",
                 )
+                selected = _copy_slanext_trace(selected, slanext_trace_for_final)
                 selected.setdefault("table_semi_analysis", _whole_roi_semi_analysis(semi_analysis))
         except Exception as error:
             logger.warning("Raw OCR geometry table fallback failed: %s", error)
@@ -3618,7 +3812,7 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         ocr_inference_count,
         time.perf_counter() - started,
     )
-    return selected
+    return _set_final_table_trace(selected)
 
 
 def recognize_table_v2(image: np.ndarray) -> Dict[str, Any]:
