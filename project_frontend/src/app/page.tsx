@@ -3311,8 +3311,20 @@ function HomeWorkspace() {
                 currentIndex={currentIndex}
                 imagesList={imagesList}
                 onSwitchToCustom={() => {
+                  setRois((previous) => {
+                    const resolvedParentIds = new Set(
+                      previous
+                        .filter((roi) => roi.isResolvedBlock && typeof roi.parentRoiId === "number")
+                        .map((roi) => roi.parentRoiId as number)
+                    );
+                    return previous.filter((roi) => !(roi.roiMode === "flexible" && resolvedParentIds.has(roi.id)));
+                  });
                   setMatchedTemplate(null);
                   setTemplateDetectionNotice(null);
+                  setSelectedId((current) => {
+                    const selectedRoi = rois.find((roi) => roi.id === current);
+                    return selectedRoi?.roiMode === "flexible" && !selectedRoi.isResolvedBlock ? null : current;
+                  });
                   setClassificationStatus("เปิด Custom OCR ต่อจาก ROI ของ Template ที่ตรวจพบ สามารถเพิ่มหรือแก้ไขกรอบได้ตามต้องการ");
                 }}
                 onIndexChange={(nextIdx) => {
