@@ -16,6 +16,7 @@ from app.table_recognition_v2_adapter import (
     _deduplicate_assigned_table_cells,
     _postprocess_table_result,
     _recognize_raw_ocr_geometry_table,
+    _recognize_text_crops_with_core,
     _reassign_ocr_text_to_slanext_cells,
     _select_best_table_candidate,
     _structured_assignment_quality,
@@ -240,6 +241,23 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(result["table_rows"], [["A1", "B1"], ["A2", ""]])
         self.assertEqual(result["table_structured"]["cells"][0]["text"], "A1")
         self.assertAlmostEqual(result["confidence"], (0.91 + 0.81 + 0.71) / 3)
+
+    def test_table_text_crops_use_shared_text_ocr_core(self) -> None:
+        crops = [np.zeros((20, 80, 3), dtype=np.uint8), np.zeros((20, 80, 3), dtype=np.uint8)]
+
+        with patch(
+            "app.ocr_adapter.recognize_text_roi",
+            side_effect=[
+                {"text": "A", "confidence": 0.91},
+                {"text": "B", "confidence": 0.92},
+            ],
+        ) as recognize:
+            recognitions, debug = _recognize_text_crops_with_core(crops, "table_core_test")
+
+        self.assertEqual([item["text"] for item in recognitions], ["A", "B"])
+        self.assertEqual(debug["ocr_core"], "recognize_text_roi")
+        self.assertEqual(debug["crop_count"], 2)
+        self.assertEqual(recognize.call_count, 2)
 
     @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
     def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:

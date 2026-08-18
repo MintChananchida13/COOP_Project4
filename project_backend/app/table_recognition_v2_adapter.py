@@ -13,7 +13,6 @@ import numpy as np
 from .model_runtime_client import ModelRuntimeUnavailableError, remote_recognize_table
 from .ocr_postprocess import normalize_ocr_text, normalize_table_rows, parse_table_html_with_bs4
 from .layout_analysis_service import LayoutAnalysisUnavailableError, detect_text_boxes
-from .paddle_thai_ocr_adapter import PADDLE_THAI_OCR_MODEL_NAME, PaddleThaiOcrUnavailableError, run_paddle_thai_ocr_batch
 from .table_grid_analyzer import analyze_table_regions
 
 
@@ -527,6 +526,45 @@ def _region_bbox(region: Dict[str, Any], scale_factor: float = 1.0) -> Optional[
     if width <= 0 or height <= 0:
         return None
     return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _recognize_text_crops_with_core(crops: List[np.ndarray], status_prefix: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not crops:
+        return ([], {"status": f"{status_prefix}_no_crops", "ocr_core": "recognize_text_roi", "crop_count": 0})
+    try:
+        recognitions = run_paddle_thai_ocr_batch(crops)
+    except Exception as error:
+        logger.info("%s OCR core failed: %s", status_prefix, error)
+        return (
+            [{"text": "", "confidence": 0.0, "error": str(error)} for _ in crops],
+            {"status": f"{status_prefix}_ocr_core_failed", "reason": str(error), "ocr_core": "recognize_text_roi", "crop_count": len(crops)},
+        )
+    return (
+        recognitions,
+        {
+            "status": status_prefix,
+            "ocr_core": "recognize_text_roi",
+            "crop_count": len(crops),
+            "failure_count": sum(1 for item in recognitions if isinstance(item, dict) and item.get("error")),
+        },
+    )
+
+
+def run_paddle_thai_ocr_batch(crops: List[np.ndarray]) -> List[Dict[str, Any]]:
+    """Compatibility seam for tests; production routes table text crops through the shared OCR core."""
+    try:
+        from .ocr_adapter import recognize_text_roi
+    except Exception as error:
+        return [{"text": "", "confidence": 0.0, "error": str(error)} for _ in crops]
+
+    recognitions: List[Dict[str, Any]] = []
+    for crop in crops:
+        try:
+            result = recognize_text_roi(crop)
+            recognitions.append(result if isinstance(result, dict) else {"text": "", "confidence": 0.0})
+        except Exception as error:
+            recognitions.append({"text": "", "confidence": 0.0, "error": str(error)})
+    return recognitions
 
 
 def _merge_bboxes(boxes: List[Dict[str, float]]) -> Optional[Dict[str, float]]:
@@ -1486,17 +1524,13 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
     if len(crops) < _BORDERLESS_MIN_ROWS * _BORDERLESS_MIN_COLUMNS:
         return None
 
-    try:
-        ocr_started = time.perf_counter()
-        recognitions = run_paddle_thai_ocr_batch(crops)
-        logger.info(
-            "Table Recognition phase timing: phase=Geometry Reconstruction OCR batch crops=%s elapsed=%.3fs",
-            len(crops),
-            time.perf_counter() - ocr_started,
-        )
-    except PaddleThaiOcrUnavailableError as error:
-        logger.info("Borderless table OCR failed: %s", error)
-        return None
+    ocr_started = time.perf_counter()
+    recognitions, ocr_core_debug = _recognize_text_crops_with_core(crops, "borderless_table")
+    logger.info(
+        "Table Recognition phase timing: phase=Geometry Reconstruction OCR core crops=%s elapsed=%.3fs",
+        len(crops),
+        time.perf_counter() - ocr_started,
+    )
 
     cluster_started = time.perf_counter()
     cells: List[Dict[str, Any]] = []
@@ -1561,6 +1595,7 @@ def _recognize_borderless_table(image: np.ndarray) -> Optional[Dict[str, Any]]:
             "scale_factor": scale_factor,
             "input_size": [int(input_width), int(input_height)],
             "working_size": [int(working_img.shape[1]), int(working_img.shape[0])],
+            "ocr_core": ocr_core_debug,
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
         },
     }
@@ -1619,17 +1654,13 @@ def _recognize_raw_ocr_geometry_table(image: np.ndarray) -> Optional[Dict[str, A
     if not crops:
         return None
 
-    try:
-        ocr_started = time.perf_counter()
-        recognitions = run_paddle_thai_ocr_batch(crops)
-        logger.info(
-            "Table Recognition phase timing: phase=Raw OCR Geometry OCR batch crops=%s elapsed=%.3fs",
-            len(crops),
-            time.perf_counter() - ocr_started,
-        )
-    except PaddleThaiOcrUnavailableError as error:
-        logger.info("Raw OCR geometry table OCR failed: %s", error)
-        return None
+    ocr_started = time.perf_counter()
+    recognitions, ocr_core_debug = _recognize_text_crops_with_core(crops, "raw_ocr_geometry_table")
+    logger.info(
+        "Table Recognition phase timing: phase=Raw OCR Geometry OCR core crops=%s elapsed=%.3fs",
+        len(crops),
+        time.perf_counter() - ocr_started,
+    )
 
     cells: List[Dict[str, Any]] = []
     confidence_values: List[float] = []
@@ -1686,6 +1717,7 @@ def _recognize_raw_ocr_geometry_table(image: np.ndarray) -> Optional[Dict[str, A
             "row_count": len(rows),
             "column_count": max((len(row) for row in rows), default=0),
             "input_size": [int(input_width), int(input_height)],
+            "ocr_core": ocr_core_debug,
             "elapsed_seconds": round(time.perf_counter() - phase_started, 3),
         },
     }
@@ -1735,11 +1767,7 @@ def _ocr_cells_from_text_detection(image: np.ndarray, status_prefix: str) -> tup
     if not crops:
         return ([], [], {"status": f"{status_prefix}_no_valid_crops", "detected_boxes": len(regions)})
 
-    try:
-        recognitions = run_paddle_thai_ocr_batch(crops)
-    except Exception as error:
-        logger.info("%s OCR failed: %s", status_prefix, error)
-        return ([], [], {"status": f"{status_prefix}_ocr_failed", "reason": str(error), "detected_boxes": len(regions)})
+    recognitions, ocr_core_debug = _recognize_text_crops_with_core(crops, status_prefix)
     cells: List[Dict[str, Any]] = []
     confidence_values: List[float] = []
     for region, recognition in zip(valid_regions, recognitions):
@@ -1762,7 +1790,7 @@ def _ocr_cells_from_text_detection(image: np.ndarray, status_prefix: str) -> tup
             "center_x": bbox["x"] + bbox["width"] / 2,
             "center_y": bbox["y"] + bbox["height"] / 2,
         })
-    return (cells, confidence_values, {"status": status_prefix, "detected_boxes": len(regions), "recognized_cells": len(cells)})
+    return (cells, confidence_values, {"status": status_prefix, "detected_boxes": len(regions), "recognized_cells": len(cells), "ocr_core": ocr_core_debug})
 
 
 def _ocr_cells_from_grid_boundaries(
@@ -1806,11 +1834,7 @@ def _ocr_cells_from_grid_boundaries(
     if not crops:
         return (rows, [], [], {"status": f"{status_prefix}_no_empty_grid_cells", "cell_crops": 0, "filled_cells": 0})
 
-    try:
-        recognitions = run_paddle_thai_ocr_batch(crops)
-    except Exception as error:
-        logger.info("%s per-cell OCR failed: %s", status_prefix, error)
-        return (rows, [], [], {"status": f"{status_prefix}_ocr_failed", "reason": str(error), "cell_crops": len(crops), "filled_cells": 0})
+    recognitions, ocr_core_debug = _recognize_text_crops_with_core(crops, status_prefix)
 
     source_cells: List[Dict[str, Any]] = []
     confidence_values: List[float] = []
@@ -1845,7 +1869,7 @@ def _ocr_cells_from_grid_boundaries(
         rows,
         source_cells,
         confidence_values,
-        {"status": status_prefix, "cell_crops": len(crops), "filled_cells": filled},
+        {"status": status_prefix, "cell_crops": len(crops), "filled_cells": filled, "ocr_core": ocr_core_debug},
     )
 
 
@@ -1861,7 +1885,7 @@ def _recognize_coordinate_based_semi_table(image: np.ndarray, analysis: Dict[str
 
     try:
         ocr_cells, confidence_values, ocr_debug = _ocr_cells_from_text_detection(image, "coordinate_based_semi")
-    except (LayoutAnalysisUnavailableError, PaddleThaiOcrUnavailableError) as error:
+    except (LayoutAnalysisUnavailableError, RuntimeError) as error:
         logger.info("Coordinate-based semi OCR failed: %s", error)
         return None
 
