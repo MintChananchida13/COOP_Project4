@@ -105,6 +105,19 @@ class FlexibleRoiTests(unittest.TestCase):
         self.assertEqual(len(paragraphs), 1)
         self.assertEqual(paragraphs[0]["line_count"], 4)
 
+    def test_paragraph_geometry_does_not_split_continuous_lines_with_low_overlap(self):
+        lines = [
+            {"roi": {"x_ratio": 0.10, "y_ratio": 0.10, "width_ratio": 0.20, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.36, "y_ratio": 0.16, "width_ratio": 0.22, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.12, "y_ratio": 0.22, "width_ratio": 0.24, "height_ratio": 0.05}},
+            {"roi": {"x_ratio": 0.38, "y_ratio": 0.28, "width_ratio": 0.21, "height_ratio": 0.05}},
+        ]
+
+        paragraphs = _paragraph_regions_from_text_lines(lines)
+
+        self.assertEqual(len(paragraphs), 1)
+        self.assertEqual(paragraphs[0]["line_count"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()

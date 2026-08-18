@@ -54,15 +54,16 @@ def ocr_roi(image_path: str, roi: Dict[str, Any]) -> Dict[str, Any]:
     crop = image.crop((x, y, right, bottom))
     try:
         bgr_crop = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2BGR)
-        result = recognize_text_crop_with_detection(bgr_crop)
+        result = recognize_text_roi(bgr_crop)
     except PaddleThaiOcrUnavailableError as error:
         raise OcrUnavailableError(str(error)) from error
 
     return {
-        "text": normalize_ocr_text(result.get("text")),
+        "text": result.get("text") or "",
         "confidence": round(float(result.get("confidence") or 0.0), 4),
         "preprocessing": result.get("preprocessing") or "paddle_text_recognition",
         "segments": result.get("segments") or [],
+        "raw_segments": result.get("raw_segments") or result.get("segments") or [],
         "engine": result.get("engine") or "paddle_thai_ocr",
         "model": result.get("model"),
         "text_detection": result.get("text_detection"),
@@ -306,6 +307,22 @@ def recognize_text_crop_with_detection(bgr_crop) -> Dict[str, Any]:
     return _recognize_text_crops_with_detection([("roi", bgr_crop)])["roi"]
 
 
+def recognize_text_roi(bgr_crop) -> Dict[str, Any]:
+    result = recognize_text_crop_with_detection(bgr_crop)
+    segments = result.get("segments") or []
+    return {
+        "text": normalize_ocr_text(result.get("text")),
+        "confidence": round(float(result.get("confidence") or 0.0), 4),
+        "preprocessing": result.get("preprocessing") or "paddle_text_detection_then_recognition",
+        "segments": segments,
+        "raw_segments": segments,
+        "engine": result.get("engine") or "paddle_text_detection+paddle_thai_ocr",
+        "model": result.get("model"),
+        "text_detection": result.get("text_detection"),
+        "error": result.get("error"),
+    }
+
+
 def _crop_roi_from_image(image, roi: Dict[str, Any]):
     image_width, image_height = image.size
     x_ratio = float(roi.get("x_ratio", 0) or 0)
@@ -396,11 +413,13 @@ def ocr_rois(image_path: str, roi_items: List[Dict[str, Any]]) -> Dict[str, Dict
         raise OcrUnavailableError(str(error)) from error
 
     for key, result in text_results.items():
+        segments = result.get("segments") or []
         results[key] = {
             "text": normalize_ocr_text(result.get("text")),
             "confidence": round(float(result.get("confidence") or 0.0), 4),
             "preprocessing": result.get("preprocessing") or "paddle_text_detection_then_recognition",
-            "segments": result.get("segments") or [],
+            "segments": segments,
+            "raw_segments": segments,
             "engine": result.get("engine") or "paddle_text_detection+paddle_thai_ocr",
             "model": result.get("model"),
             "text_detection": result.get("text_detection"),

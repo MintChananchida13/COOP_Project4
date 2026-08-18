@@ -392,12 +392,17 @@ function roiFromLayoutBlock(
   return null;
 }
 
+function isCountableWorkspaceField(roi: ROI & { pageIndex?: number }) {
+  return roi.enabled !== false && !(roi.roiMode === "flexible" && !roi.isResolvedBlock);
+}
+
 async function buildWholePageAutoRois(
   sourceImages: string[],
   existingRois: (ROI & { pageIndex?: number })[],
   excludedPageIndexes: Set<number>
 ): Promise<(ROI & { pageIndex?: number; roiCoordinateSource?: string })[]> {
   const autoRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[] = [];
+  let nextFieldNumber = existingRois.filter(isCountableWorkspaceField).length + 1;
   for (const [pageIndex, sourceImage] of sourceImages.entries()) {
     if (excludedPageIndexes.has(pageIndex) || !sourceImage) continue;
     let img: HTMLImageElement;
@@ -418,9 +423,6 @@ async function buildWholePageAutoRois(
       console.warn("Whole-page auto ROI analysis failed.", error);
       continue;
     }
-    const existingFieldCountOnPage =
-      existingRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length +
-      autoRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length;
     regions.forEach((block, index) => {
       const rect = roiFromLayoutBlock(block, renderedWidth, renderedHeight, scaleX, scaleY);
       if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 1 || rect.height <= 1) {
@@ -429,7 +431,7 @@ async function buildWholePageAutoRois(
       const type = normalizeResolvedBlockType(block);
       autoRois.push({
         id: stableNumericId(`matched-template-extra-page:${pageIndex}:${index}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`),
-        fieldName: `field_${existingFieldCountOnPage + autoRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length + 1}`,
+        fieldName: `field_${nextFieldNumber}`,
         x: rect.x,
         y: rect.y,
         width: rect.width,
@@ -445,6 +447,7 @@ async function buildWholePageAutoRois(
         roiCoordinateSource: "whole_page_auto_roi",
         layoutType: String(block.layout_type || block.layoutType || type),
       });
+      nextFieldNumber += 1;
     });
   }
   return autoRois;
@@ -957,6 +960,7 @@ async function buildFlexibleResolvedDisplayRois(
 ): Promise<(ROI & { pageIndex?: number })[]> {
   const byPageImage = new Map<number, HTMLImageElement>();
   const resolved: (ROI & { pageIndex?: number })[] = [];
+  let nextFieldNumber = sourceRois.filter(isCountableWorkspaceField).length + 1;
   for (const roi of sourceRois) {
     if (roi.roiMode !== "flexible") continue;
     const pageIndex = Number(roi.pageIndex ?? 0);
@@ -984,10 +988,9 @@ async function buildFlexibleResolvedDisplayRois(
             roi: { x_ratio: 0, y_ratio: 0, width_ratio: 1, height_ratio: 1 },
           },
         ];
-    const existingFieldCountOnPage =
-      sourceRois.filter((item) => Number(item.pageIndex ?? 0) === pageIndex && !item.isResolvedBlock).length +
-      resolved.filter((item) => Number(item.pageIndex ?? 0) === pageIndex).length;
-    resolved.push(...createResolvedBlockDisplayRois(roi, blocks, scaleX, scaleY, pageIndex, existingFieldCountOnPage + 1));
+    const nextResolved = createResolvedBlockDisplayRois(roi, blocks, scaleX, scaleY, pageIndex, nextFieldNumber);
+    resolved.push(...nextResolved);
+    nextFieldNumber += nextResolved.length;
   }
   return resolved;
 }

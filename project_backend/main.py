@@ -19,8 +19,16 @@ from PIL import Image
 from pydantic import BaseModel
 
 from app.routes import router as blueprint_router
-from app.layout_analysis_service import LayoutAnalysisUnavailableError, analyze_layout, detect_text_boxes
-from app.ocr_adapter import recognize_text_crop_with_detection
+from app.layout_analysis_service import (
+    AUTO_ROI_EXPAND_BOTTOM_PX,
+    AUTO_ROI_EXPAND_LEFT_PX,
+    AUTO_ROI_EXPAND_RIGHT_PX,
+    AUTO_ROI_EXPAND_TOP_PX,
+    LayoutAnalysisUnavailableError,
+    analyze_layout,
+    detect_text_boxes,
+)
+from app.ocr_adapter import recognize_text_roi
 from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
@@ -33,6 +41,23 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 OUTPUT_DIR = "cropped_rois"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 logger = logging.getLogger(__name__)
+
+
+def _expand_roi_ratio_by_auto_padding(roi: Dict[str, float], image_width: int, image_height: int) -> Dict[str, float]:
+    pad_left = AUTO_ROI_EXPAND_LEFT_PX / max(float(image_width), 1.0)
+    pad_right = AUTO_ROI_EXPAND_RIGHT_PX / max(float(image_width), 1.0)
+    pad_top = AUTO_ROI_EXPAND_TOP_PX / max(float(image_height), 1.0)
+    pad_bottom = AUTO_ROI_EXPAND_BOTTOM_PX / max(float(image_height), 1.0)
+    left = max(0.0, float(roi.get("x_ratio") or 0.0) - pad_left)
+    top = max(0.0, float(roi.get("y_ratio") or 0.0) - pad_top)
+    right = min(1.0, float(roi.get("x_ratio") or 0.0) + float(roi.get("width_ratio") or 0.0) + pad_right)
+    bottom = min(1.0, float(roi.get("y_ratio") or 0.0) + float(roi.get("height_ratio") or 0.0) + pad_bottom)
+    return {
+        "x_ratio": left,
+        "y_ratio": top,
+        "width_ratio": max(0.0, right - left),
+        "height_ratio": max(0.0, bottom - top),
+    }
 
 
 class ROIModel(BaseModel):
@@ -404,7 +429,7 @@ def process_roi_with_engine(crop_img: np.ndarray, roi: ROIModel) -> Dict[str, An
     if extraction_method == "ocr_table":
         return process_table_roi_with_engine(crop_img)
 
-    return recognize_text_crop_with_detection(crop_img)
+    return recognize_text_roi(crop_img)
 
 
 def _region_type(region: Dict[str, Any]) -> str:
@@ -549,6 +574,8 @@ def _text_line_regions_from_image(image: np.ndarray) -> List[Dict[str, Any]]:
                 "source": "paddle_text_detection_line",
                 "confidence": region.get("confidence", 0.0),
                 "roi": roi,
+                "image_width": w_img,
+                "image_height": h_img,
                 "_line_index": index,
             }
         )
@@ -605,30 +632,31 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope:
         gap_ratio = gap / max(median_gap, median_height * 0.25, 1e-9)
         indent_ratio = indent_delta / max(median_width, median_height, 1e-9)
         first_line_indent_ratio = first_line_indent / max(median_width, median_height, 1e-9)
-        gap_evidence = gap_ratio >= 1.65 and gap >= median_height * 0.65
-        indent_evidence = indent_ratio >= 0.09
-        first_line_evidence = first_line_indent_ratio >= 0.12 and current_x > prev_x
-        short_previous_evidence = previous_width_ratio <= 0.68
-        alignment_break_evidence = overlap <= 0.42
+        gap_evidence = gap_ratio >= 1.85 and gap >= median_height * 0.85
+        indent_evidence = indent_ratio >= 0.12
+        first_line_evidence = first_line_indent_ratio >= 0.16 and current_x > prev_x
+        short_previous_evidence = previous_width_ratio <= 0.62
+        alignment_break_evidence = overlap <= 0.28
         alignment_merge_evidence = overlap >= 0.68 and indent_ratio < 0.12
-        primary_signal_count = sum(1 for value in (gap_evidence, indent_evidence, first_line_evidence, alignment_break_evidence) if value)
-        supporting_signal_count = primary_signal_count + (1 if short_previous_evidence and gap_ratio >= 1.1 else 0)
+        primary_signal_count = sum(1 for value in (gap_evidence, indent_evidence, first_line_evidence) if value)
+        supporting_signal_count = primary_signal_count + (1 if short_previous_evidence and gap_ratio >= 1.25 else 0) + (1 if alignment_break_evidence and gap_ratio >= 1.35 else 0)
         break_score = 0.0
         if gap_evidence:
-            break_score += 0.35
+            break_score += 0.45
         if indent_evidence:
             break_score += 0.35
         if first_line_evidence:
             break_score += 0.45
-        if short_previous_evidence and gap_ratio >= 1.1:
+        if short_previous_evidence and gap_ratio >= 1.25:
             break_score += 0.2
-        if alignment_break_evidence:
-            break_score += 0.15
+        if alignment_break_evidence and gap_ratio >= 1.35:
+            break_score += 0.1
         should_break = (
             supporting_signal_count >= 2
             and primary_signal_count >= 1
-            and break_score >= 0.75
-            and not (alignment_merge_evidence and not gap_evidence)
+            and break_score >= 0.85
+            and (gap_evidence or (first_line_evidence and gap_ratio >= 1.35))
+            and not (alignment_merge_evidence and gap_ratio < 1.85)
         )
         logger.debug(
             "Flexible paragraph pair scope=%s pair=%s gap=%.5f gap_ratio=%.3f indent=%.5f "
@@ -656,11 +684,20 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope:
         groups.append(current)
 
     paragraphs: List[Dict[str, Any]] = []
+    image_width = int(lines[0].get("image_width") or 1) if lines else 1
+    image_height = int(lines[0].get("image_height") or 1) if lines else 1
     for index, group in enumerate(groups, start=1):
         left = min(float(line["roi"].get("x_ratio") or 0.0) for line in group)
         top = min(float(line["roi"].get("y_ratio") or 0.0) for line in group)
         right = max(float(line["roi"].get("x_ratio") or 0.0) + float(line["roi"].get("width_ratio") or 0.0) for line in group)
         bottom = max(float(line["roi"].get("y_ratio") or 0.0) + float(line["roi"].get("height_ratio") or 0.0) for line in group)
+        original_roi = {
+            "x_ratio": max(0.0, left),
+            "y_ratio": max(0.0, top),
+            "width_ratio": max(0.0, min(1.0, right) - max(0.0, left)),
+            "height_ratio": max(0.0, min(1.0, bottom) - max(0.0, top)),
+        }
+        expanded_roi = _expand_roi_ratio_by_auto_padding(original_roi, image_width, image_height)
         paragraphs.append(
             {
                 "type": "text",
@@ -668,11 +705,19 @@ def _paragraph_regions_from_text_lines(lines: List[Dict[str, Any]], debug_scope:
                 "layout_type": "paragraph",
                 "source": "flexible_paragraph_geometry",
                 "confidence": min(1.0, sum(float(line.get("confidence") or 0.0) for line in group) / max(len(group), 1)),
-                "roi": {
-                    "x_ratio": max(0.0, left),
-                    "y_ratio": max(0.0, top),
-                    "width_ratio": max(0.0, min(1.0, right) - max(0.0, left)),
-                    "height_ratio": max(0.0, min(1.0, bottom) - max(0.0, top)),
+                "roi": expanded_roi,
+                "roi_expansion": {
+                    "enabled": True,
+                    "reason": "flexible_paragraph_auto_roi_padding",
+                    "original_roi": original_roi,
+                    "expanded_roi": expanded_roi,
+                    "padding": {
+                        "unit": "px",
+                        "top": AUTO_ROI_EXPAND_TOP_PX,
+                        "bottom": AUTO_ROI_EXPAND_BOTTOM_PX,
+                        "left": AUTO_ROI_EXPAND_LEFT_PX,
+                        "right": AUTO_ROI_EXPAND_RIGHT_PX,
+                    },
                 },
                 "line_count": len(group),
                 "paragraph_index": index,
@@ -839,10 +884,10 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
                 table_structured = ocr_result.get("table_structured")
                 table_html = ocr_result.get("table_html")
             else:
-                ocr_result = recognize_text_crop_with_detection(block_img)
-                text = normalize_ocr_text(ocr_result.get("text"))
+                ocr_result = recognize_text_roi(block_img)
+                text = str(ocr_result.get("text") or "")
                 confidence = float(ocr_result.get("confidence") or 0.0)
-                raw_segments = ocr_result.get("segments", [])
+                raw_segments = ocr_result.get("raw_segments") or ocr_result.get("segments", [])
             error_message = None
         except Exception as error:
             text = ""
@@ -874,6 +919,7 @@ def _ocr_flexible_regions(search_img: np.ndarray, regions: List[Dict[str, Any]],
         "text": "\n".join(texts),
         "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
         "segments": segments,
+        "raw_segments": segments,
     }
 
 
@@ -892,6 +938,7 @@ def process_flexible_text_roi(search_img: np.ndarray) -> Dict[str, Any]:
         "text": result.get("text") or "",
         "confidence": float(result.get("confidence") or 0.0),
         "segments": result.get("segments") or [],
+        "raw_segments": result.get("raw_segments") or result.get("segments") or [],
         "attempts": attempts,
         "preprocessing": "flexible_roi_search_boundary_paragraph_blocks",
         "engine": "flexible_roi_text",
@@ -1017,8 +1064,8 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
             h = min(h, h_img - y)
 
             crop_img = opencv_img[y : y + h, x : x + w]
-            ocr_result = run_paddle_thai_ocr(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": []}
-            text = normalize_ocr_text(ocr_result.get("text"))
+            ocr_result = recognize_text_roi(crop_img) if crop_img.size > 0 else {"text": "", "confidence": 0.0, "segments": [], "raw_segments": []}
+            text = str(ocr_result.get("text") or "")
             conf = float(ocr_result.get("confidence") or 0.0)
             filepath = ""
             if crop_img.size > 0:
@@ -1042,7 +1089,7 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
                         [float(x + w), float(y + h)],
                         [float(x), float(y + h)],
                     ],
-                    "raw_segments": ocr_result.get("segments", []),
+                    "raw_segments": ocr_result.get("raw_segments") or ocr_result.get("segments", []),
                     "ocr_attempts": [],
                     "ocr_preprocessing": ocr_result.get("preprocessing", "paddle_text_detection_crop"),
                     "ocr_engine": ocr_result.get("engine", "paddle_thai_ocr"),
@@ -1088,7 +1135,7 @@ def process_document_payload(payload: DocumentPayload) -> Dict[str, Any]:
                     "extraction_method": roi.extractionMethod,
                     "roi_mode": roi.roiMode or "fix",
                     "expected_content": roi.expectedContent,
-                    "raw_segments": ocr_result.get("segments", []),
+                    "raw_segments": ocr_result.get("raw_segments") or ocr_result.get("segments", []),
                     "ocr_attempts": ocr_result.get("attempts", []),
                     "ocr_preprocessing": ocr_result.get("preprocessing", "none"),
                     "ocr_engine": ocr_result.get("engine", "unknown"),
