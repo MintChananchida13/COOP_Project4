@@ -175,6 +175,8 @@ export interface Template {
   description?: string;
   sharedFields?: string[];
   creationType?: 'new_template' | 'new_version' | string;
+  detectionMode?: 'all_pages' | 'main_page' | string;
+  mainPageNumber?: number;
   pageCount: number;
   similarityThreshold: number;
   finalConfidenceThreshold: number;

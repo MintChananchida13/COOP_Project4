@@ -93,6 +93,18 @@ def _normalize_expected_content(value: Optional[str]) -> Optional[str]:
     return "text" if value == "text" else None
 
 
+def _normalize_detection_mode(value: Optional[str]) -> str:
+    return "main_page" if value == "main_page" else "all_pages"
+
+
+def _normalize_main_page_number(value: Any) -> int:
+    try:
+        page_number = int(value or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, page_number)
+
+
 def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
@@ -100,6 +112,7 @@ def _connect() -> Any:
     _ensure_template_layout_references_table(conn)
     _ensure_requested_field_metadata_columns(conn)
     _ensure_template_matching_weight_columns(conn)
+    _ensure_template_detection_mode_columns(conn)
     _ensure_template_version_columns(conn)
     _ensure_template_page_layout_signature_column(conn)
     _ensure_template_field_verification_columns(conn)
@@ -125,6 +138,15 @@ def _ensure_template_request_page_review_columns(conn: Any) -> None:
         conn.execute("ALTER TABLE template_request_pages ADD COLUMN source_file_id TEXT")
     if columns and "source_file_name" not in columns:
         conn.execute("ALTER TABLE template_request_pages ADD COLUMN source_file_name TEXT")
+    conn.commit()
+
+
+def _ensure_template_detection_mode_columns(conn: Any) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(templates)").fetchall()}
+    if columns and "detection_mode" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN detection_mode TEXT NOT NULL DEFAULT 'all_pages'")
+    if columns and "main_page_number" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN main_page_number INTEGER NOT NULL DEFAULT 1")
     conn.commit()
 
 
@@ -356,6 +378,8 @@ def _template_row_to_api(row: Any) -> Dict[str, Any]:
         "description": item.get("description"),
         "shared_fields": shared_fields if isinstance(shared_fields, list) else [],
         "creation_type": item.get("creation_type") or "new_template",
+        "detection_mode": _normalize_detection_mode(item.get("detection_mode")),
+        "main_page_number": _normalize_main_page_number(item.get("main_page_number")),
         "page_count": item["page_count"],
         "similarity_threshold": item["similarity_threshold"],
         "final_confidence_threshold": item["final_confidence_threshold"],
@@ -510,7 +534,57 @@ def _image_to_bgr_array(image: Any):
         return None
 
 
-def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dict[str, Any]]:
+def _field_roi_to_layout_region(field: Dict[str, Any], *, source: str) -> Optional[Dict[str, Any]]:
+    try:
+        roi = {
+            "x_ratio": float(field.get("roi_x_ratio") or 0.0),
+            "y_ratio": float(field.get("roi_y_ratio") or 0.0),
+            "width_ratio": float(field.get("roi_width_ratio") or 0.0),
+            "height_ratio": float(field.get("roi_height_ratio") or 0.0),
+        }
+    except (TypeError, ValueError):
+        return None
+    if roi["width_ratio"] <= 0 or roi["height_ratio"] <= 0:
+        return None
+    return {
+        "type": _normalize_data_type(field.get("data_type")),
+        "roi": roi,
+        "confidence": 1.0,
+        "source": source,
+    }
+
+
+def _signature_layout_overrides(fields: Optional[List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    ignored_regions: List[Dict[str, Any]] = []
+    stable_regions: List[Dict[str, Any]] = []
+    for field in fields or []:
+        region = _field_roi_to_layout_region(field, source="template_roi")
+        if not region:
+            continue
+        if _normalize_roi_mode(field.get("roi_mode")) == "flexible":
+            ignored_regions.append(region["roi"])
+            stable_regions.append({**region, "source": "flexible_search_boundary"})
+        else:
+            stable_regions.append({**region, "source": "fix_roi"})
+    return {"ignored_regions": ignored_regions, "stable_regions": stable_regions}
+
+
+def _template_fields_for_page(conn: Any, template_id: str, page_number: int) -> List[Dict[str, Any]]:
+    return [
+        _row_to_dict(row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM template_fields
+            WHERE template_id = ? AND page_number = ?
+            ORDER BY sort_order ASC, created_at ASC
+            """,
+            (template_id, page_number),
+        ).fetchall()
+    ]
+
+
+def _generate_layout_signature_for_source(source: Optional[str], fields: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     image = _load_image_source(source)
     if image is None:
         return None
@@ -518,10 +592,21 @@ def _generate_layout_signature_for_source(source: Optional[str]) -> Optional[Dic
     if opencv_img is None:
         return None
     analysis = analyze_layout(opencv_img)
+    overrides = _signature_layout_overrides(fields)
+    if overrides["ignored_regions"]:
+        analysis["ignored_regions"] = overrides["ignored_regions"]
+    if overrides["stable_regions"]:
+        analysis["stable_regions"] = overrides["stable_regions"]
     return build_layout_signature(analysis)
 
 
 def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> None:
+    template_row = conn.execute(
+        "SELECT detection_mode, main_page_number FROM templates WHERE id = ?",
+        (template_id,),
+    ).fetchone()
+    detection_mode = _normalize_detection_mode(template_row["detection_mode"] if template_row else None)
+    main_page_number = _normalize_main_page_number(template_row["main_page_number"] if template_row else None)
     rows = conn.execute(
         """
         SELECT id, page_number, normalized_image_url, sample_image_url, layout_signature_json
@@ -545,6 +630,7 @@ def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> Non
             (template_id, row["id"]),
         ).fetchone()
         if existing:
+            is_canonical = 1 if (detection_mode == "main_page" and int(row["page_number"]) == main_page_number) or (detection_mode != "main_page" and int(row["page_number"]) == 1) else 0
             conn.execute(
                 """
                 UPDATE template_layout_references
@@ -552,13 +638,14 @@ def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> Non
                     image_url = ?,
                     image_source = 'template_page',
                     review_status = 'approved',
-                    is_canonical = 1,
+                    is_canonical = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (row["page_number"], source, existing["id"]),
+                (row["page_number"], source, is_canonical, existing["id"]),
             )
             continue
+        is_canonical = 1 if (detection_mode == "main_page" and int(row["page_number"]) == main_page_number) or (detection_mode != "main_page" and int(row["page_number"]) == 1) else 0
         conn.execute(
             """
             INSERT INTO template_layout_references (
@@ -566,7 +653,7 @@ def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> Non
                 image_source, review_status, is_canonical, layout_signature_json,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'template_page', 'approved', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, 'template_page', 'approved', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             (
                 _stub_id("tpl_ref"),
@@ -574,6 +661,7 @@ def _ensure_template_pages_layout_references(conn: Any, template_id: str) -> Non
                 row["id"],
                 row["page_number"],
                 source,
+                is_canonical,
                 row["layout_signature_json"],
             ),
         )
@@ -592,7 +680,7 @@ def _refresh_template_layout_signatures(conn: Any, template_id: str) -> List[Dic
     refreshed: List[Dict[str, Any]] = []
     for row in rows:
         source = row["normalized_image_url"] or row["sample_image_url"]
-        signature = _generate_layout_signature_for_source(source)
+        signature = _generate_layout_signature_for_source(source, _template_fields_for_page(conn, template_id, int(row["page_number"])))
         if signature is None:
             refreshed.append(
                 {
@@ -637,7 +725,7 @@ def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -
     ).fetchall()
     refreshed: List[Dict[str, Any]] = []
     for row in rows:
-        signature = _generate_layout_signature_for_source(row["image_url"])
+        signature = _generate_layout_signature_for_source(row["image_url"], _template_fields_for_page(conn, template_id, int(row["page_number"])))
         if signature is None:
             refreshed.append(
                 {
@@ -3183,11 +3271,12 @@ class AdminTemplateService:
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
                     template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
+                    detection_mode, main_page_number,
                     similarity_threshold, final_confidence_threshold,
                     layout_weight, text_anchor_weight, image_anchor_weight, created_by,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -3198,6 +3287,8 @@ class AdminTemplateService:
                     template_id,
                     payload.description,
                     json.dumps(payload.shared_fields or [], ensure_ascii=False),
+                    _normalize_detection_mode(getattr(payload, "detection_mode", None)),
+                    _normalize_main_page_number(getattr(payload, "main_page_number", None)),
                     payload.similarity_threshold,
                     payload.final_confidence_threshold,
                     payload.layout_weight,
@@ -4185,9 +4276,19 @@ class AdminTemplateService:
             "layout_weight": "layout_weight",
             "text_anchor_weight": "text_anchor_weight",
             "image_anchor_weight": "image_anchor_weight",
+            "detection_mode": "detection_mode",
+            "main_page_number": "main_page_number",
             "rejection_reason": "rejection_reason",
         }
-        updates = [(column_map[key], value) for key, value in patch.items() if key in column_map]
+        updates = []
+        for key, value in patch.items():
+            if key not in column_map:
+                continue
+            if key == "detection_mode":
+                value = _normalize_detection_mode(value)
+            if key == "main_page_number":
+                value = _normalize_main_page_number(value)
+            updates.append((column_map[key], value))
         if "shared_fields" in patch:
             updates.append(("shared_fields_json", json.dumps(patch["shared_fields"] or [], ensure_ascii=False)))
         if updates:
@@ -4663,6 +4764,10 @@ class AdminTemplateService:
                 approved_pages = [page for page in request_pages if page["sample_image_url"]]
             if not approved_pages:
                 raise HTTPException(status_code=409, detail="Upload at least one reference image before creating a version.")
+            detection_mode = _normalize_detection_mode(payload.detection_mode or base_template_row.get("detection_mode"))
+            main_page_number = _normalize_main_page_number(payload.main_page_number or base_template_row.get("main_page_number"))
+            if main_page_number > len(approved_pages):
+                main_page_number = 1
 
             group_id = base_template_row.get("template_group_id") or base_template_row["id"]
             max_version_row = conn.execute(
@@ -4694,11 +4799,12 @@ class AdminTemplateService:
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
                     template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
+                    detection_mode, main_page_number,
                     similarity_threshold, final_confidence_threshold,
                     layout_weight, text_anchor_weight, image_anchor_weight, created_by,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, 'new_version', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, 'new_version', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -4712,6 +4818,8 @@ class AdminTemplateService:
                     payload.base_template_id,
                     payload.description if payload.description is not None else base_template_row.get("description"),
                     json.dumps(shared_fields or [], ensure_ascii=False),
+                    detection_mode,
+                    main_page_number,
                     base_template_row["similarity_threshold"],
                     base_template_row["final_confidence_threshold"],
                     base_template_row.get("layout_weight", 0.50),
@@ -4741,7 +4849,10 @@ class AdminTemplateService:
             for page_index, source_page in enumerate(approved_pages, start=1):
                 base_page = next((page for page in base_pages if int(page["page_number"]) == page_index), None)
                 page_id = _stub_id("tpl_page")
-                signature = _generate_layout_signature_for_source(source_page["sample_image_url"])
+                signature = _generate_layout_signature_for_source(
+                    source_page["sample_image_url"],
+                    [field for field in base_fields if int(field.get("page_number") or 1) == page_index],
+                )
                 signature_json = signature_to_json(signature) if signature else None
                 conn.execute(
                     """
@@ -4784,7 +4895,7 @@ class AdminTemplateService:
                         page_index,
                         source_page["sample_image_url"],
                         source_page.get("image_source", "admin_upload"),
-                        1 if page_index == 1 else 0,
+                        1 if (detection_mode == "main_page" and page_index == main_page_number) or (detection_mode != "main_page" and page_index == 1) else 0,
                         signature_json,
                     ),
                 )
@@ -4879,7 +4990,7 @@ class AdminTemplateService:
             },
         }
 
-    def convert_request_to_template(self, request_id: str) -> Dict[str, Any]:
+    def convert_request_to_template(self, request_id: str, payload: Optional[TemplateVersionCreate] = None) -> Dict[str, Any]:
         template_id = _stub_id("tpl")
         created_template_page_ids: Dict[int, str] = {}
 
@@ -4938,6 +5049,10 @@ class AdminTemplateService:
             ]
             if not template_pages_source:
                 template_pages_source = [approved_pages[0]]
+            detection_mode = _normalize_detection_mode(payload.detection_mode if payload else None)
+            main_page_number = _normalize_main_page_number(payload.main_page_number if payload else None)
+            if main_page_number > len(template_pages_source):
+                main_page_number = 1
 
             requested_fields = conn.execute(
                 """
@@ -4947,16 +5062,18 @@ class AdminTemplateService:
                 """,
                 (request_id,),
             ).fetchall()
+            requested_fields_list = [_row_to_dict(field) for field in requested_fields]
 
             conn.execute(
                 """
                 INSERT INTO templates (
                     id, name, document_type, category, status, version, page_count,
                     template_group_id, version_number, base_template_id, description, shared_fields_json, creation_type,
+                    detection_mode, main_page_number,
                     similarity_threshold, final_confidence_threshold,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, NULL, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', 0.75, 0.75, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, NULL, 'draft', 1, ?, ?, 1, NULL, ?, ?, 'new_template', ?, ?, 0.75, 0.75, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     template_id,
@@ -4966,6 +5083,8 @@ class AdminTemplateService:
                     template_id,
                     _row_to_dict(request_row).get("admin_note"),
                     json.dumps([], ensure_ascii=False),
+                    detection_mode,
+                    main_page_number,
                 ),
             )
 
@@ -4976,7 +5095,11 @@ class AdminTemplateService:
             template_page_number_by_request_page_id: Dict[str, int] = {}
 
             for page_index, page in enumerate(template_pages_source, start=1):
-                signature = _generate_layout_signature_for_source(page["sample_image_url"])
+                page_fields = [
+                    field for field in requested_fields_list
+                    if field.get("template_request_page_id") == page["id"] or int(field.get("page_number") or 0) == int(page["page_number"])
+                ]
+                signature = _generate_layout_signature_for_source(page["sample_image_url"], page_fields)
                 signature_json = signature_to_json(signature) if signature else None
                 if signature_json:
                     conn.execute(
@@ -5022,7 +5145,11 @@ class AdminTemplateService:
                 template_page_number_by_request_page_id[page["id"]] = page_index
 
             for page in approved_pages:
-                signature = _generate_layout_signature_for_source(page["sample_image_url"])
+                page_fields = [
+                    field for field in requested_fields_list
+                    if field.get("template_request_page_id") == page["id"] or int(field.get("page_number") or 0) == int(page["page_number"])
+                ]
+                signature = _generate_layout_signature_for_source(page["sample_image_url"], page_fields)
                 signature_json = signature_to_json(signature) if signature else None
                 if signature_json:
                     conn.execute(
@@ -5034,9 +5161,13 @@ class AdminTemplateService:
                         (signature_json, page["id"]),
                     )
 
-                page_is_canonical = (page["source_file_id"] or page["id"]) in main_source_file_ids
                 template_page_id = template_page_id_by_request_page_id.get(page["id"])
                 reference_page_number = template_page_number_by_request_page_id.get(page["id"], int(page["page_number"]))
+                page_is_canonical = (
+                    int(reference_page_number) == main_page_number
+                    if detection_mode == "main_page"
+                    else (page["source_file_id"] or page["id"]) in main_source_file_ids
+                )
 
                 conn.execute(
                     """

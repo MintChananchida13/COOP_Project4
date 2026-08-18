@@ -12,6 +12,7 @@ def _connect() -> Any:
     _ensure_layout_signature_column(conn)
     _ensure_template_layout_references_table(conn)
     _ensure_template_matching_weight_columns(conn)
+    _ensure_template_detection_mode_columns(conn)
     return conn
 
 
@@ -57,6 +58,15 @@ def _ensure_template_matching_weight_columns(conn: Any) -> None:
     conn.commit()
 
 
+def _ensure_template_detection_mode_columns(conn: Any) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(templates)").fetchall()}
+    if columns and "detection_mode" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN detection_mode TEXT NOT NULL DEFAULT 'all_pages'")
+    if columns and "main_page_number" not in columns:
+        conn.execute("ALTER TABLE templates ADD COLUMN main_page_number INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+
+
 def search_layout_candidates(
     query_signature: Dict[str, Any],
     page_number: int = 1,
@@ -76,6 +86,8 @@ def search_layout_candidates(
                 t.layout_weight AS layout_weight,
                 t.text_anchor_weight AS text_anchor_weight,
                 t.image_anchor_weight AS image_anchor_weight,
+                COALESCE(t.detection_mode, 'all_pages') AS detection_mode,
+                COALESCE(t.main_page_number, 1) AS main_page_number,
                 COALESCE(tlr.template_page_id, tp.id) AS template_page_id,
                 tlr.id AS layout_reference_id,
                 tlr.page_number AS page_number,
@@ -88,7 +100,10 @@ def search_layout_candidates(
             LEFT JOIN template_pages tp ON tp.template_id = t.id AND tp.page_number = tlr.page_number
             WHERE tlr.layout_signature_json IS NOT NULL
               AND tlr.review_status = 'approved'
-              AND tlr.page_number = ?
+              AND (
+                    (COALESCE(t.detection_mode, 'all_pages') = 'main_page' AND tlr.is_canonical = 1)
+                    OR (COALESCE(t.detection_mode, 'all_pages') != 'main_page' AND tlr.page_number = ?)
+                  )
             ORDER BY t.updated_at DESC, tlr.is_canonical DESC, tlr.page_number ASC
             """,
             (page_number,),
@@ -105,6 +120,8 @@ def search_layout_candidates(
                 t.layout_weight AS layout_weight,
                 t.text_anchor_weight AS text_anchor_weight,
                 t.image_anchor_weight AS image_anchor_weight,
+                COALESCE(t.detection_mode, 'all_pages') AS detection_mode,
+                COALESCE(t.main_page_number, 1) AS main_page_number,
                 tp.id AS template_page_id,
                 NULL AS layout_reference_id,
                 tp.page_number AS page_number,
@@ -115,7 +132,10 @@ def search_layout_candidates(
             FROM template_pages tp
             JOIN templates t ON t.id = tp.template_id
             WHERE tp.layout_signature_json IS NOT NULL
-              AND tp.page_number = ?
+              AND (
+                    (COALESCE(t.detection_mode, 'all_pages') = 'main_page' AND tp.page_number = COALESCE(t.main_page_number, 1))
+                    OR (COALESCE(t.detection_mode, 'all_pages') != 'main_page' AND tp.page_number = ?)
+                  )
               AND NOT EXISTS (
                   SELECT 1
                   FROM template_layout_references tlr
@@ -144,6 +164,8 @@ def search_layout_candidates(
             "template_name": row["template_name"],
             "template_status": row["template_status"],
             "page_count": row["page_count"],
+            "detection_mode": row["detection_mode"],
+            "main_page_number": row["main_page_number"],
             "template_page_id": row["template_page_id"],
             "matched_layout_reference_id": row["layout_reference_id"],
             "matched_layout_reference_page_number": row["page_number"],

@@ -49,21 +49,45 @@ def _region_from_layout(item: Dict[str, Any]) -> Dict[str, Any] | None:
     }
 
 
-def build_layout_signature(layout_analysis: Dict[str, Any]) -> Dict[str, Any]:
-    width = max(float(layout_analysis.get("image_width") or 1), 1.0)
-    height = max(float(layout_analysis.get("image_height") or 1), 1.0)
-    regions = [
-        region
-        for region in (_region_from_layout(item) for item in layout_analysis.get("regions", []))
-        if region is not None
-    ]
-    regions.sort(key=lambda item: (item["label"], item["center"][1], item["center"][0]))
+def _bbox_overlap_ratio(inner: Dict[str, Any], outer: Dict[str, Any]) -> float:
+    ix = float(inner.get("x_ratio") or 0.0)
+    iy = float(inner.get("y_ratio") or 0.0)
+    iw = float(inner.get("width_ratio") or 0.0)
+    ih = float(inner.get("height_ratio") or 0.0)
+    ox = float(outer.get("x_ratio") or 0.0)
+    oy = float(outer.get("y_ratio") or 0.0)
+    ow = float(outer.get("width_ratio") or 0.0)
+    oh = float(outer.get("height_ratio") or 0.0)
+    left = max(ix, ox)
+    top = max(iy, oy)
+    right = min(ix + iw, ox + ow)
+    bottom = min(iy + ih, oy + oh)
+    overlap = max(0.0, right - left) * max(0.0, bottom - top)
+    area = max(iw * ih, 1e-6)
+    return _clamp(overlap / area)
 
+
+def _region_inside_any_mask(region: Dict[str, Any], masks: Sequence[Dict[str, Any]]) -> bool:
+    bbox = region.get("bbox") or {}
+    if not bbox:
+        return False
+    cx, cy = region.get("center") or [None, None]
+    for mask in masks:
+        mx = float(mask.get("x_ratio") or 0.0)
+        my = float(mask.get("y_ratio") or 0.0)
+        mw = float(mask.get("width_ratio") or 0.0)
+        mh = float(mask.get("height_ratio") or 0.0)
+        center_inside = cx is not None and cy is not None and mx <= float(cx) <= mx + mw and my <= float(cy) <= my + mh
+        if center_inside or _bbox_overlap_ratio(bbox, mask) >= 0.60:
+            return True
+    return False
+
+
+def _metrics_for_regions(regions: List[Dict[str, Any]]) -> Dict[str, Any]:
     label_counts = Counter(region["label"] for region in regions)
     area_by_label: Dict[str, float] = defaultdict(float)
     grid_counts = {label: [0 for _ in range(GRID_SIZE * GRID_SIZE)] for label in LABELS}
     grid_area = {label: [0.0 for _ in range(GRID_SIZE * GRID_SIZE)] for label in LABELS}
-
     for region in regions:
         label = region["label"]
         area = float(region["area_ratio"])
@@ -74,6 +98,41 @@ def build_layout_signature(layout_analysis: Dict[str, Any]) -> Dict[str, Any]:
         cell = gy * GRID_SIZE + gx
         grid_counts[label][cell] += 1
         grid_area[label][cell] += area
+    return {
+        "region_count": len(regions),
+        "label_counts": {label: int(label_counts.get(label, 0)) for label in LABELS},
+        "area_by_label": {label: round(_clamp(area_by_label.get(label, 0.0)), 6) for label in LABELS},
+        "grid_counts": grid_counts,
+        "grid_area": {
+            label: [round(_clamp(value), 6) for value in values]
+            for label, values in grid_area.items()
+        },
+    }
+
+
+def build_layout_signature(layout_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    width = max(float(layout_analysis.get("image_width") or 1), 1.0)
+    height = max(float(layout_analysis.get("image_height") or 1), 1.0)
+    regions = [
+        region
+        for region in (_region_from_layout(item) for item in layout_analysis.get("regions", []))
+        if region is not None
+    ]
+    ignored_regions = [
+        mask
+        for mask in (item if isinstance(item, dict) else {} for item in layout_analysis.get("ignored_regions", []))
+        if float(mask.get("width_ratio") or 0.0) > 0 and float(mask.get("height_ratio") or 0.0) > 0
+    ]
+    if ignored_regions:
+        regions = [region for region in regions if not _region_inside_any_mask(region, ignored_regions)]
+    stable_regions = [
+        region
+        for region in (_region_from_layout(item) for item in layout_analysis.get("stable_regions", []))
+        if region is not None
+    ]
+    regions.extend(stable_regions)
+    regions.sort(key=lambda item: (item["label"], item["center"][1], item["center"][0]))
+    metrics = _metrics_for_regions(regions)
 
     return {
         "version": "layout-signature-v1",
@@ -82,17 +141,15 @@ def build_layout_signature(layout_analysis: Dict[str, Any]) -> Dict[str, Any]:
         "page_aspect_ratio": round(width / height, 6),
         "image_width": int(width),
         "image_height": int(height),
-        "region_count": len(regions),
+        "region_count": metrics["region_count"],
         "labels": list(LABELS),
-        "label_counts": {label: int(label_counts.get(label, 0)) for label in LABELS},
-        "area_by_label": {label: round(_clamp(area_by_label.get(label, 0.0)), 6) for label in LABELS},
+        "label_counts": metrics["label_counts"],
+        "area_by_label": metrics["area_by_label"],
         "grid_size": GRID_SIZE,
-        "grid_counts": grid_counts,
-        "grid_area": {
-            label: [round(_clamp(value), 6) for value in values]
-            for label, values in grid_area.items()
-        },
+        "grid_counts": metrics["grid_counts"],
+        "grid_area": metrics["grid_area"],
         "regions": regions,
+        "ignored_regions": ignored_regions,
     }
 
 
@@ -188,6 +245,17 @@ def _spatial_similarity(query: Dict[str, Any], template: Dict[str, Any]) -> floa
 
 
 def compare_layout_signatures(query: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
+    ignored_regions = template.get("ignored_regions") if isinstance(template.get("ignored_regions"), list) else []
+    if ignored_regions:
+        query_regions = [
+            region for region in query.get("regions", []) if not _region_inside_any_mask(region, ignored_regions)
+        ]
+        template_regions = [
+            region for region in template.get("regions", []) if not _region_inside_any_mask(region, ignored_regions)
+        ]
+        query = {**query, **_metrics_for_regions(query_regions), "regions": query_regions}
+        template = {**template, **_metrics_for_regions(template_regions), "regions": template_regions}
+
     aspect_score = _ratio_similarity(
         float(query.get("page_aspect_ratio") or 0.0),
         float(template.get("page_aspect_ratio") or 0.0),

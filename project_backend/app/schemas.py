@@ -123,6 +123,8 @@ class TemplateCreate(BaseModel):
     layout_weight: float = Field(default=0.50, ge=0, le=1)
     text_anchor_weight: float = Field(default=0.35, ge=0, le=1)
     image_anchor_weight: float = Field(default=0.15, ge=0, le=1)
+    detection_mode: str = Field(default="all_pages", validation_alias=AliasChoices("detection_mode", "detectionMode"))
+    main_page_number: int = Field(default=1, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
     created_by: Optional[str] = None
 
 
@@ -139,6 +141,8 @@ class TemplateUpdate(BaseModel):
     layout_weight: Optional[float] = Field(default=None, ge=0, le=1)
     text_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
     image_anchor_weight: Optional[float] = Field(default=None, ge=0, le=1)
+    detection_mode: Optional[str] = Field(default=None, validation_alias=AliasChoices("detection_mode", "detectionMode"))
+    main_page_number: Optional[int] = Field(default=None, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
     rejection_reason: Optional[str] = None
 
 
@@ -151,6 +155,8 @@ class TemplateVersionCreate(BaseModel):
     document_type: Optional[str] = None
     similarity_threshold: float = Field(default=0.72, ge=0, le=1)
     reuse_roi: bool = True
+    detection_mode: str = Field(default="all_pages", validation_alias=AliasChoices("detection_mode", "detectionMode"))
+    main_page_number: int = Field(default=1, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
 
 
 class TemplatePageCreate(BaseModel):

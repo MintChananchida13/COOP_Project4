@@ -102,6 +102,8 @@ export default function AdminRequestDetailPage({
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedBaseTemplateId, setSelectedBaseTemplateId] = useState("");
   const [selectedExistingTemplateName, setSelectedExistingTemplateName] = useState("");
+  const [detectionMode, setDetectionMode] = useState<"all_pages" | "main_page">("all_pages");
+  const [mainPageNumber, setMainPageNumber] = useState(1);
   const [versionSuggestion, setVersionSuggestion] = useState<Awaited<ReturnType<typeof suggestTemplateRequestBaseVersion>> | null>(null);
   const [isSuggestingVersion, setIsSuggestingVersion] = useState(false);
   const [adminNote, setAdminNote] = useState("");
@@ -232,6 +234,11 @@ export default function AdminRequestDetailPage({
 
   const primaryDocumentGroup = documentGroups[0];
 
+  useEffect(() => {
+    const pageCount = primaryDocumentGroup?.pages.length || 1;
+    setMainPageNumber((value) => Math.min(Math.max(value, 1), pageCount));
+  }, [primaryDocumentGroup?.pages.length]);
+
   const sharedFields = useMemo(
     () => sharedFieldsText.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean),
     [sharedFieldsText]
@@ -335,6 +342,7 @@ export default function AdminRequestDetailPage({
       setActionError("ต้องมีไฟล์ต้นทางก่อนสร้าง Template");
       return;
     }
+    const safeMainPageNumber = Math.min(Math.max(mainPageNumber, 1), primaryPages.length || 1);
 
     const nextTemplateName = templateName.trim();
     const nextDocumentType =
@@ -387,7 +395,7 @@ export default function AdminRequestDetailPage({
         pendingPages.map((page) =>
           updateTemplateRequestImage(request.id, page.id, {
             reviewStatus: primaryPageIds.has(page.id) ? "approved" : "rejected",
-            isCanonical: primaryPageIds.has(page.id) && page.pageNumber === 1,
+            isCanonical: primaryPageIds.has(page.id) && (detectionMode === "main_page" ? page.pageNumber === safeMainPageNumber : page.pageNumber === 1),
           })
         )
       );
@@ -400,8 +408,13 @@ export default function AdminRequestDetailPage({
               sharedFields,
               documentType: nextDocumentType,
               reuseRoi: Boolean(versionSuggestion?.reuse_roi && versionSuggestion?.suggested_base_version),
+              detectionMode,
+              mainPageNumber: safeMainPageNumber,
             })
-          : await convertTemplateRequestToTemplate(request.id);
+          : await convertTemplateRequestToTemplate(request.id, {
+              detectionMode,
+              mainPageNumber: safeMainPageNumber,
+            });
 
       setRequest({
         ...updatedRequest,
@@ -807,6 +820,56 @@ export default function AdminRequestDetailPage({
                           {group.pages.length} หน้า
                         </p>
                       </div>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                        Detection Mode
+                      </p>
+                      <div className="mt-2 grid gap-2">
+                        {[
+                          { value: "all_pages" as const, label: "ตรวจทุกหน้า", note: "ใช้ทุกหน้าในการหา Template แบบเดิม" },
+                          { value: "main_page" as const, label: "ใช้หน้าหลัก", note: "ใช้หน้าเดียวในการหา Template จำนวนหน้า PDF ไม่มีผลต่อคะแนน" },
+                        ].map((option) => (
+                          <label
+                            key={option.value}
+                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 ${
+                              detectionMode === option.value ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50"
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="detectionMode"
+                              checked={detectionMode === option.value}
+                              onChange={() => setDetectionMode(option.value)}
+                              className="mt-0.5"
+                            />
+                            <span>
+                              <span className="block text-xs font-black text-slate-800">{option.label}</span>
+                              <span className="block text-[11px] font-semibold text-slate-500">{option.note}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+
+                      {detectionMode === "main_page" && (
+                        <label className="mt-3 block space-y-1">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            หน้าหลักสำหรับค้นหา Template
+                          </span>
+                          <select
+                            value={mainPageNumber}
+                            onChange={(event) => setMainPageNumber(Number(event.target.value))}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
+                          >
+                            {group.pages.map((page) => (
+                              <option key={page.id} value={page.pageNumber}>
+                                หน้า {page.pageNumber}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                     </div>
 
                     <div className="mt-3 space-y-2">

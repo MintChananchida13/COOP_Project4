@@ -181,6 +181,8 @@ interface ApiTemplate {
   description?: string | null;
   shared_fields?: string[] | null;
   creation_type?: string | null;
+  detection_mode?: "all_pages" | "main_page" | string | null;
+  main_page_number?: number | null;
   page_count: number;
   similarity_threshold: number;
   final_confidence_threshold: number;
@@ -714,6 +716,8 @@ const mapApiTemplate = (template: ApiTemplate): Template => {
     description: template.description || undefined,
     sharedFields: Array.isArray(template.shared_fields) ? template.shared_fields : [],
     creationType: template.creation_type || undefined,
+    detectionMode: template.detection_mode || undefined,
+    mainPageNumber: template.main_page_number || undefined,
     pageCount: template.page_count,
     similarityThreshold: template.similarity_threshold,
     finalConfidenceThreshold: template.final_confidence_threshold,
@@ -1985,10 +1989,20 @@ export const deleteIgnoreRegionApi = async (templateId: string, regionId: string
     templateId
   );
 
-export const convertTemplateRequestToTemplate = async (requestId: string) => {
+export const convertTemplateRequestToTemplate = async (
+  requestId: string,
+  payload?: {
+    detectionMode?: "all_pages" | "main_page";
+    mainPageNumber?: number;
+  }
+) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-template`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      detection_mode: payload?.detectionMode || "all_pages",
+      main_page_number: payload?.mainPageNumber || 1,
+    }),
   });
   if (!response.ok) {
     throw new Error(`Template request conversion failed with ${response.status}`);
@@ -2054,6 +2068,8 @@ export const convertTemplateRequestToVersion = async (
     documentType?: string;
     similarityThreshold?: number;
     reuseRoi?: boolean;
+    detectionMode?: "all_pages" | "main_page";
+    mainPageNumber?: number;
   }
 ) => {
   const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-version`, {
@@ -2067,6 +2083,8 @@ export const convertTemplateRequestToVersion = async (
       document_type: payload.documentType,
       similarity_threshold: payload.similarityThreshold ?? 0.72,
       reuse_roi: payload.reuseRoi ?? true,
+      detection_mode: payload.detectionMode || "all_pages",
+      main_page_number: payload.mainPageNumber || 1,
     }),
   });
   const json = await response.json().catch(() => null);

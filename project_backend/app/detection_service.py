@@ -700,13 +700,19 @@ def _candidate_from_result(
         or page_index
         or 1
     )
+    detection_mode = str(metadata.get("detection_mode") or (template or {}).get("detection_mode") or "all_pages")
     candidate_page_image_paths = dict(page_image_paths)
     candidate_page_image_paths[template_page_number] = query_image_path
+    verification_page_image_paths = (
+        {template_page_number: query_image_path}
+        if detection_mode == "main_page"
+        else candidate_page_image_paths
+    )
 
     # 1) Verify จาก normalized ก่อน
     normalized_verification = verification_service.verify_template(
         template_id,
-        candidate_page_image_paths,
+        verification_page_image_paths,
     ) if template_id else {
         "status": "failed",
         "passed": False,
@@ -744,10 +750,15 @@ def _candidate_from_result(
         if alignment.get("alignment_status") == "aligned" and alignment.get("aligned_image_path"):
             aligned_page_image_paths = dict(candidate_page_image_paths)
             aligned_page_image_paths[template_page_number] = str(alignment["aligned_image_path"])
+            aligned_verification_paths = (
+                {template_page_number: str(alignment["aligned_image_path"])}
+                if detection_mode == "main_page"
+                else aligned_page_image_paths
+            )
 
             aligned_verification = verification_service.verify_template(
                 template_id,
-                aligned_page_image_paths,
+                aligned_verification_paths,
             )
             aligned_score = float(aligned_verification.get("score") or 0.0)
 

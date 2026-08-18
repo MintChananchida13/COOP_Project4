@@ -156,6 +156,8 @@ _POSTGRES_SCHEMA = [
         description TEXT,
         shared_fields_json TEXT,
         creation_type TEXT NOT NULL DEFAULT 'new_template',
+        detection_mode TEXT NOT NULL DEFAULT 'all_pages',
+        main_page_number INTEGER NOT NULL DEFAULT 1,
         page_count INTEGER NOT NULL DEFAULT 1,
         similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
         final_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
