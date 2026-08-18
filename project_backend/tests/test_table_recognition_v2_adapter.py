@@ -17,6 +17,7 @@ from app.table_recognition_v2_adapter import (
     _postprocess_table_result,
     _recognize_raw_ocr_geometry_table,
     _recognize_text_crops_with_core,
+    _recover_slanext_row_collapse,
     _reassign_ocr_text_to_slanext_cells,
     _select_best_table_candidate,
     _structured_assignment_quality,
@@ -258,6 +259,37 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(debug["ocr_core"], "recognize_text_roi")
         self.assertEqual(debug["crop_count"], 2)
         self.assertEqual(recognize.call_count, 2)
+
+    def test_row_collapse_recovery_splits_collapsed_slanext_body_rows(self) -> None:
+        image = np.zeros((140, 220, 3), dtype=np.uint8)
+        structured = {
+            "rows": [["Code", "Name"], ["IC-0001 IC-0002 IC-0003", "Mouse Keyboard Scanner"]],
+            "headerRowCount": 1,
+            "cells": [
+                {"row": 0, "col": 0, "text": "Code", "bbox": {"x": 0, "y": 0, "width": 80, "height": 24}},
+                {"row": 0, "col": 1, "text": "Name", "bbox": {"x": 80, "y": 0, "width": 120, "height": 24}},
+                {"row": 1, "col": 0, "text": "IC-0001 IC-0002 IC-0003", "bbox": {"x": 0, "y": 24, "width": 80, "height": 90}},
+                {"row": 1, "col": 1, "text": "Mouse Keyboard Scanner", "bbox": {"x": 80, "y": 24, "width": 120, "height": 90}},
+            ],
+        }
+        candidate = _build_table_candidate({"table_rows": structured["rows"], "table_structured": structured}, "slanext")
+        ocr_cells = [
+            {"text": "IC-0001", "confidence": 0.9, "bbox": {"x": 8, "y": 34, "width": 42, "height": 10}, "x": 8, "y": 34, "width": 42, "height": 10, "center_x": 29, "center_y": 39},
+            {"text": "Mouse", "confidence": 0.9, "bbox": {"x": 94, "y": 34, "width": 34, "height": 10}, "x": 94, "y": 34, "width": 34, "height": 10, "center_x": 111, "center_y": 39},
+            {"text": "IC-0002", "confidence": 0.9, "bbox": {"x": 8, "y": 58, "width": 42, "height": 10}, "x": 8, "y": 58, "width": 42, "height": 10, "center_x": 29, "center_y": 63},
+            {"text": "Keyboard", "confidence": 0.9, "bbox": {"x": 94, "y": 58, "width": 48, "height": 10}, "x": 94, "y": 58, "width": 48, "height": 10, "center_x": 118, "center_y": 63},
+            {"text": "IC-0003", "confidence": 0.9, "bbox": {"x": 8, "y": 82, "width": 42, "height": 10}, "x": 8, "y": 82, "width": 42, "height": 10, "center_x": 29, "center_y": 87},
+            {"text": "Scanner", "confidence": 0.9, "bbox": {"x": 94, "y": 82, "width": 44, "height": 10}, "x": 94, "y": 82, "width": 44, "height": 10, "center_x": 116, "center_y": 87},
+        ]
+
+        with patch("app.table_recognition_v2_adapter._ocr_cells_from_text_detection", return_value=(ocr_cells, [0.9] * len(ocr_cells), {"detected_boxes": len(ocr_cells)})):
+            recovered, debug = _recover_slanext_row_collapse(candidate, image)
+
+        self.assertTrue(debug["suspected_row_collapse"])
+        self.assertEqual(debug["body_row_count"], 1)
+        self.assertEqual(debug["y_cluster_count"], 3)
+        self.assertEqual(debug["supporting_columns"], 2)
+        self.assertEqual(recovered["table_rows"], [["Code", "Name"], ["IC-0001", "Mouse"], ["IC-0002", "Keyboard"], ["IC-0003", "Scanner"]])
 
     @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
     def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:

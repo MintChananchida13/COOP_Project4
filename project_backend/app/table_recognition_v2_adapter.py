@@ -3219,6 +3219,254 @@ def _reassign_ocr_text_to_slanext_cells(candidate: Dict[str, Any]) -> tuple[Dict
     return reassigned, reassignment_debug
 
 
+def _structured_row_count(structured: Dict[str, Any]) -> int:
+    cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
+    if cells:
+        return max(
+            int(cell.get("row") or 0) + max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+            for cell in cells
+        )
+    rows = structured.get("rows")
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _structured_col_count(structured: Dict[str, Any]) -> int:
+    cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
+    if cells:
+        return max(
+            int(cell.get("col") or 0) + max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+            for cell in cells
+        )
+    rows = structured.get("rows")
+    if isinstance(rows, list):
+        return max((len(row) for row in rows if isinstance(row, list)), default=0)
+    return 0
+
+
+def _tail_summary_start(structured: Dict[str, Any], header_row_count: int, row_count: int, col_count: int) -> int:
+    cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict) and not cell.get("hidden")]
+    text_counts: Dict[int, int] = {}
+    span_rows: set[int] = set()
+    for cell in cells:
+        try:
+            row = int(cell.get("row") or 0)
+            col_span = max(1, int(cell.get("colSpan") or cell.get("colspan") or cell.get("col_span") or 1))
+            row_span = max(1, int(cell.get("rowSpan") or cell.get("rowspan") or cell.get("row_span") or 1))
+        except (TypeError, ValueError):
+            continue
+        if row < header_row_count:
+            continue
+        if _cell_text_value(cell):
+            text_counts[row] = text_counts.get(row, 0) + 1
+        if col_span > 1 or row_span > 1:
+            span_rows.add(row)
+
+    summary_start = row_count
+    for row in range(row_count - 1, header_row_count - 1, -1):
+        populated = text_counts.get(row, 0)
+        sparse = col_count >= 3 and 0 < populated <= max(1, int(col_count * 0.45))
+        has_span = row in span_rows
+        if sparse or has_span:
+            summary_start = row
+            continue
+        break
+    return summary_start
+
+
+def _cluster_ocr_rows_by_y(ocr_cells: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    if not ocr_cells:
+        return []
+    heights = [float(cell.get("height") or 0.0) for cell in ocr_cells if float(cell.get("height") or 0.0) > 0]
+    median_height = float(np.median(heights)) if heights else 12.0
+    tolerance = max(4.0, median_height * 0.62)
+    clusters: List[List[Dict[str, Any]]] = []
+    for cell in sorted(ocr_cells, key=lambda item: (float(item.get("center_y") or 0.0), float(item.get("center_x") or 0.0))):
+        center_y = float(cell.get("center_y") or 0.0)
+        if not clusters:
+            clusters.append([cell])
+            continue
+        previous_center = sum(float(item.get("center_y") or 0.0) for item in clusters[-1]) / len(clusters[-1])
+        if abs(center_y - previous_center) <= tolerance:
+            clusters[-1].append(cell)
+        else:
+            clusters.append([cell])
+    return [sorted(cluster, key=lambda item: float(item.get("center_x") or 0.0)) for cluster in clusters]
+
+
+def _row_cluster_alignment_support(
+    clusters: List[List[Dict[str, Any]]],
+    col_boundaries: List[float],
+    x_tolerance: float,
+) -> tuple[int, float]:
+    if len(col_boundaries) < 3:
+        return (0, 0.0)
+    supporting_columns = 0
+    column_scores: List[float] = []
+    for col_index in range(len(col_boundaries) - 1):
+        hits = 0
+        for cluster in clusters:
+            for cell in cluster:
+                left = float(cell.get("x") or 0.0)
+                right = left + float(cell.get("width") or 0.0)
+                dominant = _dominant_interval_index(left, right, col_boundaries, x_tolerance)
+                if dominant == col_index:
+                    hits += 1
+                    break
+        score = hits / max(1, len(clusters))
+        if hits >= 2 and score >= 0.45:
+            supporting_columns += 1
+        column_scores.append(score)
+    alignment_score = sum(column_scores) / len(column_scores) if column_scores else 0.0
+    return (supporting_columns, round(_clamp01(alignment_score), 4))
+
+
+def _recover_slanext_row_collapse(candidate: Dict[str, Any], image: np.ndarray) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else None
+    if image is None or image.size == 0 or not structured:
+        return candidate, {"attempted": False, "suspected_row_collapse": False, "reason": "missing_structured_or_image"}
+
+    source_cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
+    visible_cells = [cell for cell in source_cells if not cell.get("hidden")]
+    if not source_cells or not visible_cells:
+        return candidate, {"attempted": False, "suspected_row_collapse": False, "reason": "missing_cells"}
+
+    row_count = _structured_row_count(structured)
+    col_count = _structured_col_count(structured)
+    header_row_count = max(1, int(structured.get("headerRowCount") or structured.get("header_row_count") or 1))
+    summary_start = _tail_summary_start(structured, header_row_count, row_count, col_count)
+    body_row_count = max(0, summary_start - header_row_count)
+    if body_row_count <= 0 or col_count < 2:
+        return candidate, {
+            "attempted": True,
+            "suspected_row_collapse": False,
+            "body_row_count": body_row_count,
+            "reason": "no_body_region",
+        }
+
+    row_boundaries = _infer_axis_boundaries_from_cells(visible_cells, "y", row_count)
+    col_boundaries = _infer_axis_boundaries_from_cells(visible_cells, "x", col_count)
+    if len(row_boundaries) < row_count + 1 or len(col_boundaries) < col_count + 1:
+        return candidate, {
+            "attempted": True,
+            "suspected_row_collapse": False,
+            "body_row_count": body_row_count,
+            "reason": "missing_boundaries",
+        }
+
+    body_top = row_boundaries[header_row_count]
+    body_bottom = row_boundaries[summary_start] if summary_start < len(row_boundaries) else row_boundaries[-1]
+    try:
+        ocr_cells, _, ocr_debug = _ocr_cells_from_text_detection(image, "slanext_row_collapse")
+    except Exception as error:
+        return candidate, {
+            "attempted": True,
+            "suspected_row_collapse": False,
+            "body_row_count": body_row_count,
+            "reason": f"ocr_geometry_failed:{error}",
+        }
+
+    ocr_heights = [float(cell.get("height") or 0.0) for cell in ocr_cells if float(cell.get("height") or 0.0) > 0]
+    body_margin = max(2.0, (float(np.median(ocr_heights)) if ocr_heights else 12.0) * 0.85)
+    body_ocr_cells = [
+        cell
+        for cell in ocr_cells
+        if body_top - body_margin <= float(cell.get("center_y") or 0.0) <= body_bottom + body_margin
+    ]
+    clusters = _cluster_ocr_rows_by_y(body_ocr_cells)
+    y_cluster_count = len(clusters)
+    widths = [float(cell.get("width") or 0.0) for cell in body_ocr_cells if float(cell.get("width") or 0.0) > 0]
+    x_tolerance = max(4.0, (float(np.median(widths)) if widths else 24.0) * 0.16)
+    supporting_columns, alignment_score = _row_cluster_alignment_support(clusters, col_boundaries, x_tolerance)
+    suspected = (
+        y_cluster_count >= body_row_count + 2
+        or (body_row_count > 0 and y_cluster_count / max(1, body_row_count) >= 1.45 and y_cluster_count > body_row_count)
+    ) and supporting_columns >= 2 and alignment_score >= 0.45
+    debug: Dict[str, Any] = {
+        "attempted": True,
+        "body_row_count": body_row_count,
+        "y_cluster_count": y_cluster_count,
+        "supporting_columns": supporting_columns,
+        "alignment_score": alignment_score,
+        "suspected_row_collapse": suspected,
+        "recovered_row_count": row_count,
+        "summary_start_row": summary_start if summary_start < row_count else None,
+        "ocr": ocr_debug,
+    }
+    if not suspected:
+        debug["reason"] = "row_collapse_not_supported"
+        return candidate, debug
+
+    recovered_body_rows = [["" for _ in range(col_count)] for _ in clusters]
+    recovered_cells: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    for recovered_row, cluster in enumerate(clusters):
+        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        for cell in cluster:
+            left = float(cell.get("x") or 0.0)
+            right = left + float(cell.get("width") or 0.0)
+            col_index = _dominant_interval_index(left, right, col_boundaries, x_tolerance)
+            grouped.setdefault(col_index, []).append(cell)
+        for col_index in range(col_count):
+            parts = sorted(grouped.get(col_index, []), key=lambda item: (float(item.get("y") or 0.0), float(item.get("x") or 0.0)))
+            text = normalize_ocr_text(" ".join(str(item.get("text") or "").strip() for item in parts if str(item.get("text") or "").strip()))
+            recovered_body_rows[recovered_row][col_index] = text
+            boxes = [item.get("bbox") for item in parts if isinstance(item.get("bbox"), dict)]
+            bbox = _merge_bboxes(boxes) if boxes else {
+                "x": col_boundaries[col_index],
+                "y": float(sum(float(item.get("center_y") or 0.0) for item in cluster) / max(1, len(cluster))) if cluster else body_top,
+                "width": max(1.0, col_boundaries[col_index + 1] - col_boundaries[col_index]),
+                "height": 1.0,
+            }
+            confidences = [float(item.get("confidence") or 0.0) for item in parts if str(item.get("text") or "").strip()]
+            if confidences:
+                confidence_values.extend(confidences)
+            recovered_cells.append({
+                "row": header_row_count + recovered_row,
+                "col": col_index,
+                "text": text,
+                "rowSpan": 1,
+                "colSpan": 1,
+                "ocrText": text,
+                "groundTruth": text,
+                "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
+                "bbox": bbox,
+                "assignmentSource": "row_collapse_recovery",
+            })
+
+    header_cells = [dict(cell) for cell in source_cells if int(cell.get("row") or 0) < header_row_count]
+    summary_cells: List[Dict[str, Any]] = []
+    row_shift = len(clusters) - body_row_count
+    for cell in source_cells:
+        try:
+            row = int(cell.get("row") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row < summary_start:
+            continue
+        next_cell = dict(cell)
+        next_cell["row"] = row + row_shift
+        summary_cells.append(next_cell)
+
+    next_cells = [*header_cells, *recovered_cells, *summary_cells]
+    next_structured = dict(structured)
+    next_structured["cells"] = sorted(next_cells, key=lambda item: (int(item.get("row") or 0), int(item.get("col") or 0), bool(item.get("hidden"))))
+    next_rows = _rows_from_structured_cells_preserve_grid(next_structured["cells"])
+    next_structured["rows"] = next_rows
+    recovered = dict(candidate)
+    recovered["table_structured"] = next_structured
+    recovered["table_rows"] = next_rows
+    recovered["text"] = _markdown_table(next_rows)
+    if confidence_values:
+        recovered["confidence"] = max(float(candidate.get("confidence") or 0.0), sum(confidence_values) / len(confidence_values))
+    recovered_debug = recovered.get("table_debug") if isinstance(recovered.get("table_debug"), dict) else {}
+    recovered["table_debug"] = dict(recovered_debug)
+    debug["recovered_row_count"] = len(next_rows)
+    debug["recovered_body_row_count"] = len(clusters)
+    debug["selected"] = True
+    recovered["table_debug"]["row_collapse_recovery"] = debug
+    return recovered, debug
+
+
 def _geometry_table_from_cells(cells: List[Dict[str, Any]], fallback_rows: List[List[str]]) -> Optional[tuple[List[List[str]], List[Dict[str, Any]], List[Dict[str, float]]]]:
     positioned = []
     heights = []
@@ -3608,6 +3856,12 @@ def recognize_table_v2_local(image: np.ndarray) -> Dict[str, Any]:
         if isinstance(slanext_trace, dict):
             slanext_trace["input"] = input_trace
     slanext_candidate = _build_table_candidate(slanext_result, "slanext")
+    recovered_candidate, row_collapse_debug = _recover_slanext_row_collapse(slanext_candidate, image)
+    if bool(row_collapse_debug.get("selected")):
+        slanext_candidate = _build_table_candidate(recovered_candidate, "slanext")
+    slanext_candidate.setdefault("table_debug", {})
+    if isinstance(slanext_candidate["table_debug"], dict):
+        slanext_candidate["table_debug"]["row_collapse_recovery"] = row_collapse_debug
     slanext_assignment_quality = _structured_assignment_quality(
         slanext_candidate.get("table_structured") if isinstance(slanext_candidate.get("table_structured"), dict) else None
     )
