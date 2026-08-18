@@ -323,7 +323,8 @@ async function templateFieldsToWorkspaceRois(
   fields: TemplateField[],
   imageList: string[],
   detection?: DetectionDevResult | null,
-  templateId?: string
+  templateId?: string,
+  options?: { templatePageToImageIndex?: Record<number, number> }
 ) {
   const pageImages = await Promise.all(imageList.map((src) => loadImageElement(src).catch(() => null)));
   const extractionFields = fields
@@ -333,7 +334,7 @@ async function templateFieldsToWorkspaceRois(
 
   for (const field of extractionFields) {
     const roi = field.roi;
-    const pageIndex = Math.max(0, roi.pageNumber - 1);
+    const pageIndex = Math.max(0, options?.templatePageToImageIndex?.[roi.pageNumber] ?? roi.pageNumber - 1);
     const pageImage = pageImages[pageIndex];
     const displayWidth = 750;
     const displayHeight = pageImage?.naturalWidth
@@ -361,6 +362,92 @@ async function templateFieldsToWorkspaceRois(
   }
 
   return workspaceRois;
+}
+
+function roiFromLayoutBlock(
+  block: Record<string, any>,
+  renderedWidth: number,
+  renderedHeight: number,
+  scaleX: number,
+  scaleY: number
+) {
+  const bbox = block.bbox && typeof block.bbox === "object" ? block.bbox : null;
+  const roi = block.roi && typeof block.roi === "object" ? block.roi : null;
+  if (bbox) {
+    return {
+      x: Number(bbox.x || 0) / Math.max(scaleX, 1e-6),
+      y: Number(bbox.y || 0) / Math.max(scaleY, 1e-6),
+      width: Number(bbox.width || 0) / Math.max(scaleX, 1e-6),
+      height: Number(bbox.height || 0) / Math.max(scaleY, 1e-6),
+    };
+  }
+  if (roi) {
+    return {
+      x: Number(roi.x_ratio || 0) * renderedWidth,
+      y: Number(roi.y_ratio || 0) * renderedHeight,
+      width: Number(roi.width_ratio || 0) * renderedWidth,
+      height: Number(roi.height_ratio || 0) * renderedHeight,
+    };
+  }
+  return null;
+}
+
+async function buildWholePageAutoRois(
+  sourceImages: string[],
+  existingRois: (ROI & { pageIndex?: number })[],
+  excludedPageIndexes: Set<number>
+): Promise<(ROI & { pageIndex?: number; roiCoordinateSource?: string })[]> {
+  const autoRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[] = [];
+  for (const [pageIndex, sourceImage] of sourceImages.entries()) {
+    if (excludedPageIndexes.has(pageIndex) || !sourceImage) continue;
+    let img: HTMLImageElement;
+    try {
+      img = await loadImageElement(sourceImage);
+    } catch (error) {
+      console.warn("Unable to load page image for whole-page auto ROI.", error);
+      continue;
+    }
+    const renderedWidth = 750;
+    const renderedHeight = (img.naturalHeight / img.naturalWidth) * renderedWidth;
+    const scaleX = img.naturalWidth / renderedWidth;
+    const scaleY = img.naturalHeight / renderedHeight;
+    let regions: Record<string, any>[] = [];
+    try {
+      regions = await analyzeLayoutForUserImage(sourceImage);
+    } catch (error) {
+      console.warn("Whole-page auto ROI analysis failed.", error);
+      continue;
+    }
+    const existingFieldCountOnPage =
+      existingRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length +
+      autoRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length;
+    regions.forEach((block, index) => {
+      const rect = roiFromLayoutBlock(block, renderedWidth, renderedHeight, scaleX, scaleY);
+      if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 1 || rect.height <= 1) {
+        return;
+      }
+      const type = normalizeResolvedBlockType(block);
+      autoRois.push({
+        id: stableNumericId(`matched-template-extra-page:${pageIndex}:${index}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`),
+        fieldName: `field_${existingFieldCountOnPage + autoRois.filter((roi) => Number(roi.pageIndex ?? 0) === pageIndex).length + 1}`,
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        pageIndex,
+        type,
+        dataType: type,
+        extractionMethod: type === "table" ? "table_recognition_v2" : type === "image" ? "extract_image" : "paddle_thai_ocr",
+        roiMode: "fix",
+        enabled: true,
+        role: "data_extraction",
+        isResolvedBlock: true,
+        roiCoordinateSource: "whole_page_auto_roi",
+        layoutType: String(block.layout_type || block.layoutType || type),
+      });
+    });
+  }
+  return autoRois;
 }
 
 function compareTemplateFieldsForWorkspace(left: TemplateField, right: TemplateField) {
@@ -1588,7 +1675,18 @@ function HomeWorkspace() {
 
       let detectedRois: (ROI & { pageIndex?: number; roiCoordinateSource?: string })[];
       try {
-        detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId);
+        const isMainPageDetection = bundle.template.detectionMode === "main_page";
+        const matchedQueryPageIndex = Math.max(
+          0,
+          Number(
+            detection.bestCandidate?.pageIndex ??
+            detection.pages.find((page) => page.bestCandidate?.templateId === templateId || page.matched)?.pageIndex ??
+            1
+          ) - 1
+        );
+        detectedRois = await templateFieldsToWorkspaceRois(bundle.fields, templateCanvasImages, detection, templateId, {
+          templatePageToImageIndex: isMainPageDetection ? { 1: matchedQueryPageIndex } : undefined,
+        });
         const flexibleResolvedRois = await buildFlexibleResolvedDisplayRois(templateCanvasImages, detectedRois);
         if (flexibleResolvedRois.length > 0) {
           const resolvedParentIds = new Set(flexibleResolvedRois.map((roi) => roi.parentRoiId).filter((id): id is number => typeof id === "number"));
@@ -1596,6 +1694,14 @@ function HomeWorkspace() {
             ...detectedRois.map((roi) => resolvedParentIds.has(roi.id) ? { ...roi, enabled: false } : roi),
             ...flexibleResolvedRois,
           ];
+        }
+        if (isMainPageDetection && templateCanvasImages.length > 1) {
+          const extraPageAutoRois = await buildWholePageAutoRois(
+            templateCanvasImages,
+            detectedRois,
+            new Set([matchedQueryPageIndex])
+          );
+          detectedRois = [...detectedRois, ...extraPageAutoRois];
         }
         devTemplateFlowLog("ROIs mapped", {
           templateId,

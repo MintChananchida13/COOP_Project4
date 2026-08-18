@@ -180,7 +180,7 @@ export default function AdminRequestDetailPage({
 
     const updatePreviewWidth = () => {
       const panelWidth = panel.clientWidth || panel.getBoundingClientRect().width;
-      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth - 20)));
+      setPreviewCanvasWidth(Math.max(280, Math.floor(panelWidth - 30)));
     };
 
     updatePreviewWidth();
