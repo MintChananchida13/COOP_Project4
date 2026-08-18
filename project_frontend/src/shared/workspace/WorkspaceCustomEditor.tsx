@@ -257,7 +257,7 @@ export default function WorkspaceCustomEditor({
   const [showLabels, setShowLabels] = useState(true);
   const [history, setHistory] = useState<ROI[][]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
-  const [draggedItemIdx, setDraggedItemIdx] = useState<number | null>(null);
+  const [draggedItemId, setDraggedItemId] = useState<number | null>(null);
 
   const skipHistoryRecordRef = useRef(false);
   const lastRoisRef = useRef<ROI[]>([]);
@@ -648,64 +648,50 @@ export default function WorkspaceCustomEditor({
     }));
   };
 
-  const moveROI = (index: number, direction: 'up' | 'down') => {
-    const currentPageIndices = rois
-      .map((roi, idx) => ({ roi, originalIdx: idx }))
-      .filter(item => (item.roi.pageIndex !== undefined ? Number(item.roi.pageIndex) : 0) === currentIndex);
+  const reorderCurrentPageRoi = (draggedRoiId: number, targetRoiId: number) => {
+    if (draggedRoiId === targetRoiId) return;
+    setRois(prev => {
+      const currentPageItems = prev
+        .map((roi, originalIdx) => ({ roi, originalIdx }))
+        .filter(item => (item.roi.pageIndex !== undefined ? Number(item.roi.pageIndex) : 0) === currentIndex);
+      const fromPageIndex = currentPageItems.findIndex(item => item.roi.id === draggedRoiId);
+      const toPageIndex = currentPageItems.findIndex(item => item.roi.id === targetRoiId);
+      if (fromPageIndex < 0 || toPageIndex < 0 || fromPageIndex === toPageIndex) return prev;
+      const nextPageItems = [...currentPageItems];
+      const [draggedItem] = nextPageItems.splice(fromPageIndex, 1);
+      nextPageItems.splice(toPageIndex, 0, draggedItem);
+      const next = [...prev];
+      currentPageItems.forEach((item, index) => {
+        next[item.originalIdx] = nextPageItems[index].roi;
+      });
+      return next;
+    });
+  };
 
-    if (direction === 'up' && index > 0) {
-      const idxA = currentPageIndices[index].originalIdx;
-      const idxB = currentPageIndices[index - 1].originalIdx;
-      setRois(prev => {
-        const nextRois = [...prev];
-        const temp = nextRois[idxA];
-        nextRois[idxA] = nextRois[idxB];
-        nextRois[idxB] = temp;
-        return nextRois;
-      });
-    } else if (direction === 'down' && index < currentPageIndices.length - 1) {
-      const idxA = currentPageIndices[index].originalIdx;
-      const idxB = currentPageIndices[index + 1].originalIdx;
-      setRois(prev => {
-        const nextRois = [...prev];
-        const temp = nextRois[idxA];
-        nextRois[idxA] = nextRois[idxB];
-        nextRois[idxB] = temp;
-        return nextRois;
-      });
-    }
+  const moveROI = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const source = currentPageRois[index];
+    const target = currentPageRois[targetIndex];
+    if (!source || !target) return;
+    reorderCurrentPageRoi(source.id, target.id);
   };
 
   // Handle drag-and-drop ordering in the right panel.
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedItemIdx(index);
+  const handleDragStart = (e: React.DragEvent, roiId: number) => {
+    setDraggedItemId(roiId);
     e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(roiId));
   };
 
-  const handleDragOver = (e: React.DragEvent, hoverIndex: number) => {
+  const handleDragOver = (e: React.DragEvent, hoverRoiId: number) => {
     e.preventDefault();
-    if (draggedItemIdx === null || draggedItemIdx === hoverIndex) return;
-
-    const currentPageIndices = rois
-      .map((roi, idx) => ({ roi, originalIdx: idx }))
-      .filter(item => (item.roi.pageIndex !== undefined ? Number(item.roi.pageIndex) : 0) === currentIndex);
-
-    const idxA = currentPageIndices[draggedItemIdx].originalIdx;
-    const idxB = currentPageIndices[hoverIndex].originalIdx;
-
-    setRois(prev => {
-      const nextRois = [...prev];
-      const temp = nextRois[idxA];
-      nextRois[idxA] = nextRois[idxB];
-      nextRois[idxB] = temp;
-      return nextRois;
-    });
-
-    setDraggedItemIdx(hoverIndex);
+    const draggedId = draggedItemId ?? Number(e.dataTransfer.getData('text/plain'));
+    if (!Number.isFinite(draggedId) || draggedId === hoverRoiId) return;
+    reorderCurrentPageRoi(draggedId, hoverRoiId);
   };
 
   const handleDragEnd = () => {
-    setDraggedItemIdx(null);
+    setDraggedItemId(null);
   };
 
   const handleStyle = {
@@ -1256,13 +1242,13 @@ export default function WorkspaceCustomEditor({
                       }}
                       onClick={() => setSelectedId(roi.id)} 
                       draggable={true}
-                      onDragStart={(e) => handleDragStart(e, idx)}
-                      onDragOver={(e) => handleDragOver(e, idx)}
+                      onDragStart={(e) => handleDragStart(e, roi.id)}
+                      onDragOver={(e) => handleDragOver(e, roi.id)}
                       onDragEnd={handleDragEnd}
                       className={`flex items-center justify-between p-2 rounded border text-xs cursor-grab active:cursor-grabbing select-none transition-all ${
                         roi.enabled === false
                           ? 'opacity-50 bg-slate-50 border-slate-200'
-                          : draggedItemIdx === idx 
+                          : draggedItemId === roi.id 
                           ? 'opacity-40 border-dashed border-indigo-400 bg-indigo-50/50' 
                           : (selectedId === roi.id 
                               ? "bg-indigo-50 border-indigo-300 text-slate-800 font-bold shadow-xs" 
