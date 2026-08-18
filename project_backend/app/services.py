@@ -4765,9 +4765,14 @@ class AdminTemplateService:
             if not approved_pages:
                 raise HTTPException(status_code=409, detail="Upload at least one reference image before creating a version.")
             detection_mode = _normalize_detection_mode(payload.detection_mode or base_template_row.get("detection_mode"))
-            main_page_number = _normalize_main_page_number(payload.main_page_number or base_template_row.get("main_page_number"))
-            if main_page_number > len(approved_pages):
-                main_page_number = 1
+            selected_main_page_number = _normalize_main_page_number(payload.main_page_number or base_template_row.get("main_page_number"))
+            if selected_main_page_number > len(approved_pages):
+                selected_main_page_number = 1
+            template_pages_source = approved_pages
+            stored_main_page_number = selected_main_page_number
+            if detection_mode == "main_page":
+                template_pages_source = [approved_pages[selected_main_page_number - 1]]
+                stored_main_page_number = 1
 
             group_id = base_template_row.get("template_group_id") or base_template_row["id"]
             max_version_row = conn.execute(
@@ -4812,14 +4817,14 @@ class AdminTemplateService:
                     base_template_row["document_type"] or payload.document_type or request_row["document_type"],
                     base_template_row["category"],
                     next_version,
-                    len(approved_pages),
+                    len(template_pages_source),
                     group_id,
                     next_version,
                     payload.base_template_id,
                     payload.description if payload.description is not None else base_template_row.get("description"),
                     json.dumps(shared_fields or [], ensure_ascii=False),
                     detection_mode,
-                    main_page_number,
+                    stored_main_page_number,
                     base_template_row["similarity_threshold"],
                     base_template_row["final_confidence_threshold"],
                     base_template_row.get("layout_weight", 0.50),
@@ -4846,12 +4851,14 @@ class AdminTemplateService:
             page_id_by_base_page: Dict[str, str] = {}
             page_id_by_number: Dict[int, str] = {}
 
-            for page_index, source_page in enumerate(approved_pages, start=1):
-                base_page = next((page for page in base_pages if int(page["page_number"]) == page_index), None)
+            source_base_page_number = _normalize_main_page_number(base_template_row.get("main_page_number")) if detection_mode == "main_page" else 1
+            for page_index, source_page in enumerate(template_pages_source, start=1):
+                base_lookup_page_number = source_base_page_number if detection_mode == "main_page" else page_index
+                base_page = next((page for page in base_pages if int(page["page_number"]) == base_lookup_page_number), None)
                 page_id = _stub_id("tpl_page")
                 signature = _generate_layout_signature_for_source(
                     source_page["sample_image_url"],
-                    [field for field in base_fields if int(field.get("page_number") or 1) == page_index],
+                    [field for field in base_fields if int(field.get("page_number") or 1) == base_lookup_page_number],
                 )
                 signature_json = signature_to_json(signature) if signature else None
                 conn.execute(
@@ -4895,7 +4902,7 @@ class AdminTemplateService:
                         page_index,
                         source_page["sample_image_url"],
                         source_page.get("image_source", "admin_upload"),
-                        1 if (detection_mode == "main_page" and page_index == main_page_number) or (detection_mode != "main_page" and page_index == 1) else 0,
+                        1 if page_index == stored_main_page_number else 0,
                         signature_json,
                     ),
                 )
@@ -4905,6 +4912,7 @@ class AdminTemplateService:
                 target_page_id = page_id_by_base_page.get(field["template_page_id"]) or page_id_by_number.get(int(field["page_number"]))
                 if not target_page_id:
                     continue
+                target_page_number = stored_main_page_number if detection_mode == "main_page" else int(field["page_number"])
                 conn.execute(
                     """
                     INSERT INTO template_fields (
@@ -4934,7 +4942,7 @@ class AdminTemplateService:
                         _stub_id("tpl_field"),
                         template_id,
                         target_page_id,
-                        field["page_number"],
+                        target_page_number,
                         field["field_name"],
                         field["display_label"],
                         field["roi_x_ratio"],
@@ -5050,9 +5058,13 @@ class AdminTemplateService:
             if not template_pages_source:
                 template_pages_source = [approved_pages[0]]
             detection_mode = _normalize_detection_mode(payload.detection_mode if payload else None)
-            main_page_number = _normalize_main_page_number(payload.main_page_number if payload else None)
-            if main_page_number > len(template_pages_source):
-                main_page_number = 1
+            selected_main_page_number = _normalize_main_page_number(payload.main_page_number if payload else None)
+            if selected_main_page_number > len(template_pages_source):
+                selected_main_page_number = 1
+            stored_main_page_number = selected_main_page_number
+            if detection_mode == "main_page":
+                template_pages_source = [template_pages_source[selected_main_page_number - 1]]
+                stored_main_page_number = 1
 
             requested_fields = conn.execute(
                 """
@@ -5084,7 +5096,7 @@ class AdminTemplateService:
                     _row_to_dict(request_row).get("admin_note"),
                     json.dumps([], ensure_ascii=False),
                     detection_mode,
-                    main_page_number,
+                    stored_main_page_number,
                 ),
             )
 
@@ -5164,7 +5176,7 @@ class AdminTemplateService:
                 template_page_id = template_page_id_by_request_page_id.get(page["id"])
                 reference_page_number = template_page_number_by_request_page_id.get(page["id"], int(page["page_number"]))
                 page_is_canonical = (
-                    int(reference_page_number) == main_page_number
+                    int(reference_page_number) == stored_main_page_number
                     if detection_mode == "main_page"
                     else (page["source_file_id"] or page["id"]) in main_source_file_ids
                 )
