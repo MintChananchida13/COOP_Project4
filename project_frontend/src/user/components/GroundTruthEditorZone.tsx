@@ -923,7 +923,7 @@ const EditableTableResult = ({
         className={`h-auto border p-1.5 ${centerCellContent ? "align-middle text-center" : "align-top text-left"} ${
           selected
             ? "border-indigo-500 bg-indigo-50 ring-1 ring-inset ring-indigo-400"
-            : isHeaderCell || isMergedCell
+            : isHeaderCell
               ? "border-slate-300 bg-slate-100"
               : "border-slate-300 bg-white"
         }`}
@@ -949,7 +949,7 @@ const EditableTableResult = ({
           className={`block min-h-9 w-full resize-none overflow-hidden rounded-md border border-transparent px-2 text-xs leading-5 text-slate-800 outline-none focus:border-indigo-400 focus:bg-white ${
             centerCellContent ? "py-2 text-center" : "py-1 text-left"
           } ${
-            isHeaderCell || isMergedCell ? "bg-white/80 font-black" : "bg-transparent font-medium"
+            isHeaderCell ? "bg-white/80 font-black" : "bg-transparent font-medium"
           }`}
           rows={merge ? Math.max(1, merge.rowSpan) : 1}
           placeholder={isHeaderCell ? `Header ${rowIndex + 1}.${cellIndex + 1}` : ""}

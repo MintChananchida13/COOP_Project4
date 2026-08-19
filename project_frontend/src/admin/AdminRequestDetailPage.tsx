@@ -235,8 +235,7 @@ export default function AdminRequestDetailPage({
   const primaryDocumentGroup = documentGroups[0];
 
   useEffect(() => {
-    const pageCount = primaryDocumentGroup?.pages.length || 1;
-    setMainPageNumber((value) => Math.min(Math.max(value, 1), pageCount));
+    setMainPageNumber(1);
   }, [primaryDocumentGroup?.pages.length]);
 
   const sharedFields = useMemo(
@@ -342,7 +341,9 @@ export default function AdminRequestDetailPage({
       setActionError("ต้องมีไฟล์ต้นทางก่อนสร้าง Template");
       return;
     }
-    const safeMainPageNumber = Math.min(Math.max(mainPageNumber, 1), primaryPages.length || 1);
+    const safeMainPageNumber = detectionMode === "main_page"
+      ? 1
+      : Math.min(Math.max(mainPageNumber, 1), primaryPages.length || 1);
 
     const nextTemplateName = templateName.trim();
     const nextDocumentType =
@@ -829,7 +830,7 @@ export default function AdminRequestDetailPage({
                       <div className="mt-2 grid gap-2">
                         {[
                           { value: "all_pages" as const, label: "ตรวจทุกหน้า", note: "ใช้ทุกหน้าในการหา Template แบบเดิม" },
-                          { value: "main_page" as const, label: "ใช้หน้าหลัก", note: "ใช้หน้าเดียวในการหา Template จำนวนหน้า PDF ไม่มีผลต่อคะแนน" },
+                          { value: "main_page" as const, label: "ใช้หน้าแรก", note: "ใช้หน้าแรกเท่านั้นในการหา Template จำนวนหน้า PDF ไม่มีผลต่อคะแนน" },
                         ].map((option) => (
                           <label
                             key={option.value}
@@ -853,22 +854,17 @@ export default function AdminRequestDetailPage({
                       </div>
 
                       {detectionMode === "main_page" && (
-                        <label className="mt-3 block space-y-1">
+                        <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2">
                           <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                            หน้าหลักสำหรับค้นหา Template
+                            หน้าที่ใช้ค้นหา Template
                           </span>
-                          <select
-                            value={mainPageNumber}
-                            onChange={(event) => setMainPageNumber(Number(event.target.value))}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
-                          >
-                            {group.pages.map((page) => (
-                              <option key={page.id} value={page.pageNumber}>
-                                หน้า {page.pageNumber}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                          <p className="mt-1 text-xs font-black text-indigo-900">
+                            หน้า 1 เท่านั้น
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-indigo-700">
+                            Admin ใช้หน้าแรกเป็นหน้าหลักสำหรับค้นหา Template ส่วนหน้าอื่นไม่ถูกนำมาคิดคะแนน Match
+                          </p>
+                        </div>
                       )}
                     </div>
 
