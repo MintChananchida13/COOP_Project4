@@ -80,6 +80,10 @@ def _stub_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+def _template_group_code() -> str:
+    return f"tgrp_{uuid4().hex[:12]}"
+
+
 def _normalize_extraction_method(value: Optional[str]) -> str:
     if value == "typhoon_ocr":
         return "paddle_thai_ocr"
@@ -2929,7 +2933,7 @@ class AdminTemplateService:
     def create_template(self, payload: TemplateCreate) -> Dict[str, Any]:
         group_id = _stub_id("tgrp")
         template_id = _stub_id("tpl")
-        code = f"{(_safe_file_token(payload.name or 'template') or 'template')}_{uuid.uuid4().hex[:8]}"
+        code = _template_group_code()
         with _connect() as conn:
             conn.execute(
                 """
@@ -3312,7 +3316,7 @@ class AdminTemplateService:
             group_id = _stub_id("tgrp")
             template_id = _stub_id("tpl")
             template_name = (payload.template_name if payload and payload.template_name else request_row["request_title"]).strip()
-            conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, f"{(_safe_file_token(template_name) or 'template')}_{uuid.uuid4().hex[:8]}", request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None, created_by))
+            conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, _template_group_code(), request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None, created_by))
             similarity_threshold = payload.similarity_threshold if payload and payload.similarity_threshold is not None else 0.75
             conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_by, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), similarity_threshold, created_by))
             for index, page in enumerate(pages, start=1):
