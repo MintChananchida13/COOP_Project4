@@ -543,6 +543,21 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const [expandedDetectionCandidates, setExpandedDetectionCandidates] = useState<Record<string, boolean>>({});
   const autoSimulationStartedRef = useRef(false);
 
+  const applyTemplateBundle = (bundle: Awaited<ReturnType<typeof fetchTemplateBundle>>, scope: string) => {
+    const nextPages = Array.isArray(bundle?.pages) ? bundle.pages : [];
+    const nextFields = Array.isArray(bundle?.fields) ? bundle.fields : [];
+    if (process.env.NODE_ENV === "development") {
+      console.debug("[prepublish:pages]", scope, {
+        hasTemplate: Boolean(bundle?.template),
+        pagesCount: nextPages.length,
+        fieldsCount: nextFields.length,
+      });
+    }
+    setTemplate(bundle.template);
+    setPages(nextPages);
+    setFields(nextFields);
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -550,9 +565,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       try {
         const bundle = await fetchTemplateBundle(templateId);
         if (cancelled) return;
-        setTemplate(bundle.template);
-        setPages(bundle.pages);
-        setFields(bundle.fields);
+        applyTemplateBundle(bundle, "initial-load");
         setStepOneConfirmed(false);
         autoSimulationStartedRef.current = false;
         setLoadStatus("loaded");
@@ -624,7 +637,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     simulation?.layoutSignaturePages?.length
       ? simulation.layoutSignaturePages
       : simulation?.temporaryEmbedding?.layoutSignaturePages?.length
-        ? simulation.temporaryEmbedding.layoutSignaturePages
+        ? simulation.temporaryEmbedding?.layoutSignaturePages || []
         : safePages.map((page) => ({
             templatePageId: page.id,
             templateLayoutReferenceId: null,
@@ -815,9 +828,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     setSimulationError("");
     try {
       const bundle = await updateTemplateApi(templateId, { finalConfidenceThreshold: nextThreshold });
-      setTemplate(bundle.template);
-      setPages(bundle.pages);
-      setFields(bundle.fields);
+      applyTemplateBundle(bundle, "final-threshold-save");
       setStatusMessage("Final confidence threshold saved.");
     } catch (error) {
       console.warn("Final confidence threshold save failed.", error);
@@ -869,9 +880,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     setSimulationError("");
     try {
       const bundle = await updateTemplateApi(templateId, nextWeights);
-      setTemplate(bundle.template);
-      setPages(bundle.pages);
-      setFields(bundle.fields);
+      applyTemplateBundle(bundle, "matching-weights-save");
       setStatusMessage("Matching weights saved.");
     } catch (error) {
       console.warn("Matching weights save failed.", error);
@@ -1361,7 +1370,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         {simulation?.temporaryEmbedding && (
           <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              <DraftOverviewMetric label="Generated" value={simulation.temporaryEmbedding.generatedAt || "N/A"} />
+              <DraftOverviewMetric label="Generated" value={simulation.temporaryEmbedding?.generatedAt || "N/A"} />
             </div>
           </div>
         )}

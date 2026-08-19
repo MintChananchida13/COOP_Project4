@@ -34,6 +34,16 @@ const cloneTemplates = (templates: Template[]) =>
     sharedFields: template.sharedFields ? [...template.sharedFields] : undefined,
   }));
 
+const debugPrepublishPagesAccess = (scope: string, value: unknown) => {
+  if (process.env.NODE_ENV !== "development") return;
+  const record = value as Record<string, unknown> | null | undefined;
+  console.debug("[prepublish:pages]", scope, {
+    hasValue: Boolean(record),
+    keys: record && typeof record === "object" ? Object.keys(record) : [],
+    hasPagesArray: Array.isArray(record?.pages),
+  });
+};
+
 const setTemplateRequestListCache = (requests: AdminTemplateRequest[]) => {
   templateRequestListCache = cloneTemplateRequests(requests);
 };
@@ -948,6 +958,16 @@ const mapApiIgnoreRegion = (region: ApiIgnoreRegion): IgnoreRegion => ({
   },
 });
 
+const normalizeTemplateBundle = (data: Partial<ApiTemplate> | null | undefined, fallbackId = "") => {
+  debugPrepublishPagesAccess("normalizeTemplateBundle", data);
+  return {
+    template: mapApiTemplate(data, fallbackId),
+    pages: Array.isArray(data?.pages) ? data.pages.map(mapApiTemplatePage) : [],
+    fields: Array.isArray(data?.fields) ? data.fields.map(mapApiTemplateField) : [],
+    ignoreRegions: Array.isArray(data?.ignore_regions) ? data.ignore_regions.map(mapApiIgnoreRegion) : [],
+  };
+};
+
 interface ConvertTemplateResponse {
   template_request_id: string;
   converted_template_id?: string | null;
@@ -1256,12 +1276,7 @@ export const fetchTemplateBundle = async (templateId: string) => {
     throw new Error("Template not found");
   }
 
-  return {
-    template: mapApiTemplate(data),
-    pages: Array.isArray(data.pages) ? data.pages.map(mapApiTemplatePage) : [],
-    fields: Array.isArray(data.fields) ? data.fields.map(mapApiTemplateField) : [],
-    ignoreRegions: Array.isArray(data.ignore_regions) ? data.ignore_regions.map(mapApiIgnoreRegion) : [],
-  };
+  return normalizeTemplateBundle(data, templateId);
 };
 
 export const fetchTemplates = async () => {
@@ -1333,12 +1348,7 @@ const mapTemplateBundleResponse = async (response: Response, templateId: string)
     return fetchTemplateBundle(templateId);
   }
 
-  return {
-    template: mapApiTemplate(data),
-    pages: (data.pages || []).map(mapApiTemplatePage),
-    fields: (data.fields || []).map(mapApiTemplateField),
-    ignoreRegions: (data.ignore_regions || []).map(mapApiIgnoreRegion),
-  };
+  return normalizeTemplateBundle(data, templateId);
 };
 
 export const updateTemplateApi = async (templateId: string, patch: Partial<Template>) => {

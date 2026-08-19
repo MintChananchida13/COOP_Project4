@@ -130,7 +130,7 @@ class TemplateCreate(BaseModel):
     shared_fields: List[str] = Field(default_factory=list)
     page_count: int = Field(default=1, ge=1)
     similarity_threshold: float = Field(default=0.75, ge=0, le=1)
-    final_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
+    final_confidence_threshold: float = Field(default=0.75, ge=0, le=1)
     layout_weight: float = Field(default=0.50, ge=0, le=1)
     text_anchor_weight: float = Field(default=0.35, ge=0, le=1)
     image_anchor_weight: float = Field(default=0.15, ge=0, le=1)

@@ -133,11 +133,13 @@ export default function AdminRequestDetailPage({
 
         if (cancelled) return;
 
+        const fallbackPages = Array.isArray(requestDetail.pages) ? requestDetail.pages : [];
+        const nextPages = requestPages.length > 0 ? requestPages : fallbackPages;
         setRequest({
           ...requestDetail,
-          pages: requestPages.length > 0 ? requestPages : requestDetail.pages,
+          pages: nextPages,
         });
-        setPages(requestPages.length > 0 ? requestPages : requestDetail.pages);
+        setPages(nextPages);
         setTemplateName(requestDetail.requestTitle || "");
         setTemplateDocumentType(requestDetail.documentType || requestDetail.requestTitle || "");
         setVersionNameSuffix("");

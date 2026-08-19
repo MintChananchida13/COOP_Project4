@@ -654,7 +654,7 @@ export default function AdminDetectionLabPage() {
                     {result.matched ? "พบ Template" : "ไม่พบ Template ที่ผ่านเกณฑ์"}
                   </span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">เกณฑ์ {result.threshold}</span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{inputPageCount || result.pages.length || 1} หน้า</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{inputPageCount || pages.length || 1} หน้า</span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{sourceType === "pdf" ? "แปลง PDF เป็นภาพแล้ว" : "ไฟล์ภาพ"}</span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{result.version}</span>
                 </div>

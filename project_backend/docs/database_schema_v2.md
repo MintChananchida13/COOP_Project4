@@ -148,7 +148,8 @@ Stores template requests from users or admin-created drafts.
 - `document_type`
 - `request_mode`
 - `status`
-- `notes`
+- `user_note`
+- `admin_note`
 - `converted_template_group_id` references `template_groups(id)`
 - `converted_template_version_id` references `template_versions(id)`
 - `created_at`, `reviewed_at`
@@ -162,9 +163,13 @@ Stores uploaded pages for a request.
 - `page_number`
 - `page_name`
 - `sample_image_url`
+- `source_file_id`
 - `source_file_name`
+- `image_source`
 - `review_status`
-- `created_at`
+- `is_canonical`
+- `layout_signature_json`
+- `created_at`, `updated_at`
 
 Constraint: unique `(template_request_id, page_number)`.
 
@@ -192,8 +197,8 @@ Stores asynchronous OCR processing jobs.
 - `status`
 - `request_json`
 - `result_json`
-- `error`
-- `created_at`, `updated_at`, `completed_at`
+- `error_message`
+- `requested_at`, `started_at`, `completed_at`
 
 ### image_verification_categories
 
@@ -203,8 +208,9 @@ Stores image verification labels and prompts.
 - `value` unique
 - `label`
 - `prompt`
-- `positive_threshold`
-- `negative_threshold`
+- `match_threshold`
+- `margin_threshold`
+- `evidence_temperature`
 - `enabled`
 - `created_at`, `updated_at`
 

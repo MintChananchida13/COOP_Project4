@@ -387,12 +387,22 @@ _POSTGRES_SCHEMA = [
         page_number INTEGER NOT NULL,
         page_name TEXT,
         sample_image_url TEXT,
+        source_file_id TEXT,
         source_file_name TEXT,
+        image_source TEXT NOT NULL DEFAULT 'user_request',
         review_status TEXT NOT NULL DEFAULT 'pending',
+        is_canonical BOOLEAN NOT NULL DEFAULT FALSE,
+        layout_signature_json JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT template_request_pages_request_page_key UNIQUE (template_request_id, page_number)
     )
     """,
+    "ALTER TABLE template_request_pages ADD COLUMN IF NOT EXISTS source_file_id TEXT",
+    "ALTER TABLE template_request_pages ADD COLUMN IF NOT EXISTS image_source TEXT NOT NULL DEFAULT 'user_request'",
+    "ALTER TABLE template_request_pages ADD COLUMN IF NOT EXISTS is_canonical BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE template_request_pages ADD COLUMN IF NOT EXISTS layout_signature_json JSONB",
+    "ALTER TABLE template_request_pages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
     """
     CREATE TABLE IF NOT EXISTS version_test_cases (
         id TEXT NOT NULL PRIMARY KEY,

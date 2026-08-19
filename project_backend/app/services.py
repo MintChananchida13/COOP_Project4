@@ -2628,15 +2628,19 @@ class TemplateRequestService:
                 source_file_name = (
                     page.source_file_name if hasattr(page, "source_file_name") else page.get("source_file_name")
                 ) or payload.request_title
+                source_file_id = (
+                    page.source_file_id if hasattr(page, "source_file_id") else page.get("source_file_id")
+                ) or source_file_name or request_id
                 conn.execute(
                     """
                     INSERT INTO template_request_pages (
                         id, template_request_id, page_number, page_name, sample_image_url,
-                        source_file_name, review_status, created_at
+                        source_file_id, source_file_name, image_source, review_status,
+                        is_canonical, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'user_request', 'pending', FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (_stub_id("tpl_req_page"), request_id, page_number, f"Page {page_number}", sample_image_url, source_file_name),
+                    (_stub_id("tpl_req_page"), request_id, page_number, f"Page {page_number}", sample_image_url, source_file_id, source_file_name),
                 )
             conn.commit()
         return self.get(request_id)
@@ -2780,13 +2784,19 @@ class TemplateRequestService:
                 (request_id,),
             ).fetchone()
             page_number = int(max_page["max_page_number"] if max_page and max_page["max_page_number"] else 0) + 1
+            if payload.is_canonical:
+                conn.execute(
+                    "UPDATE template_request_pages SET is_canonical = FALSE, updated_at = CURRENT_TIMESTAMP WHERE template_request_id = ?",
+                    (request_id,),
+                )
             conn.execute(
                 """
                 INSERT INTO template_request_pages (
                     id, template_request_id, page_number, page_name, sample_image_url,
-                    source_file_name, review_status, created_at
+                    source_file_id, source_file_name, image_source, review_status,
+                    is_canonical, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     image_id,
@@ -2794,8 +2804,11 @@ class TemplateRequestService:
                     page_number,
                     f"Page {page_number}",
                     payload.sample_image_url,
+                    payload.source_file_id or payload.source_file_name or image_id,
                     payload.source_file_name or f"Uploaded image {page_number}",
+                    payload.image_source or "admin_upload",
                     review_status,
+                    bool(payload.is_canonical),
                 ),
             )
             conn.commit()
@@ -2811,8 +2824,15 @@ class TemplateRequestService:
             column_values["review_status"] = self._normalize_review_status(patch["review_status"])
         if "source_file_name" in patch:
             column_values["source_file_name"] = patch["source_file_name"]
+        if "source_file_id" in patch:
+            column_values["source_file_id"] = patch["source_file_id"]
+        if "image_source" in patch:
+            column_values["image_source"] = patch["image_source"] or "admin_upload"
+        if "is_canonical" in patch:
+            column_values["is_canonical"] = bool(patch["is_canonical"])
         if not column_values:
             return self.get(request_id)
+        column_values["updated_at"] = _now()
         assignments = ", ".join(f"{column} = ?" for column in column_values)
         with _connect() as conn:
             row = conn.execute(
@@ -2821,6 +2841,11 @@ class TemplateRequestService:
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Template request image not found.")
+            if column_values.get("is_canonical") is True:
+                conn.execute(
+                    "UPDATE template_request_pages SET is_canonical = FALSE, updated_at = CURRENT_TIMESTAMP WHERE template_request_id = ?",
+                    (request_id,),
+                )
             conn.execute(
                 f"UPDATE template_request_pages SET {assignments} WHERE id = ? AND template_request_id = ?",
                 [*column_values.values(), image_id, request_id],
