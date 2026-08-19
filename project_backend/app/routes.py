@@ -2,9 +2,9 @@ import io
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from .auth_service import authenticate_user, create_access_token, create_user, current_admin, current_user
+from .auth_service import authenticate_user, create_access_token, create_user
 from .db import connect as connect_db
 from .schemas import (
     ApiResponse,
@@ -67,8 +67,8 @@ def login(payload: AuthLoginRequest) -> ApiResponse:
 
 
 @router.get("/auth/me", response_model=ApiResponse)
-def me(user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
-    return ok({"user": user})
+def me() -> ApiResponse:
+    return ok({"user": None, "auth_mode": "mock"})
 
 
 @router.get("/health", response_model=ApiResponse)
@@ -170,7 +170,7 @@ async def _read_dev_detection_image(request: Request) -> bytes:
 
 
 @router.post("/api/templates/detect-dev")
-async def detect_template_dev_route(request: Request, user: Dict[str, Any] = Depends(current_user)) -> dict:
+async def detect_template_dev_route(request: Request) -> dict:
     image_bytes = await _read_dev_detection_image(request)
     try:
         return {"status": "success", "data": detect_template_dev(image_bytes)}
@@ -183,8 +183,8 @@ async def detect_template_dev_route(request: Request, user: Dict[str, Any] = Dep
 
 
 @router.post("/template-requests", response_model=ApiResponse)
-def create_template_request(payload: TemplateRequestCreate, user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
-    return ok(template_requests.create(payload.model_copy(update={"requested_by": user["id"]})))
+def create_template_request(payload: TemplateRequestCreate) -> ApiResponse:
+    return ok(template_requests.create(payload.model_copy(update={"requested_by": None})))
 
 
 @router.get("/template-requests", response_model=ApiResponse)
@@ -193,7 +193,7 @@ def list_template_requests() -> ApiResponse:
 
 
 @router.get("/template-requests/{request_id}", response_model=ApiResponse)
-def get_template_request(request_id: str, user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
+def get_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.get(request_id))
 
 
@@ -201,23 +201,22 @@ def get_template_request(request_id: str, user: Dict[str, Any] = Depends(current
 def update_template_request(
     request_id: str,
     payload: TemplateRequestUpdate,
-    user: Dict[str, Any] = Depends(current_user),
 ) -> ApiResponse:
     return ok(template_requests.update(request_id, payload))
 
 
 @router.delete("/template-requests/{request_id}", response_model=ApiResponse)
-def delete_template_request(request_id: str, user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
+def delete_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.delete(request_id))
 
 
 @router.post("/template-requests/{request_id}/submit", response_model=ApiResponse)
-def submit_template_request(request_id: str, user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
+def submit_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.submit(request_id))
 
 
 @router.get("/template-requests/{request_id}/pages", response_model=ApiResponse)
-def get_template_request_pages(request_id: str, user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
+def get_template_request_pages(request_id: str) -> ApiResponse:
     return ok(template_requests.pages(request_id))
 
 
@@ -225,7 +224,6 @@ def get_template_request_pages(request_id: str, user: Dict[str, Any] = Depends(c
 def create_requested_field(
     request_id: str,
     payload: RequestedFieldCreate,
-    user: Dict[str, Any] = Depends(current_user),
 ) -> ApiResponse:
     return ok(template_requests.add_requested_field(request_id, payload))
 
@@ -235,7 +233,6 @@ def update_requested_field(
     request_id: str,
     field_id: str,
     payload: RequestedFieldUpdate,
-    user: Dict[str, Any] = Depends(current_user),
 ) -> ApiResponse:
     return ok(template_requests.update_requested_field(request_id, field_id, payload))
 
@@ -244,13 +241,12 @@ def update_requested_field(
 def delete_requested_field(
     request_id: str,
     field_id: str,
-    user: Dict[str, Any] = Depends(current_user),
 ) -> ApiResponse:
     return ok(template_requests.delete_requested_field(request_id, field_id))
 
 
 @router.get("/admin/dashboard", response_model=ApiResponse)
-def admin_dashboard(user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def admin_dashboard() -> ApiResponse:
     return ok(admin_templates.dashboard())
 
 
@@ -258,7 +254,6 @@ def admin_dashboard(user: Dict[str, Any] = Depends(current_admin)) -> ApiRespons
 def cleanup_generated_storage(
     max_age_hours: int = 24,
     dry_run: bool = True,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(storage_maintenance.cleanup_generated_files(max_age_hours=max_age_hours, dry_run=dry_run))
 
@@ -266,7 +261,6 @@ def cleanup_generated_storage(
 @router.get("/admin/image-verification-categories", response_model=ApiResponse)
 def list_image_verification_categories(
     enabled_only: bool = False,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(image_categories.list(enabled_only=enabled_only))
 
@@ -274,7 +268,6 @@ def list_image_verification_categories(
 @router.post("/admin/image-verification-categories", response_model=ApiResponse)
 def create_image_verification_category(
     payload: ImageVerificationCategoryCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(image_categories.create(payload.model_dump()))
 
@@ -283,7 +276,6 @@ def create_image_verification_category(
 def update_image_verification_category(
     category_value: str,
     payload: ImageVerificationCategoryUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(image_categories.update(category_value, payload.model_dump(exclude_unset=True)))
 
@@ -291,28 +283,27 @@ def update_image_verification_category(
 @router.delete("/admin/image-verification-categories/{category_value}", response_model=ApiResponse)
 def delete_image_verification_category(
     category_value: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(image_categories.delete(category_value))
 
 
 @router.get("/admin/template-requests", response_model=ApiResponse)
-def admin_list_template_requests(user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def admin_list_template_requests() -> ApiResponse:
     return ok(template_requests.list())
 
 
 @router.get("/admin/template-requests/{request_id}", response_model=ApiResponse)
-def admin_get_template_request(request_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def admin_get_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.get(request_id))
 
 
 @router.delete("/admin/template-requests/{request_id}", response_model=ApiResponse)
-def admin_delete_template_request(request_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def admin_delete_template_request(request_id: str) -> ApiResponse:
     return ok(template_requests.delete(request_id))
 
 
 @router.post("/admin/template-requests/{request_id}/start-review", response_model=ApiResponse)
-def admin_start_review(request_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def admin_start_review(request_id: str) -> ApiResponse:
     return ok(admin_templates.start_review(request_id))
 
 
@@ -320,7 +311,6 @@ def admin_start_review(request_id: str, user: Dict[str, Any] = Depends(current_a
 def admin_add_template_request_image(
     request_id: str,
     payload: TemplateRequestImageCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.add_image(request_id, payload))
 
@@ -330,7 +320,6 @@ def admin_update_template_request_image(
     request_id: str,
     image_id: str,
     payload: TemplateRequestImageUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.update_image(request_id, image_id, payload))
 
@@ -339,7 +328,6 @@ def admin_update_template_request_image(
 def admin_delete_template_request_image(
     request_id: str,
     image_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.delete_image(request_id, image_id))
 
@@ -348,7 +336,6 @@ def admin_delete_template_request_image(
 def admin_approve_template_request_image(
     request_id: str,
     image_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="approved")))
 
@@ -357,7 +344,6 @@ def admin_approve_template_request_image(
 def admin_reject_template_request_image(
     request_id: str,
     image_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="rejected", is_canonical=False)))
 
@@ -366,7 +352,6 @@ def admin_reject_template_request_image(
 def admin_set_template_request_canonical_image(
     request_id: str,
     image_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.update_image(request_id, image_id, TemplateRequestImageUpdate(review_status="approved", is_canonical=True)))
 
@@ -375,16 +360,14 @@ def admin_set_template_request_canonical_image(
 def admin_convert_request_to_template(
     request_id: str,
     payload: TemplateRequestConvert | None = None,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
-    return ok(admin_templates.convert_request_to_template(request_id, payload, created_by=user["id"]))
+    return ok(admin_templates.convert_request_to_template(request_id, payload, created_by=None))
 
 
 @router.post("/admin/template-requests/{request_id}/suggest-base-version", response_model=ApiResponse)
 def admin_suggest_template_request_base_version(
     request_id: str,
     payload: TemplateVersionCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     if not payload.base_template_id:
         raise HTTPException(status_code=400, detail="base_template_id is required")
@@ -395,32 +378,30 @@ def admin_suggest_template_request_base_version(
 def admin_convert_request_to_template_version(
     request_id: str,
     payload: TemplateVersionFromRequestCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
-    return ok(admin_templates.create_version_from_request(request_id, payload, created_by=user["id"]))
+    return ok(admin_templates.create_version_from_request(request_id, payload, created_by=None))
 
 
 @router.post("/admin/template-requests/{request_id}/reject", response_model=ApiResponse)
 def admin_reject_template_request(
     request_id: str,
     payload: RejectRequest,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(template_requests.reject(request_id, payload.reason))
 
 
 @router.post("/admin/templates", response_model=ApiResponse)
-def create_template(payload: TemplateCreate, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
-    return ok(admin_templates.create_template(payload.model_copy(update={"created_by": user["id"]})))
+def create_template(payload: TemplateCreate) -> ApiResponse:
+    return ok(admin_templates.create_template(payload.model_copy(update={"created_by": None})))
 
 
 @router.get("/admin/templates", response_model=ApiResponse)
-def list_templates(user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def list_templates() -> ApiResponse:
     return ok(admin_templates.list_templates())
 
 
 @router.get("/admin/templates/{template_id}", response_model=ApiResponse)
-def get_template(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def get_template(template_id: str) -> ApiResponse:
     return ok(admin_templates.get_template(template_id))
 
 
@@ -428,18 +409,17 @@ def get_template(template_id: str, user: Dict[str, Any] = Depends(current_admin)
 def update_template(
     template_id: str,
     payload: TemplateUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.update_template(template_id, payload))
 
 
 @router.delete("/admin/templates/{template_id}", response_model=ApiResponse)
-def delete_template(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def delete_template(template_id: str) -> ApiResponse:
     return ok(admin_templates.delete_template(template_id))
 
 
 @router.get("/admin/templates/{template_id}/pages", response_model=ApiResponse)
-def list_template_pages(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def list_template_pages(template_id: str) -> ApiResponse:
     return ok(admin_templates.list_template_pages(template_id))
 
 
@@ -447,7 +427,6 @@ def list_template_pages(template_id: str, user: Dict[str, Any] = Depends(current
 def create_template_page(
     template_id: str,
     payload: TemplatePageCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.create_template_page(template_id, payload))
 
@@ -457,7 +436,6 @@ def update_template_page(
     template_id: str,
     page_id: str,
     payload: TemplatePageUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.update_template_page(template_id, page_id, payload))
 
@@ -466,7 +444,6 @@ def update_template_page(
 def delete_template_page(
     template_id: str,
     page_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.delete_template_page(template_id, page_id))
 
@@ -475,7 +452,6 @@ def delete_template_page(
 def create_template_field(
     template_id: str,
     payload: TemplateFieldCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.create_template_field(template_id, payload))
 
@@ -485,7 +461,6 @@ def update_template_field(
     template_id: str,
     field_id: str,
     payload: TemplateFieldUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.update_template_field(template_id, field_id, payload))
 
@@ -494,7 +469,6 @@ def update_template_field(
 def delete_template_field(
     template_id: str,
     field_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.delete_template_field(template_id, field_id))
 
@@ -503,7 +477,6 @@ def delete_template_field(
 def create_ignore_region(
     template_id: str,
     payload: IgnoreRegionCreate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.create_ignore_region(template_id, payload))
 
@@ -513,7 +486,6 @@ def update_ignore_region(
     template_id: str,
     region_id: str,
     payload: IgnoreRegionUpdate,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.update_ignore_region(template_id, region_id, payload))
 
@@ -522,38 +494,37 @@ def update_ignore_region(
 def delete_ignore_region(
     template_id: str,
     region_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.delete_ignore_region(template_id, region_id))
 
 
 @router.post("/admin/templates/{template_id}/generate-layout-embedding", response_model=ApiResponse)
-def generate_template_embedding(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def generate_template_embedding(template_id: str) -> ApiResponse:
     return ok(embeddings.generate_for_template(template_id))
 
 
 @router.post("/admin/templates/{template_id}/embedding-jobs", response_model=ApiResponse)
-def create_embedding_job(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def create_embedding_job(template_id: str) -> ApiResponse:
     return ok(embeddings.create_embedding_job(template_id))
 
 
 @router.get("/admin/templates/{template_id}/embedding-jobs/latest", response_model=ApiResponse)
-def get_latest_embedding_job(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def get_latest_embedding_job(template_id: str) -> ApiResponse:
     return ok(embeddings.latest_embedding_job(template_id))
 
 
 @router.post("/admin/embedding-jobs/{job_id}/complete-dev", response_model=ApiResponse)
-def complete_embedding_job_dev(job_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def complete_embedding_job_dev(job_id: str) -> ApiResponse:
     return ok(embeddings.complete_job_dev(job_id))
 
 
 @router.post("/admin/embedding-jobs/{job_id}/run-dev", response_model=ApiResponse)
-def run_embedding_job_dev(job_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def run_embedding_job_dev(job_id: str) -> ApiResponse:
     return ok(embeddings.run_job_dev(job_id))
 
 
 @router.post("/admin/embedding-jobs/{job_id}/fail-dev", response_model=ApiResponse)
-def fail_embedding_job_dev(job_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def fail_embedding_job_dev(job_id: str) -> ApiResponse:
     return ok(embeddings.fail_job_dev(job_id))
 
 
@@ -561,7 +532,6 @@ def fail_embedding_job_dev(job_id: str, user: Dict[str, Any] = Depends(current_a
 def generate_template_page_embedding(
     template_id: str,
     page_id: str,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(embeddings.generate_for_template_page(template_id, page_id))
 
@@ -570,23 +540,22 @@ def generate_template_page_embedding(
 def test_template(
     template_id: str,
     payload: TemplateTestRequest,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.test_template(template_id, payload))
 
 
 @router.post("/admin/templates/{template_id}/test-extraction", response_model=ApiResponse)
-def test_template_extraction_fields(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def test_template_extraction_fields(template_id: str) -> ApiResponse:
     return ok(admin_templates.test_extraction_fields(template_id))
 
 
 @router.post("/admin/templates/{template_id}/test-verification", response_model=ApiResponse)
-def test_template_verification_anchors(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def test_template_verification_anchors(template_id: str) -> ApiResponse:
     return ok(admin_templates.test_verification_anchors(template_id))
 
 
 @router.post("/admin/templates/{template_id}/prepublish-simulation", response_model=ApiResponse)
-def run_template_prepublish_simulation(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def run_template_prepublish_simulation(template_id: str) -> ApiResponse:
     return ok(admin_templates.run_prepublish_simulation(template_id))
 
 
@@ -594,19 +563,18 @@ def run_template_prepublish_simulation(template_id: str, user: Dict[str, Any] = 
 async def run_template_prepublish_detection_test(
     template_id: str,
     request: Request,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     file_bytes = await _read_dev_detection_image(request)
     return ok(admin_templates.run_prepublish_detection_test(template_id, file_bytes))
 
 
 @router.post("/admin/templates/{template_id}/confirm-publish", response_model=ApiResponse)
-def confirm_template_publish(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def confirm_template_publish(template_id: str) -> ApiResponse:
     return ok(admin_templates.confirm_publish_template(template_id))
 
 
 @router.post("/admin/templates/{template_id}/approve", response_model=ApiResponse)
-def approve_template(template_id: str, user: Dict[str, Any] = Depends(current_admin)) -> ApiResponse:
+def approve_template(template_id: str) -> ApiResponse:
     return ok(admin_templates.approve_template(template_id))
 
 
@@ -614,6 +582,5 @@ def approve_template(template_id: str, user: Dict[str, Any] = Depends(current_ad
 def reject_template(
     template_id: str,
     payload: RejectRequest,
-    user: Dict[str, Any] = Depends(current_admin),
 ) -> ApiResponse:
     return ok(admin_templates.reject_template(template_id, payload.reason))

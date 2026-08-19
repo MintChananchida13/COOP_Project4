@@ -52,10 +52,7 @@ export const clearAuthSession = () => {
 };
 
 export const authHeaders = (extra?: HeadersInit): HeadersInit => {
-  const session = readAuthSession();
-  const userId = session?.userId || session?.id;
   return {
     ...(extra || {}),
-    ...(userId ? { "X-User-Id": userId } : {}),
   };
 };

@@ -7,17 +7,12 @@
   TemplatePage,
   TemplateStatus,
 } from "../types/ocr";
-import { readAuthSession } from "../auth/session";
 
 export const ADMIN_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const fetchWithAuth = (input: RequestInfo | URL, init: RequestInit = {}) => {
-  const session = readAuthSession();
   const headers = new Headers(init.headers || {});
-  if (session?.id && !headers.has("X-User-Id")) {
-    headers.set("X-User-Id", session.id);
-  }
   return fetch(input, { ...init, headers });
 };
 

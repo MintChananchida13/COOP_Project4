@@ -142,9 +142,7 @@ def _ensure_postgres_schema(conn: PostgresConnection) -> None:
 
     for statement in _POSTGRES_SCHEMA:
         conn.execute(statement)
-    inserted = _seed_default_users(conn)
     conn.commit()
-    _log_seed_user_summary(conn, inserted)
     _POSTGRES_READY = True
 
 
