@@ -763,8 +763,9 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     setPublishConfirmed(false);
     try {
       const result = await runPrepublishSimulation(templateId);
-      setSimulation(result);
-      setTemplate(result.template);
+      const refreshedBundle = await fetchTemplateBundle(templateId);
+      applyTemplateBundle(refreshedBundle, "post-simulation-transition");
+      setSimulation({ ...result, template: refreshedBundle.template });
       setStatusMessage("Temporary layout signature simulation completed. Review candidate ranking and readiness before publishing.");
     } catch (error) {
       console.warn("Pre-publish simulation failed.", error);
