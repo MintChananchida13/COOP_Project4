@@ -3316,7 +3316,17 @@ class AdminTemplateService:
         from .detection_service import detect_template_dev
 
         detection = detect_template_dev(file_bytes, include_template_id=template_id)
-        candidates = detection.get("candidates") or []
+        candidates = [
+            {
+                **candidate,
+                "rank": index,
+                "is_current_draft": candidate.get("template_id") == template_id,
+                "source": "draft" if candidate.get("template_id") == template_id else "published",
+                "source_label": "Draft Template" if candidate.get("template_id") == template_id else "Published Template",
+            }
+            for index, candidate in enumerate(detection.get("candidates") or [], start=1)
+            if isinstance(candidate, dict)
+        ]
         best_candidate = detection.get("best_candidate")
         if not best_candidate and candidates:
             best_candidate = max(
@@ -3327,13 +3337,18 @@ class AdminTemplateService:
                     float(item.get("retrieval_score") or 0.0),
                 ),
             )
+        elif isinstance(best_candidate, dict):
+            matching_candidate = next((candidate for candidate in candidates if candidate.get("template_id") == best_candidate.get("template_id")), None)
+            if matching_candidate:
+                best_candidate = matching_candidate
 
         draft_rank = next(
             (index for index, candidate in enumerate(candidates, start=1) if candidate.get("template_id") == template_id),
             None,
         )
         selected_template_id = (best_candidate or {}).get("template_id") if isinstance(best_candidate, dict) else None
-        matched = bool(detection.get("matched") and best_candidate)
+        matched = bool(best_candidate)
+        selected_passed_final_gate = bool((best_candidate or {}).get("final_passed")) if isinstance(best_candidate, dict) else False
         final_confidence = float((best_candidate or {}).get("final_score") or (best_candidate or {}).get("score") or 0.0) if isinstance(best_candidate, dict) else 0.0
         decision_reason = (
             (best_candidate or {}).get("decision_reason")
@@ -3351,7 +3366,7 @@ class AdminTemplateService:
             "final_confidence": final_confidence,
             "decision_reason": decision_reason,
             "draft_template_rank": draft_rank,
-            "passed": bool(matched and selected_template_id == template_id and draft_rank == 1),
+            "passed": bool(selected_passed_final_gate and selected_template_id == template_id and draft_rank == 1),
             "warning": bool(matched and selected_template_id != template_id),
             "candidates": candidates,
             "separation_result": {
