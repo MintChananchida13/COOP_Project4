@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -39,6 +40,7 @@ from .ocr_postprocess import normalize_ocr_text
 from .siglip_image_verification_adapter import (
     verify_image_category,
 )
+from .table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 from .schemas import (
     CustomOcrRequest,
     DocumentUploadRequest,
@@ -362,6 +364,14 @@ def _load_image_source(source: Optional[str]):
         except Exception:
             return None
 
+    if source.startswith("http://") or source.startswith("https://"):
+        try:
+            request = Request(source, headers={"User-Agent": "OCR-Studio/1.0"})
+            with urlopen(request, timeout=10) as response:
+                return Image.open(io.BytesIO(response.read())).convert("RGB")
+        except Exception:
+            return None
+
     path = Path(source)
     if not path.exists():
         return None
@@ -539,6 +549,52 @@ def _image_path_to_data_url(path_value: Optional[str]) -> Optional[str]:
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     except OSError:
         return None
+    return f"data:image/png;base64,{encoded}"
+
+
+def _pil_image_to_bgr_array(image: Any):
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        rgb = np.array(image.convert("RGB"))
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _crop_template_field_image(image_source: Optional[str], roi: Dict[str, Any]) -> Optional[Any]:
+    image = _load_image_source(image_source)
+    if image is None:
+        return None
+    width, height = image.size
+    try:
+        x = float(roi.get("x_ratio") or 0.0) * width
+        y = float(roi.get("y_ratio") or 0.0) * height
+        w = float(roi.get("width_ratio") or 0.0) * width
+        h = float(roi.get("height_ratio") or 0.0) * height
+    except (TypeError, ValueError):
+        return None
+    left = max(0, int(round(x)))
+    top = max(0, int(round(y)))
+    right = min(width, int(round(x + w)))
+    bottom = min(height, int(round(y + h)))
+    if right <= left or bottom <= top:
+        return None
+    return image.crop((left, top, right, bottom)).convert("RGB")
+
+
+def _pil_image_to_data_url(image: Any) -> Optional[str]:
+    if image is None:
+        return None
+    output = io.BytesIO()
+    try:
+        image.save(output, format="PNG")
+    except Exception:
+        return None
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
 
 
@@ -3172,8 +3228,104 @@ class AdminTemplateService:
 
     def test_extraction_fields(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)
+        if template.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail="Template not found")
         fields = [field for field in template.get("fields") or [] if not field.get("use_for_verification")]
-        return {"template_id": template_id, "status": "completed", "tested_count": len(fields), "passed_count": 0, "failed_count": len(fields), "fields": fields}
+        pages_by_number = {
+            int(page.get("page_number") or 1): page
+            for page in template.get("pages") or []
+        }
+        tested_fields: List[Dict[str, Any]] = []
+        for field in fields:
+            page_number = int(field.get("page_number") or (field.get("roi") or {}).get("page_number") or 1)
+            page = pages_by_number.get(page_number)
+            image_source = (page or {}).get("normalized_image_url") or (page or {}).get("sample_image_url")
+            crop_image = _crop_template_field_image(image_source, field.get("roi") or {})
+            crop_preview_data_url = _pil_image_to_data_url(crop_image)
+            data_type = _normalize_data_type(field.get("data_type"))
+            result_item: Dict[str, Any] = {
+                **field,
+                "field_id": field.get("id"),
+                "field_name": field.get("field_name"),
+                "display_label": field.get("display_label"),
+                "page_number": page_number,
+                "data_type": data_type,
+                "crop_preview_data_url": crop_preview_data_url,
+                "current_crop_preview_data_url": crop_preview_data_url,
+                "status": "failed",
+                "passed": False,
+                "failure_reason": None,
+            }
+            if crop_image is None:
+                result_item["failure_reason"] = "template_page_image_or_roi_unavailable"
+                tested_fields.append(result_item)
+                continue
+            if data_type == "image":
+                result_item.update(
+                    {
+                        "status": "completed",
+                        "passed": True,
+                        "actual_text": "",
+                        "ocr_text": "",
+                        "confidence": 1.0,
+                    }
+                )
+                tested_fields.append(result_item)
+                continue
+            crop_bgr = _pil_image_to_bgr_array(crop_image)
+            if crop_bgr is None:
+                result_item["failure_reason"] = "crop_image_conversion_failed"
+                tested_fields.append(result_item)
+                continue
+            try:
+                if data_type == "table":
+                    ocr_result = recognize_table_v2(crop_bgr)
+                else:
+                    ocr_result = recognize_text_roi(crop_bgr)
+            except (OcrUnavailableError, TableRecognitionV2UnavailableError) as error:
+                result_item["failure_reason"] = str(error)
+                tested_fields.append(result_item)
+                continue
+            except Exception as error:
+                result_item["failure_reason"] = str(error)
+                tested_fields.append(result_item)
+                continue
+
+            text = str(ocr_result.get("text") or "").strip()
+            table_rows = ocr_result.get("table_rows")
+            table_structured = ocr_result.get("table_structured")
+            has_table = data_type == "table" and (
+                bool(table_rows)
+                or bool((table_structured or {}).get("cells") if isinstance(table_structured, dict) else None)
+            )
+            passed = bool(text) or has_table
+            result_item.update(
+                {
+                    "status": "completed" if passed else "failed",
+                    "passed": passed,
+                    "failure_reason": None if passed else "ocr_returned_empty_result",
+                    "actual_text": text,
+                    "ocr_text": text,
+                    "confidence": float(ocr_result.get("confidence") or 0.0),
+                    "raw_segments": ocr_result.get("raw_segments") or ocr_result.get("segments") or [],
+                    "resolved_blocks": ocr_result.get("resolved_blocks") or [],
+                    "table_rows": table_rows,
+                    "table_structured": table_structured,
+                    "table_sections": ocr_result.get("table_sections"),
+                    "table_html": ocr_result.get("table_html"),
+                    "table_debug": ocr_result.get("table_debug"),
+                }
+            )
+            tested_fields.append(result_item)
+        passed_count = sum(1 for item in tested_fields if item.get("passed"))
+        return {
+            "template_id": template_id,
+            "status": "completed",
+            "tested_count": len(tested_fields),
+            "passed_count": passed_count,
+            "failed_count": len(tested_fields) - passed_count,
+            "fields": tested_fields,
+        }
 
     def test_verification_anchors(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)
