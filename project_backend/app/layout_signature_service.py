@@ -3,6 +3,8 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Sequence
 
+from .json_utils import jsonb_load
+
 
 LABELS = ("text", "table", "image")
 GRID_SIZE = 4
@@ -158,12 +160,7 @@ def signature_to_json(signature: Dict[str, Any]) -> str:
 
 
 def signature_from_json(value: str | None) -> Dict[str, Any] | None:
-    if not value:
-        return None
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return None
+    parsed = jsonb_load(value)
     return parsed if isinstance(parsed, dict) else None
 
 

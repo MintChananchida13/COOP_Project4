@@ -1,6 +1,5 @@
 import base64
 import io
-import json
 import logging
 import os
 import sys
@@ -12,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -33,6 +32,8 @@ from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
 from app.db import connect as db_connect
+from app.auth_service import current_user
+from app.json_utils import jsonb_dump, jsonb_load
 
 # Force UTF-8 console output on Windows.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -953,18 +954,18 @@ def _payload_to_json(payload: DocumentPayload) -> str:
     else:
         data = payload.dict()
     data["async_mode"] = False
-    return json.dumps(data, ensure_ascii=False)
+    return jsonb_dump(data)
 
 
-def create_ocr_job(payload: DocumentPayload) -> str:
+def create_ocr_job(payload: DocumentPayload, requested_by: str) -> str:
     job_id = f"ocr_{uuid.uuid4().hex}"
     with db_connect() as conn:
         conn.execute(
             """
-            INSERT INTO ocr_jobs (id, status, request_json)
-            VALUES (?, 'queued', ?)
+            INSERT INTO ocr_jobs (id, requested_by, status, request_json)
+            VALUES (?, ?, 'queued', ?)
             """,
-            (job_id, _payload_to_json(payload)),
+            (job_id, requested_by, _payload_to_json(payload)),
         )
     return job_id
 
@@ -973,7 +974,7 @@ def get_ocr_job(job_id: str) -> Dict[str, Any] | None:
     with db_connect() as conn:
         row = conn.execute(
             """
-            SELECT id, status, requested_at, started_at, completed_at, error_message, result_json
+            SELECT id, requested_by, status, requested_at, started_at, completed_at, error_message, result_json
             FROM ocr_jobs
             WHERE id = ?
             """,
@@ -984,15 +985,12 @@ def get_ocr_job(job_id: str) -> Dict[str, Any] | None:
     result = dict(row)
     result_json = result.pop("result_json", None)
     if result_json:
-        try:
-            result["result"] = json.loads(result_json)
-        except json.JSONDecodeError:
-            result["result"] = None
+        result["result"] = jsonb_load(result_json)
     return result
 
 
 def update_ocr_job_status(job_id: str, status: str, error_message: str | None = None, result: Dict[str, Any] | None = None) -> None:
-    result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
+    result_json = jsonb_dump(result) if result is not None else None
     with db_connect() as conn:
         if status == "processing":
             conn.execute(
@@ -1033,7 +1031,10 @@ def run_ocr_job(job_id: str) -> None:
             row = conn.execute("SELECT request_json FROM ocr_jobs WHERE id = ?", (job_id,)).fetchone()
         if not row:
             raise RuntimeError("OCR job request payload not found.")
-        payload = DocumentPayload(**json.loads(row["request_json"]))
+        payload_data = jsonb_load(row["request_json"])
+        if not isinstance(payload_data, dict):
+            raise RuntimeError("OCR job request payload is invalid.")
+        payload = DocumentPayload(**payload_data)
         result = process_document_payload(payload)
         update_ocr_job_status(job_id, "completed", result=result)
     except Exception as error:
@@ -1163,10 +1164,10 @@ def read_root():
 
 
 @app.post("/api/ai/process")
-async def process_document(payload: DocumentPayload, background_tasks: BackgroundTasks):
+async def process_document(payload: DocumentPayload, background_tasks: BackgroundTasks, user: Dict[str, Any] = Depends(current_user)):
     try:
         if payload.async_mode:
-            job_id = create_ocr_job(payload)
+            job_id = create_ocr_job(payload, user["id"])
             background_tasks.add_task(run_ocr_job, job_id)
             return {"success": True, "job_id": job_id, "status": "queued"}
         return process_document_payload(payload)
@@ -1191,9 +1192,11 @@ async def process_document(payload: DocumentPayload, background_tasks: Backgroun
 
 
 @app.get("/api/ai/jobs/{job_id}")
-async def get_ai_process_job(job_id: str):
+async def get_ai_process_job(job_id: str, user: Dict[str, Any] = Depends(current_user)):
     job = get_ocr_job(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="OCR job not found.")
+    if user.get("role") != "admin" and job.get("requested_by") != user["id"]:
         raise HTTPException(status_code=404, detail="OCR job not found.")
     response: Dict[str, Any] = {
         "success": True,
@@ -1211,7 +1214,7 @@ async def get_ai_process_job(job_id: str):
 
 
 @app.post("/api/layout/analyze")
-async def analyze_document_layout(payload: LayoutAnalysisPayload):
+async def analyze_document_layout(payload: LayoutAnalysisPayload, user: Dict[str, Any] = Depends(current_user)):
     if not payload.images:
         raise HTTPException(status_code=400, detail="At least one page image is required.")
 

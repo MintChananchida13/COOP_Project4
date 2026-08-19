@@ -1,4 +1,4 @@
-import {
+﻿import {
   AdminTemplateRequest,
   IgnoreRegion,
   RoiDataType,
@@ -7,9 +7,19 @@ import {
   TemplatePage,
   TemplateStatus,
 } from "../types/ocr";
+import { readAuthSession } from "../auth/session";
 
 export const ADMIN_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const fetchWithAuth = (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const session = readAuthSession();
+  const headers = new Headers(init.headers || {});
+  if (session?.accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${session.accessToken}`);
+  }
+  return fetch(input, { ...init, headers });
+};
 
 let templateRequestListCache: AdminTemplateRequest[] | null = null;
 let templateListCache: Template[] | null = null;
@@ -961,7 +971,7 @@ export const fetchTemplateRequests = async () => {
   }
 
   templateRequestListPromise = (async () => {
-    const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`);
+    const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests`);
     if (!response.ok) {
       throw new Error(`Template request load failed with ${response.status}`);
     }
@@ -982,7 +992,7 @@ export const fetchTemplateRequests = async () => {
 };
 
 export const fetchAdminDashboard = async () => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/dashboard`, { cache: "no-store" });
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/dashboard`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Admin dashboard load failed with ${response.status}`);
   }
@@ -1019,13 +1029,12 @@ export const createTemplateRequest = async (payload: {
   userNote?: string;
   requestedBy?: string;
 }) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      requested_by: payload.requestedBy || "admin",
       request_title: payload.requestTitle,
-      document_type: payload.documentType || "เอกสารทั่วไป",
+      document_type: payload.documentType || "à¹€à¸­à¸à¸ªà¸²à¸£à¸—à¸±à¹ˆà¸§à¹„à¸›",
       request_mode: payload.requestMode || "image_only",
       page_count: payload.pageCount || 1,
       user_note: payload.userNote,
@@ -1039,7 +1048,7 @@ export const createTemplateRequest = async (payload: {
 };
 
 export const fetchTemplateRequest = async (requestId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`);
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`);
   if (!response.ok) {
     throw new Error(`Template request detail failed with ${response.status}`);
   }
@@ -1059,7 +1068,7 @@ export const updateTemplateRequest = async (
     status?: string;
   }
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1079,7 +1088,7 @@ export const updateTemplateRequest = async (
 };
 
 export const fetchTemplateRequestPages = async (requestId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}/pages`);
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests/${requestId}/pages`);
   if (!response.ok) {
     throw new Error(`Template request pages failed with ${response.status}`);
   }
@@ -1107,7 +1116,7 @@ export const addTemplateRequestImage = async (
   sourceFileId?: string,
   sourceFileName?: string
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1151,7 +1160,7 @@ export const updateTemplateRequestImage = async (
     sourceFileName?: string;
   }
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1184,7 +1193,7 @@ export const updateTemplateRequestImage = async (
 };
 
 export const deleteTemplateRequestImage = async (requestId: string, imageId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/images/${imageId}`, {
     method: "DELETE",
   });
   const json = await response.json().catch(() => null);
@@ -1196,12 +1205,12 @@ export const deleteTemplateRequestImage = async (requestId: string, imageId: str
 };
 
 export const deleteTemplateRequest = async (requestId: string) => {
-  let response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}`, {
+  let response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}`, {
     method: "DELETE",
   });
 
   if (response.status === 405) {
-    response = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
+    response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
       method: "DELETE",
     });
   }
@@ -1212,7 +1221,7 @@ export const deleteTemplateRequest = async (requestId: string) => {
     throw new Error(typeof detail === "string" ? detail : `Delete failed with ${response.status}`);
   }
 
-  const verifyResponse = await fetch(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
+  const verifyResponse = await fetchWithAuth(`${ADMIN_API_BASE_URL}/template-requests/${requestId}`, {
     cache: "no-store",
   });
   if (verifyResponse.ok) {
@@ -1238,7 +1247,7 @@ export const deleteTemplateRequest = async (requestId: string) => {
 };
 
 export const fetchTemplateBundle = async (templateId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`);
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`);
   if (!response.ok) {
     throw new Error(`Template load failed with ${response.status}`);
   }
@@ -1266,7 +1275,7 @@ export const fetchTemplates = async () => {
   }
 
   templateListPromise = (async () => {
-    const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates`);
+    const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates`);
     if (!response.ok) {
       throw new Error(`Template list failed with ${response.status}`);
     }
@@ -1287,7 +1296,7 @@ export const fetchTemplates = async () => {
 };
 
 export const deleteTemplateApi = async (templateId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
     method: "DELETE",
   });
   const json = await response.json().catch(() => null);
@@ -1336,7 +1345,7 @@ const mapTemplateBundleResponse = async (response: Response, templateId: string)
 
 export const updateTemplateApi = async (templateId: string, patch: Partial<Template>) => {
   const bundle = await mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1388,14 +1397,14 @@ const mapEmbeddingJobMutationResponse = async (response: Response) => {
 
 export const createEmbeddingJob = async (templateId: string) =>
   mapEmbeddingJobMutationResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
   );
 
 export const fetchLatestEmbeddingJob = async (templateId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs/latest`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/embedding-jobs/latest`, {
     cache: "no-store",
   });
   if (!response.ok) {
@@ -1409,7 +1418,7 @@ export const fetchLatestEmbeddingJob = async (templateId: string) => {
 
 export const completeEmbeddingJobDev = async (jobId: string) =>
   mapEmbeddingJobMutationResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/complete-dev`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/complete-dev`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
@@ -1417,7 +1426,7 @@ export const completeEmbeddingJobDev = async (jobId: string) =>
 
 export const runEmbeddingJobDev = async (jobId: string) =>
   mapEmbeddingJobMutationResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/run-dev`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/run-dev`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
@@ -1425,7 +1434,7 @@ export const runEmbeddingJobDev = async (jobId: string) =>
 
 export const failEmbeddingJobDev = async (jobId: string) =>
   mapEmbeddingJobMutationResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/fail-dev`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/embedding-jobs/${jobId}/fail-dev`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
@@ -1437,7 +1446,7 @@ export const detectTemplateDev = async (file: File | File[]): Promise<DetectionD
   files.forEach((item, index) => {
     formData.append("file", item, item.name || `page-${index + 1}.jpg`);
   });
-  const response = await fetch(`${ADMIN_API_BASE_URL}/api/templates/detect-dev`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/api/templates/detect-dev`, {
     method: "POST",
     body: formData,
   });
@@ -1520,7 +1529,7 @@ const mapPrepublishLayoutSignaturePage = (page: Record<string, unknown>): Prepub
 });
 
 export const runPrepublishSimulation = async (templateId: string): Promise<PrepublishSimulationResult> => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-simulation`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-simulation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -1593,7 +1602,7 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
 export const runPrepublishDetectionTest = async (templateId: string, file: File): Promise<PrepublishDetectionTestResult> => {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-detection-test`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-detection-test`, {
     method: "POST",
     body: formData,
   });
@@ -1633,7 +1642,7 @@ export const runPrepublishDetectionTest = async (templateId: string, file: File)
 };
 
 export const confirmTemplatePublish = async (templateId: string) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/confirm-publish`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/confirm-publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -1777,7 +1786,7 @@ function mapTemplateStepTestResult(data: Record<string, unknown>): TemplateStepT
 }
 
 const runTemplateStepTest = async (templateId: string, path: "test-extraction" | "test-verification") => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/${path}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -1795,7 +1804,7 @@ export const testTemplateVerificationAnchors = (templateId: string) => runTempla
 
 export const createTemplatePageApi = async (templateId: string, pageNumber: number, sampleImageUrl?: string) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1810,7 +1819,7 @@ export const createTemplatePageApi = async (templateId: string, pageNumber: numb
 
 export const updateTemplatePageApi = async (templateId: string, pageId: string, patch: Partial<TemplatePage>) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages/${pageId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages/${pageId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1827,7 +1836,7 @@ export const updateTemplatePageApi = async (templateId: string, pageId: string, 
 
 export const deleteTemplatePageApi = async (templateId: string, pageId: string) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages/${pageId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/pages/${pageId}`, {
       method: "DELETE",
     }),
     templateId
@@ -1868,7 +1877,7 @@ export const createTemplateFieldApi = async (
   field: Partial<TemplateField> & Pick<TemplateField, "templatePageId" | "pageNumber" | "fieldName" | "displayLabel" | "roi">
 ) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(fieldToApiPayload(field)),
@@ -1909,7 +1918,7 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
   }
 
   return mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields/${fieldId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields/${fieldId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1920,7 +1929,7 @@ export const updateTemplateFieldApi = async (templateId: string, fieldId: string
 
 export const deleteTemplateFieldApi = async (templateId: string, fieldId: string) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields/${fieldId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/fields/${fieldId}`, {
       method: "DELETE",
     }),
     templateId
@@ -1946,7 +1955,7 @@ export const createIgnoreRegionApi = async (
   region: Partial<IgnoreRegion> & Pick<IgnoreRegion, "templatePageId" | "pageNumber" | "fieldName" | "roi">
 ) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(ignoreRegionToApiPayload(region)),
@@ -1972,7 +1981,7 @@ export const updateIgnoreRegionApi = async (templateId: string, regionId: string
   }
 
   return mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions/${regionId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions/${regionId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1983,7 +1992,7 @@ export const updateIgnoreRegionApi = async (templateId: string, regionId: string
 
 export const deleteIgnoreRegionApi = async (templateId: string, regionId: string) =>
   mapTemplateBundleResponse(
-    await fetch(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions/${regionId}`, {
+    await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/ignore-regions/${regionId}`, {
       method: "DELETE",
     }),
     templateId
@@ -1996,7 +2005,7 @@ export const convertTemplateRequestToTemplate = async (
     mainPageNumber?: number;
   }
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-template`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-template`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2027,7 +2036,7 @@ export const suggestTemplateRequestBaseVersion = async (
   baseTemplateId: string,
   similarityThreshold = 0.72
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/suggest-base-version`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/suggest-base-version`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2072,7 +2081,7 @@ export const convertTemplateRequestToVersion = async (
     mainPageNumber?: number;
   }
 ) => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-version`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/template-requests/${requestId}/convert-to-version`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2126,7 +2135,7 @@ const mapImageVerificationCategory = (item: Record<string, unknown>): ImageVerif
 });
 
 export const listImageVerificationCategories = async (enabledOnly = false): Promise<ImageVerificationCategory[]> => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories?enabled_only=${enabledOnly ? "true" : "false"}`);
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/image-verification-categories?enabled_only=${enabledOnly ? "true" : "false"}`);
   const json = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = json?.detail || json?.error?.message || json?.error || `Load image categories failed with ${response.status}`;
@@ -2143,7 +2152,7 @@ export const createImageVerificationCategory = async (
     evidenceTemperature?: number;
   }
 ): Promise<ImageVerificationCategory> => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/image-verification-categories`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2168,7 +2177,7 @@ export const updateImageVerificationCategory = async (
   value: string,
   patch: Partial<ImageVerificationCategory>
 ): Promise<ImageVerificationCategory> => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2189,7 +2198,7 @@ export const updateImageVerificationCategory = async (
 };
 
 export const deleteImageVerificationCategory = async (value: string): Promise<{ value: string; deleted: boolean }> => {
-  const response = await fetch(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
+  const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/image-verification-categories/${encodeURIComponent(value)}`, {
     method: "DELETE",
   });
   const json = await response.json().catch(() => null);

@@ -1,9 +1,11 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, Suspense, useMemo, useState } from "react";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { demoAccounts, writeAuthSession } from "../../auth/session";
+import { writeAuthSession } from "../../auth/session";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 function LoginForm() {
   const router = useRouter();
@@ -16,34 +18,46 @@ function LoginForm() {
 
   const nextPath = useMemo(() => searchParams.get("next") || "", [searchParams]);
 
-  const handleLogin = (event: FormEvent) => {
+  const handleLogin = async (event: FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
     setError("");
 
-    window.setTimeout(() => {
-      const account = demoAccounts.find(
-        (item) => item.email.toLowerCase() === email.trim().toLowerCase() && item.password === password
-      );
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const json = await response.json().catch(() => null);
       setIsLoading(false);
-      if (!account) {
+      if (!response.ok) {
         setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
         return;
       }
 
-      writeAuthSession({ email: account.email, role: account.role, name: account.name });
-      const fallbackPath = account.role === "admin" ? "/admin" : "/";
+      const user = json?.data?.user;
+      const accessToken = json?.data?.access_token;
+      if (!user?.id || !user?.email || !user?.role || !accessToken) {
+        setError("เข้าสู่ระบบไม่สำเร็จ");
+        return;
+      }
+
+      writeAuthSession({ id: user.id, email: user.email, role: user.role, name: user.name || user.email, accessToken });
+      const fallbackPath = user.role === "admin" ? "/admin" : "/";
       const safeNext =
         nextPath &&
         nextPath.startsWith("/") &&
         !nextPath.startsWith("//") &&
-        (account.role === "admin" || !nextPath.startsWith("/admin"))
+        (user.role === "admin" || !nextPath.startsWith("/admin"))
           ? nextPath
           : fallbackPath;
       router.replace(safeNext);
-    }, 300);
+    } catch {
+      setIsLoading(false);
+      setError("เชื่อมต่อระบบเข้าสู่ระบบไม่สำเร็จ");
+    }
   };
-
   return (
     <div className="flex min-h-screen flex-col justify-center bg-slate-100 px-4 py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
@@ -51,14 +65,14 @@ function LoginForm() {
           <ShieldCheck size={28} />
         </div>
         <h1 className="mt-6 text-3xl font-extrabold text-slate-900">OCR Studio</h1>
-        <p className="mt-2 text-sm font-semibold text-slate-600">เข้าสู่ระบบเพื่อใช้งาน OCR และจัดการ Template</p>
+        <p className="mt-2 text-sm font-semibold text-slate-600">à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸šà¹€à¸žà¸·à¹ˆà¸­à¹ƒà¸Šà¹‰à¸‡à¸²à¸™ OCR à¹à¸¥à¸°à¸ˆà¸±à¸”à¸à¸²à¸£ Template</p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 shadow sm:px-10">
           <form className="space-y-6" onSubmit={handleLogin}>
             <label className="block">
-              <span className="text-sm font-bold text-slate-700">อีเมล</span>
+              <span className="text-sm font-bold text-slate-700">à¸­à¸µà¹€à¸¡à¸¥</span>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                   <Mail size={18} />
@@ -75,7 +89,7 @@ function LoginForm() {
             </label>
 
             <label className="block">
-              <span className="text-sm font-bold text-slate-700">รหัสผ่าน</span>
+              <span className="text-sm font-bold text-slate-700">à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™</span>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                   <Lock size={18} />
@@ -92,7 +106,7 @@ function LoginForm() {
                   type="button"
                   onClick={() => setShowPassword((current) => !current)}
                   className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
-                  aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
+                  aria-label={showPassword ? "à¸‹à¹ˆà¸­à¸™à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™" : "à¹à¸ªà¸”à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™"}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
@@ -106,12 +120,12 @@ function LoginForm() {
               disabled={isLoading}
               className="flex w-full justify-center rounded-lg border border-transparent bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {isLoading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
+              {isLoading ? "à¸à¸³à¸¥à¸±à¸‡à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸š..." : "à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸š"}
             </button>
           </form>
 
           <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
-            <p className="font-black text-slate-800">บัญชีทดสอบ</p>
+            <p className="font-black text-slate-800">à¸šà¸±à¸à¸Šà¸µà¸—à¸”à¸ªà¸­à¸š</p>
             <p className="mt-1">User: user@ocr.com / user123</p>
             <p>Admin: admin@ocr.com / admin123</p>
           </div>
@@ -126,7 +140,7 @@ export default function LoginPage() {
     <Suspense
       fallback={
         <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6 text-sm font-semibold text-slate-500">
-          กำลังเปิดหน้าเข้าสู่ระบบ...
+          à¸à¸³à¸¥à¸±à¸‡à¹€à¸›à¸´à¸”à¸«à¸™à¹‰à¸²à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸š...
         </div>
       }
     >

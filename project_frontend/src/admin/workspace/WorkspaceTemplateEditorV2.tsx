@@ -3,6 +3,7 @@
 import { ArrowLeft, GripVertical, Loader2, ScanSearch } from "lucide-react";
 import { DragEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspacePage } from "../../shared/workspace/BaseWorkspace";
+import { authHeaders } from "../../auth/session";
 import WorkspaceCustomEditor from "../../shared/workspace/WorkspaceCustomEditor";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../../shared/workspace/roiGeometry";
 import { IgnoreRegion, ROI, RoiRatio, TemplateField } from "../../types/ocr";
@@ -794,7 +795,7 @@ export default function WorkspaceTemplateEditorV2({
     try {
       const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           auto_roi_mode: "text_line",
           images: pagesToAnalyze.map(({ page, index }) => ({

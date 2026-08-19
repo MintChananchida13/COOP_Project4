@@ -3,18 +3,15 @@
 export type AuthRole = "user" | "admin";
 
 export interface AuthSession {
+  id: string;
   email: string;
   role: AuthRole;
   name: string;
+  accessToken?: string;
 }
 
 export const AUTH_SESSION_KEY = "ocr-studio:auth-session";
 export const AUTH_COOKIE_NAME = "ocr_role";
-
-export const demoAccounts: Array<AuthSession & { password: string }> = [
-  { email: "user@ocr.com", password: "user123", role: "user", name: "User" },
-  { email: "admin@ocr.com", password: "admin123", role: "admin", name: "Admin" },
-];
 
 export const readAuthSession = (): AuthSession | null => {
   if (typeof window === "undefined") return null;
@@ -24,9 +21,11 @@ export const readAuthSession = (): AuthSession | null => {
     const parsed = JSON.parse(raw) as Partial<AuthSession>;
     if ((parsed.role === "user" || parsed.role === "admin") && parsed.email) {
       return {
+        id: parsed.id || "",
         email: parsed.email,
         role: parsed.role,
         name: parsed.name || parsed.email,
+        accessToken: parsed.accessToken,
       };
     }
   } catch {
@@ -45,3 +44,10 @@ export const clearAuthSession = () => {
   document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
 };
 
+export const authHeaders = (extra?: HeadersInit): HeadersInit => {
+  const session = readAuthSession();
+  return {
+    ...(extra || {}),
+    ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {}),
+  };
+};

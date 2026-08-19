@@ -2,6 +2,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from .auth_password import hash_password
+
 
 _POSTGRES_READY = False
 
@@ -115,8 +117,37 @@ def _ensure_postgres_schema(conn: PostgresConnection) -> None:
 
     for statement in _POSTGRES_SCHEMA:
         conn.execute(statement)
+    _seed_default_users(conn)
     conn.commit()
     _POSTGRES_READY = True
+
+
+def _seed_default_users(conn: PostgresConnection) -> None:
+    seed_users = [
+        {
+            "id": "usr_seed_user",
+            "email": "user@ocr.com",
+            "password": "user123",
+            "role": "user",
+        },
+        {
+            "id": "usr_seed_admin",
+            "email": "admin@ocr.com",
+            "password": "admin123",
+            "role": "admin",
+        },
+    ]
+    for user in seed_users:
+        existing = conn.execute("SELECT id FROM users WHERE email = ?", (user["email"],)).fetchone()
+        if existing is not None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO users (id, email, password_hash, role, created_at, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (user["id"], user["email"], hash_password(user["password"]), user["role"]),
+        )
 
 
 _POSTGRES_SCHEMA = [

@@ -9,6 +9,17 @@ class ApiResponse(BaseModel):
     error: Optional[Dict[str, Any]] = None
 
 
+class AuthRegisterRequest(BaseModel):
+    email: str
+    password: str = Field(..., min_length=6)
+    role: str = "user"
+
+
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 class RoiRatio(BaseModel):
     page_number: int = Field(..., ge=1)
     x_ratio: float = Field(..., ge=0, le=1)

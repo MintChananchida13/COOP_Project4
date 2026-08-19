@@ -1,6 +1,5 @@
 import base64
 import io
-import json
 import logging
 import math
 import os
@@ -63,6 +62,7 @@ from .schemas import (
     TemplateVersionCreate,
     TemplateVersionFromRequestCreate,
 )
+from .json_utils import jsonb_dump, jsonb_load
 
 
 logger = logging.getLogger(__name__)
@@ -208,11 +208,7 @@ def _field_row_to_api(row: Any) -> Dict[str, Any]:
 
 def _template_row_to_api(row: Any) -> Dict[str, Any]:
     item = _row_to_dict(row)
-    shared_fields = []
-    try:
-        shared_fields = json.loads(item.get("shared_fields_json") or "[]")
-    except (TypeError, json.JSONDecodeError):
-        shared_fields = []
+    shared_fields = jsonb_load(item.get("shared_fields_json"), [])
     return {
         "id": item["id"],
         "name": item.get("name") or item.get("template_name") or item.get("version_name") or item["id"],
@@ -1350,7 +1346,7 @@ class EmbeddingService:
                     metadata_json = ?
                 WHERE id = ?
                 """,
-                (json.dumps({**metadata, "vector_id": f"layout_{template_id}"}, ensure_ascii=False, sort_keys=True), job_id),
+                (jsonb_dump({**metadata, "vector_id": f"layout_{template_id}"}), job_id),
             )
             conn.execute(
                 """
@@ -1439,7 +1435,7 @@ class EmbeddingService:
                     metadata_json = ?
                 WHERE id = ?
                 """,
-                (json.dumps({**metadata, "vector_id": vector_id}, ensure_ascii=False, sort_keys=True), job_id),
+                (jsonb_dump({**metadata, "vector_id": vector_id}), job_id),
             )
             conn.execute(
                 """
@@ -1579,11 +1575,10 @@ def _image_category_values(value: Optional[str]) -> List[str]:
     if not raw:
         return []
     if raw.startswith("["):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return [str(item or "").strip() for item in parsed if str(item or "").strip()]
-        except Exception:
+        parsed = jsonb_load(raw)
+        if isinstance(parsed, list):
+            return [str(item or "").strip() for item in parsed if str(item or "").strip()]
+        else:
             return [raw]
     return [raw]
 
@@ -3277,7 +3272,12 @@ class AdminTemplateService:
             version_count = conn.execute("SELECT COUNT(*) AS count FROM template_versions WHERE template_group_id = ?", (selected["template_group_id"],)).fetchone()["count"]
         return {"template_id": template_id, "template_group_id": selected["template_group_id"], "version_count": version_count, "suggested_base_version": None, "reuse_roi": False, "similarity_threshold": similarity_threshold}
 
-    def create_version_from_request(self, request_id: str, payload: TemplateVersionFromRequestCreate) -> Dict[str, Any]:
+    def create_version_from_request(
+        self,
+        request_id: str,
+        payload: TemplateVersionFromRequestCreate,
+        created_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
         with _connect() as conn:
             base = conn.execute("SELECT * FROM template_versions WHERE id = ?", (payload.base_template_id,)).fetchone()
             if base is None:
@@ -3289,14 +3289,19 @@ class AdminTemplateService:
             template_id = _stub_id("tpl")
             similarity_threshold = payload.similarity_threshold if payload.similarity_threshold is not None else base["similarity_threshold"]
             final_confidence_threshold = payload.final_confidence_threshold if payload.final_confidence_threshold is not None else base["final_confidence_threshold"]
-            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_from_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, base["template_group_id"], next_version, payload.version_name or f"Version {next_version}", _normalize_detection_mode(payload.detection_mode), _normalize_main_page_number(payload.main_page_number), similarity_threshold, final_confidence_threshold, base["layout_weight"], base["text_anchor_weight"], base["image_anchor_weight"], payload.base_template_id))
+            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_from_version_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, base["template_group_id"], next_version, payload.version_name or f"Version {next_version}", _normalize_detection_mode(payload.detection_mode), _normalize_main_page_number(payload.main_page_number), similarity_threshold, final_confidence_threshold, base["layout_weight"], base["text_anchor_weight"], base["image_anchor_weight"], payload.base_template_id, created_by))
             for index, page in enumerate(pages, start=1):
                 conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, index, page.get("page_name") or f"Page {index}", page.get("sample_image_url"), page.get("sample_image_url")))
             conn.execute("UPDATE template_requests SET status = 'converted', converted_template_group_id = ?, converted_template_version_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (base["template_group_id"], template_id, request_id))
             conn.commit()
         return {"id": request_id, "status": "converted", "converted_template_id": template_id, "template_id": template_id, "template_group_id": base["template_group_id"], "created_records": {"template_versions": 1, "template_pages": len(pages)}}
 
-    def convert_request_to_template(self, request_id: str, payload: Optional[TemplateRequestConvert] = None) -> Dict[str, Any]:
+    def convert_request_to_template(
+        self,
+        request_id: str,
+        payload: Optional[TemplateRequestConvert] = None,
+        created_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
         with _connect() as conn:
             request_row = conn.execute("SELECT * FROM template_requests WHERE id = ?", (request_id,)).fetchone()
             if request_row is None:
@@ -3307,9 +3312,9 @@ class AdminTemplateService:
             group_id = _stub_id("tgrp")
             template_id = _stub_id("tpl")
             template_name = (payload.template_name if payload and payload.template_name else request_row["request_title"]).strip()
-            conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, f"{(_safe_file_token(template_name) or 'template')}_{uuid.uuid4().hex[:8]}", request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None))
+            conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, f"{(_safe_file_token(template_name) or 'template')}_{uuid.uuid4().hex[:8]}", request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None, created_by))
             similarity_threshold = payload.similarity_threshold if payload and payload.similarity_threshold is not None else 0.75
-            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), similarity_threshold))
+            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_by, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), similarity_threshold, created_by))
             for index, page in enumerate(pages, start=1):
                 conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, index, page.get("page_name") or f"Page {index}", page.get("sample_image_url"), page.get("sample_image_url")))
             conn.execute("UPDATE template_requests SET status = 'converted', converted_template_group_id = ?, converted_template_version_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (group_id, template_id, request_id))

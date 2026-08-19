@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { OCRResult, ROI, RequestedField, RoiDataType, TemplateRequestMode } from "../../types/ocr";
+import { authHeaders } from "../../auth/session";
 import { defaultExtractionMethodForDataType } from "../../shared/workspace/extractionMethods";
 
 type PageAwareRoi = ROI & { pageIndex?: number };
@@ -280,7 +281,7 @@ export default function TemplateRequestPanel({
   const submitWithBackend = async (requestedFields: RequestedField[]) => {
     const createResponse = await fetch(`${API_BASE_URL}/template-requests`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         request_title: requestTitle.trim(),
         sample_file_url: requestImageItems[0]?.src || null,
@@ -333,7 +334,7 @@ export default function TemplateRequestPanel({
 
           return fetch(`${API_BASE_URL}/template-requests/${requestId}/requested-fields`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify(requestedFieldPayload),
           });
         })
@@ -342,6 +343,7 @@ export default function TemplateRequestPanel({
 
     const submitResponse = await fetch(`${API_BASE_URL}/template-requests/${requestId}/submit`, {
       method: "POST",
+      headers: authHeaders(),
     });
 
     if (!submitResponse.ok) {

@@ -17,7 +17,7 @@ import {
   type DetectionDevResult,
 } from "../admin/adminApi";
 import AuthGate from "../auth/AuthGate";
-import { AuthSession, clearAuthSession, readAuthSession } from "../auth/session";
+import { AuthSession, authHeaders, clearAuthSession, readAuthSession } from "../auth/session";
 
 interface PageConfig {
   rotation: number;
@@ -283,7 +283,7 @@ async function imageUrlToCanvasSafeSrc(src: string) {
 async function analyzeLayoutForUserImage(imageDataUrl: string) {
   const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       auto_roi_mode: "text_line",
       context: "flexible",
@@ -1406,7 +1406,7 @@ const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, m
 async function runAiProcessJob(payload: Record<string, unknown>) {
   const response = await fetch(`${ADMIN_API_BASE_URL}/api/ai/process`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ ...payload, async_mode: true }),
   });
   const created = await response.json();
@@ -1419,7 +1419,9 @@ async function runAiProcessJob(payload: Record<string, unknown>) {
 
   for (;;) {
     await wait(2500);
-    const pollResponse = await fetch(`${ADMIN_API_BASE_URL}/api/ai/jobs/${created.job_id}`);
+    const pollResponse = await fetch(`${ADMIN_API_BASE_URL}/api/ai/jobs/${created.job_id}`, {
+      headers: authHeaders(),
+    });
     const job = await pollResponse.json();
     if (!pollResponse.ok || !job.success) {
       throw new Error(job?.detail || job?.error || "ตรวจสถานะ OCR Job ไม่สำเร็จ");

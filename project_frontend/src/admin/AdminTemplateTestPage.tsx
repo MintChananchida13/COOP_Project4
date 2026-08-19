@@ -7,6 +7,7 @@ import RoiLayer from "../shared/workspace/RoiLayer";
 import { WorkspaceRoi } from "../shared/workspace/RoiBox";
 import WorkspaceCanvas from "../shared/workspace/WorkspaceCanvas";
 import { DEFAULT_WORKSPACE_IMAGE_METRICS, ratioToImageBox, WorkspaceImageMetrics } from "../shared/workspace/roiGeometry";
+import { authHeaders } from "../auth/session";
 import { IgnoreRegion, Template, TemplateField, TemplatePage } from "../types/ocr";
 import {
   ADMIN_API_BASE_URL,
@@ -690,7 +691,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
 
         const response = await fetch(`${ADMIN_API_BASE_URL}/api/ai/process`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             image: roiPreviewUrl,
             rois: [{ fieldName: field.fieldName, x: 0, y: 0, width: 9999, height: 9999 }],

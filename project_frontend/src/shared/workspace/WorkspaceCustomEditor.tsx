@@ -6,6 +6,7 @@ import { Rnd } from "react-rnd";
 import { ROI } from '../../types/ocr';
 import { WorkspaceImageMetrics } from './roiGeometry';
 import { ADMIN_API_BASE_URL } from "@/admin/adminApi";
+import { authHeaders } from "@/auth/session";
 
 const renderTypeIcon = (type?: 'text' | 'table' | 'image', size = 11) => {
   if (type === 'table') return <Table size={size} className="shrink-0" />;
@@ -765,7 +766,7 @@ export default function WorkspaceCustomEditor({
       const pagesToAnalyze = imagesList.length > 0 ? imagesList : [previewUrl];
       const response = await fetch(`${ADMIN_API_BASE_URL}/api/layout/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           auto_roi_mode: "text_line",
           images: pagesToAnalyze.map((imageSrc, pageIndex) => ({
