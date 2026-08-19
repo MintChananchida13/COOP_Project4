@@ -3313,7 +3313,65 @@ class AdminTemplateService:
         draft = self.get_template(template_id)
         if draft.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Template not found")
-        return {"template_id": template_id, "status": "completed", "matched": True, "best_candidate": {"template_id": template_id, "score": 1.0, "template": draft}}
+        from .detection_service import detect_template_dev
+
+        detection = detect_template_dev(file_bytes, include_template_id=template_id)
+        candidates = detection.get("candidates") or []
+        best_candidate = detection.get("best_candidate")
+        if not best_candidate and candidates:
+            best_candidate = max(
+                candidates,
+                key=lambda item: (
+                    bool(item.get("final_passed")),
+                    float(item.get("final_score") or item.get("score") or 0.0),
+                    float(item.get("retrieval_score") or 0.0),
+                ),
+            )
+
+        draft_rank = next(
+            (index for index, candidate in enumerate(candidates, start=1) if candidate.get("template_id") == template_id),
+            None,
+        )
+        selected_template_id = (best_candidate or {}).get("template_id") if isinstance(best_candidate, dict) else None
+        matched = bool(detection.get("matched") and best_candidate)
+        final_confidence = float((best_candidate or {}).get("final_score") or (best_candidate or {}).get("score") or 0.0) if isinstance(best_candidate, dict) else 0.0
+        decision_reason = (
+            (best_candidate or {}).get("decision_reason")
+            or detection.get("message")
+            or ("matched" if matched else "no_matching_template")
+        ) if isinstance(best_candidate, dict) or detection.get("message") else "no_matching_template"
+
+        return {
+            "test_id": detection.get("query_id"),
+            "template_id": template_id,
+            "status": "completed",
+            "matched": matched,
+            "selected_template": best_candidate if matched else None,
+            "selected_template_type": "draft" if selected_template_id == template_id else "published" if selected_template_id else None,
+            "final_confidence": final_confidence,
+            "decision_reason": decision_reason,
+            "draft_template_rank": draft_rank,
+            "passed": bool(matched and selected_template_id == template_id and draft_rank == 1),
+            "warning": bool(matched and selected_template_id != template_id),
+            "candidates": candidates,
+            "separation_result": {
+                "draft_template_rank": draft_rank,
+                "draft_final_score": next(
+                    (
+                        float(candidate.get("final_score") or candidate.get("score") or 0.0)
+                        for candidate in candidates
+                        if candidate.get("template_id") == template_id
+                    ),
+                    0.0,
+                ),
+                "closest_published_template": selected_template_id if selected_template_id != template_id else None,
+                "closest_published_score": final_confidence if selected_template_id and selected_template_id != template_id else None,
+                "conflict_level": "none" if selected_template_id == template_id else "warning" if matched else "not_ready",
+                "recommendation": "publish" if selected_template_id == template_id and draft_rank == 1 else "review_detection_result",
+            },
+            "debug": detection.get("debug") or {},
+            "pages": detection.get("pages") or [],
+        }
 
     def confirm_publish_template(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)

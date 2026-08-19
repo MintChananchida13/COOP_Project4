@@ -1184,11 +1184,16 @@ def _lightweight_candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[
     }
 
 
-def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str]) -> Dict[str, Any]:
+def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str], include_template_id: Optional[str] = None) -> Dict[str, Any]:
     page_index = int(page_info["page_index"])
     normalized_image_path = str(page_info["normalized_path"])
     query_signature = _layout_signature_for_image_path(normalized_image_path)
-    raw_results = search_layout_candidates(query_signature, page_number=page_index, limit=DETECTION_RETRIEVAL_LIMIT)
+    raw_results = search_layout_candidates(
+        query_signature,
+        page_number=page_index,
+        limit=DETECTION_RETRIEVAL_LIMIT,
+        include_template_id=include_template_id,
+    )
     candidates = []
     full_evaluation_count = 0
     early_accept_rank = None
@@ -1400,14 +1405,14 @@ def _no_match_message(candidates: List[Dict[str, Any]]) -> str:
     return "ไม่มี Template ที่ผ่านเกณฑ์การตรวจสอบและคะแนนความมั่นใจ"
 
 
-def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
+def detect_template_dev(file_bytes: bytes, include_template_id: Optional[str] = None) -> Dict[str, Any]:
     query_id = f"detq_{uuid4().hex[:12]}"
     source_type = "pdf" if file_bytes.lstrip().startswith(b"%PDF") else "image"
     page_paths = _prepare_query_pages(query_id, file_bytes)
     skip_normalization = source_type == "pdf"
     normalized_pages = _normalize_query_pages(query_id, page_paths, skip_normalization=skip_normalization)
     page_image_paths = {page["page_index"]: page["normalized_path"] for page in normalized_pages}
-    pages = [_detect_page(page, page_image_paths) for page in normalized_pages]
+    pages = [_detect_page(page, page_image_paths, include_template_id=include_template_id) for page in normalized_pages]
     candidates = _aggregate_candidates(pages)
     passing_candidates = sorted(
         [candidate for candidate in candidates if candidate["final_passed"]],
@@ -1437,5 +1442,6 @@ def detect_template_dev(file_bytes: bytes) -> Dict[str, Any]:
             "converted_page_count": len(page_paths) if source_type == "pdf" else 0,
             "query_page_paths": [str(path) for path in page_paths],
             "normalized_query_page_paths": [page["normalized_path"] for page in normalized_pages],
+            "include_template_id": include_template_id,
         },
     }

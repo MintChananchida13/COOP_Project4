@@ -1493,17 +1493,32 @@ export const detectTemplateDev = async (file: File | File[]): Promise<DetectionD
   };
 };
 
-const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishCandidate => ({
+function mapPrepublishCandidate(candidate: Record<string, unknown>): PrepublishCandidate {
+  const globalScore =
+    typeof candidate.global_score === "number"
+      ? candidate.global_score
+      : typeof candidate.score === "number"
+        ? candidate.score
+        : typeof candidate.layout_score === "number"
+          ? candidate.layout_score
+          : 0;
+  const finalScore =
+    typeof candidate.final_score === "number"
+      ? candidate.final_score
+      : typeof candidate.score === "number"
+        ? candidate.score
+        : globalScore;
+  return {
   rank: Number(candidate.rank || 0),
   templateId: String(candidate.template_id || ""),
   templateName: (candidate.template_name as string | null | undefined) ?? null,
   templateStatus: (candidate.template_status as string | null | undefined) ?? null,
   vectorId: (candidate.vector_id as string | null | undefined) ?? null,
-  globalScore: Number(candidate.global_score || 0),
+  globalScore,
   textAnchorScore: Number(candidate.text_anchor_score || 0),
   imageAnchorScore: Number(candidate.image_anchor_score || 0),
   verificationScore: Number(candidate.verification_score || 0),
-  finalScore: Number(candidate.final_score || 0),
+  finalScore,
   matchingWeights: (candidate.matching_weights as Record<string, number> | undefined) || undefined,
   effectiveMatchingWeights: (candidate.effective_matching_weights as Record<string, number> | undefined) || undefined,
   alignmentStatus: String(candidate.alignment_status || "skipped"),
@@ -1529,7 +1544,8 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
   verificationDetails: Array.isArray(candidate.verification_details)
     ? (candidate.verification_details as Record<string, unknown>[])
     : [],
-});
+  };
+}
 
 function mapPrepublishLayoutSignaturePage(page: Record<string, unknown>): PrepublishLayoutSignaturePage {
   return {

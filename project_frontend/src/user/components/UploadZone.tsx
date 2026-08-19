@@ -121,7 +121,7 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
         <p className="ui-caption font-semibold text-blue-600">นำเข้าเอกสาร</p>
         <h2 className="ui-section-title mt-1 text-slate-950">อัปโหลดเอกสารสำหรับ OCR</h2>
         <p className="ui-body mx-auto mt-2 max-w-2xl text-slate-500">
-          รองรับไฟล์ภาพและ PDF หลายหน้า หลังอัปโหลดระบบจะให้เริ่มค้นหา Template และอ่านข้อมูล
+          รองรับไฟล์ภาพและ PDF หลายหน้า หลังอัปโหลดระบบจะเริ่มตรวจขอบเขตเอกสาร ค้นหา Template และอ่านข้อมูล
         </p>
       </div>
 
@@ -160,11 +160,9 @@ export default function UploadZone({ onUploadSuccess }: UploadZoneProps) {
             </div>
 
             <div className="relative z-20 space-y-2">
-              <h3 className="ui-card-title text-slate-900">
-                วางไฟล์เอกสารที่นี่ หรือคลิกเพื่อเลือกไฟล์
-              </h3>
+              <h3 className="ui-card-title text-slate-900">วางไฟล์เอกสารที่นี่ หรือคลิกเพื่อเลือกไฟล์</h3>
               <p className="ui-body mx-auto max-w-md text-slate-500">
-                เลือกได้ครั้งละ 1 ไฟล์ รองรับไฟล์ภาพหรือ PDF หลายหน้า ระบบจะจัดเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
+                เลือกได้ครั้งละ 1 ไฟล์ รองรับไฟล์ภาพหรือ PDF หลายหน้า ระบบจะเตรียมไฟล์ก่อนเข้าสู่ขั้นตอนตรวจขอบเขตเอกสาร
               </p>
             </div>
 
