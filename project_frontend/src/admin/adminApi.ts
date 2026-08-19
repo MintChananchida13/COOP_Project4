@@ -21,20 +21,30 @@ let templateListCache: Template[] | null = null;
 let templateRequestListPromise: Promise<AdminTemplateRequest[]> | null = null;
 let templateListPromise: Promise<Template[]> | null = null;
 
-const cloneTemplateRequests = (requests: AdminTemplateRequest[]) =>
-  requests.map((request) => ({
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+}
+
+function cloneTemplateRequests(requests: AdminTemplateRequest[] = []) {
+  return requests.map((request) => ({
     ...request,
     pages: (request.pages || []).map((page) => ({ ...page })),
     requestedFields: (request.requestedFields || []).map((field) => ({ ...field, roi: { ...field.roi } })),
   }));
+}
 
-const cloneTemplates = (templates: Template[]) =>
-  templates.map((template) => ({
+function cloneTemplates(templates: Template[] = []) {
+  return templates.map((template) => ({
     ...template,
     sharedFields: template.sharedFields ? [...template.sharedFields] : undefined,
   }));
+}
 
-const debugPrepublishPagesAccess = (scope: string, value: unknown) => {
+function debugPrepublishPagesAccess(scope: string, value: unknown) {
   if (process.env.NODE_ENV !== "development") return;
   const record = value as Record<string, unknown> | null | undefined;
   console.debug("[prepublish:pages]", scope, {
@@ -42,7 +52,7 @@ const debugPrepublishPagesAccess = (scope: string, value: unknown) => {
     keys: record && typeof record === "object" ? Object.keys(record) : [],
     hasPagesArray: Array.isArray(record?.pages),
   });
-};
+}
 
 const setTemplateRequestListCache = (requests: AdminTemplateRequest[]) => {
   templateRequestListCache = cloneTemplateRequests(requests);
@@ -715,10 +725,11 @@ export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest
   })),
 });
 
-const mapApiTemplate = (template: Partial<ApiTemplate> | null | undefined, fallbackId = ""): Template => {
-  const source = template || {};
-  const previewPage = Array.isArray(source.pages)
-    ? source.pages.find((page) => page.sample_image_url || page.normalized_image_url)
+function mapApiTemplate(template: Partial<ApiTemplate> | null | undefined, fallbackId = ""): Template {
+  const source = asRecord(template) as Partial<ApiTemplate>;
+  const sourcePages = Array.isArray(source.pages) ? source.pages : [];
+  const previewPage = sourcePages.length > 0
+    ? sourcePages.find((page) => page && (page.sample_image_url || page.normalized_image_url))
     : undefined;
 
   return {
@@ -747,7 +758,7 @@ const mapApiTemplate = (template: Partial<ApiTemplate> | null | undefined, fallb
     createdAt: source.created_at || undefined,
     updatedAt: source.updated_at || undefined,
   };
-};
+}
 
 const mapApiEmbeddingJob = (job?: ApiEmbeddingJob | null): EmbeddingJob | null => {
   if (!job) return null;
@@ -958,15 +969,16 @@ const mapApiIgnoreRegion = (region: ApiIgnoreRegion): IgnoreRegion => ({
   },
 });
 
-const normalizeTemplateBundle = (data: Partial<ApiTemplate> | null | undefined, fallbackId = "") => {
+function normalizeTemplateBundle(data: Partial<ApiTemplate> | null | undefined, fallbackId = "") {
   debugPrepublishPagesAccess("normalizeTemplateBundle", data);
+  const source = asRecord(data) as Partial<ApiTemplate>;
   return {
-    template: mapApiTemplate(data, fallbackId),
-    pages: Array.isArray(data?.pages) ? data.pages.map(mapApiTemplatePage) : [],
-    fields: Array.isArray(data?.fields) ? data.fields.map(mapApiTemplateField) : [],
-    ignoreRegions: Array.isArray(data?.ignore_regions) ? data.ignore_regions.map(mapApiIgnoreRegion) : [],
+    template: mapApiTemplate(source, fallbackId),
+    pages: (Array.isArray(source.pages) ? source.pages : []).map(mapApiTemplatePage),
+    fields: (Array.isArray(source.fields) ? source.fields : []).map(mapApiTemplateField),
+    ignoreRegions: (Array.isArray(source.ignore_regions) ? source.ignore_regions : []).map(mapApiIgnoreRegion),
   };
-};
+}
 
 interface ConvertTemplateResponse {
   template_request_id: string;
@@ -1547,21 +1559,24 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
     throw new Error(typeof detail === "string" ? detail : `Pre-publish simulation failed with ${response.status}`);
   }
 
-  const data = json?.data as Record<string, unknown>;
-  const summary = (data?.draft_summary as Record<string, unknown> | undefined) || {};
-  const temp = (data?.temporary_embedding as Record<string, unknown> | undefined) || {};
-  const separation = (data?.separation_analysis as Record<string, unknown> | undefined) || {};
-  const layoutSignaturePages = Array.isArray(data?.layout_signature_pages)
-    ? (data.layout_signature_pages as Record<string, unknown>[]).map(mapPrepublishLayoutSignaturePage)
+  const data = asRecord(json?.data);
+  debugPrepublishPagesAccess("runPrepublishSimulation:data", data);
+  const summary = asRecord(data.draft_summary);
+  const temp = asRecord(data.temporary_embedding);
+  const separation = asRecord(data.separation_analysis);
+  const layoutSignaturePages = Array.isArray(data.layout_signature_pages)
+    ? asRecordArray(data.layout_signature_pages).map(mapPrepublishLayoutSignaturePage)
     : [];
-  const candidates = Array.isArray(data?.candidates)
-    ? (data.candidates as Record<string, unknown>[]).map(mapPrepublishCandidate)
+  const candidates = Array.isArray(data.candidates)
+    ? asRecordArray(data.candidates).map(mapPrepublishCandidate)
     : [];
   const conflictTemplates = Array.isArray(separation.conflict_templates)
-    ? (separation.conflict_templates as Record<string, unknown>[]).map(mapPrepublishCandidate)
+    ? asRecordArray(separation.conflict_templates).map(mapPrepublishCandidate)
     : [];
 
-  const responseTemplate = data?.template as ApiTemplate | undefined;
+  const responseTemplate = data.template && typeof data.template === "object" && !Array.isArray(data.template)
+    ? (data.template as ApiTemplate)
+    : undefined;
   let template = mapApiTemplate(responseTemplate, templateId);
   if (!responseTemplate) {
     try {
@@ -1570,8 +1585,8 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
       template = mapApiTemplate(
         {
           id: templateId,
-          name: String(summary.template_name || data?.template_name || templateId),
-          status: String(summary.status || data?.status || "draft"),
+          name: String(summary.template_name || data.template_name || templateId),
+          status: String(summary.status || data.status || "draft"),
           version: 1,
           page_count: Number(summary.page_count || 0),
           similarity_threshold: typeof summary.similarity_threshold === "number" ? summary.similarity_threshold : 0.75,
@@ -1612,13 +1627,13 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
       persisted: Boolean(temp.persisted),
       note: (temp.note as string | undefined) || undefined,
       layoutSignaturePages: Array.isArray(temp.layout_signature_pages)
-        ? (temp.layout_signature_pages as Record<string, unknown>[]).map(mapPrepublishLayoutSignaturePage)
+        ? asRecordArray(temp.layout_signature_pages).map(mapPrepublishLayoutSignaturePage)
         : layoutSignaturePages,
     },
     layoutSignaturePages,
     candidates,
-    verificationAnchorResults: Array.isArray(data?.verification_anchor_results)
-      ? (data.verification_anchor_results as Record<string, unknown>[])
+    verificationAnchorResults: Array.isArray(data.verification_anchor_results)
+      ? asRecordArray(data.verification_anchor_results)
       : [],
     separationAnalysis: {
       top1Score: Number(separation.top1_score || 0),
