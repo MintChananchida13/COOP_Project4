@@ -705,34 +705,37 @@ export const mapApiRequest = (request: ApiTemplateRequest): AdminTemplateRequest
   })),
 });
 
-const mapApiTemplate = (template: ApiTemplate): Template => {
-  const previewPage = template.pages?.find((page) => page.sample_image_url || page.normalized_image_url);
+const mapApiTemplate = (template: Partial<ApiTemplate> | null | undefined, fallbackId = ""): Template => {
+  const source = template || {};
+  const previewPage = Array.isArray(source.pages)
+    ? source.pages.find((page) => page.sample_image_url || page.normalized_image_url)
+    : undefined;
 
   return {
-    id: template.id,
-    name: template.name,
-    documentType: template.document_type || undefined,
-    category: template.category || undefined,
-    status: mapTemplateStatus(template.status),
-    version: template.version,
-    templateGroupId: template.template_group_id || undefined,
-    versionNumber: template.version_number || template.version,
-    baseTemplateId: template.base_template_id || undefined,
-    description: template.description || undefined,
-    sharedFields: Array.isArray(template.shared_fields) ? template.shared_fields : [],
-    creationType: template.creation_type || undefined,
-    detectionMode: template.detection_mode || undefined,
-    mainPageNumber: template.main_page_number || undefined,
-    pageCount: template.page_count,
-    similarityThreshold: template.similarity_threshold,
-    finalConfidenceThreshold: template.final_confidence_threshold,
-    layoutWeight: typeof template.layout_weight === "number" ? template.layout_weight : 0.5,
-    textAnchorWeight: typeof template.text_anchor_weight === "number" ? template.text_anchor_weight : 0.35,
-    imageAnchorWeight: typeof template.image_anchor_weight === "number" ? template.image_anchor_weight : 0.15,
-    rejectionReason: template.rejection_reason || undefined,
+    id: source.id || fallbackId,
+    name: source.name || source.id || fallbackId || "Template",
+    documentType: source.document_type || undefined,
+    category: source.category || undefined,
+    status: mapTemplateStatus(source.status || "draft"),
+    version: typeof source.version === "number" ? source.version : Number(source.version_number || 1),
+    templateGroupId: source.template_group_id || undefined,
+    versionNumber: source.version_number || source.version || 1,
+    baseTemplateId: source.base_template_id || undefined,
+    description: source.description || undefined,
+    sharedFields: Array.isArray(source.shared_fields) ? source.shared_fields : [],
+    creationType: source.creation_type || undefined,
+    detectionMode: source.detection_mode || undefined,
+    mainPageNumber: source.main_page_number || undefined,
+    pageCount: typeof source.page_count === "number" ? source.page_count : 0,
+    similarityThreshold: typeof source.similarity_threshold === "number" ? source.similarity_threshold : 0.75,
+    finalConfidenceThreshold: typeof source.final_confidence_threshold === "number" ? source.final_confidence_threshold : 0.75,
+    layoutWeight: typeof source.layout_weight === "number" ? source.layout_weight : 0.5,
+    textAnchorWeight: typeof source.text_anchor_weight === "number" ? source.text_anchor_weight : 0.35,
+    imageAnchorWeight: typeof source.image_anchor_weight === "number" ? source.image_anchor_weight : 0.15,
+    rejectionReason: source.rejection_reason || undefined,
     previewImageUrl: previewPage?.sample_image_url || previewPage?.normalized_image_url || undefined,
-    createdAt: template.created_at || undefined,
-    updatedAt: template.updated_at || undefined,
+    createdAt: source.created_at || undefined,
+    updatedAt: source.updated_at || undefined,
   };
 };
 
@@ -1003,7 +1006,7 @@ export const fetchAdminDashboard = async () => {
     rejectedRequests: typeof data.rejected_request_count === "number" ? data.rejected_request_count : 0,
     templateCount: typeof data.template_count === "number" ? data.template_count : 0,
     latestRequests: (latestRequests || []).map(mapApiRequest),
-    latestTemplates: (latestTemplates || []).map(mapApiTemplate),
+    latestTemplates: (latestTemplates || []).map((template) => mapApiTemplate(template)),
   };
 };
 
@@ -1277,7 +1280,7 @@ export const fetchTemplates = async () => {
 
     const json = await response.json();
     const templates = json?.data?.templates as ApiTemplate[] | undefined;
-    const mappedTemplates = (templates || []).map(mapApiTemplate);
+    const mappedTemplates = (templates || []).map((template) => mapApiTemplate(template));
     setTemplateListCache(mappedTemplates);
     return cloneTemplates(mappedTemplates);
   })();
@@ -1549,9 +1552,28 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
     : [];
 
   const responseTemplate = data?.template as ApiTemplate | undefined;
-  const template = responseTemplate
-    ? mapApiTemplate(responseTemplate)
-    : (await fetchTemplateBundle(templateId)).template;
+  let template = mapApiTemplate(responseTemplate, templateId);
+  if (!responseTemplate) {
+    try {
+      template = (await fetchTemplateBundle(templateId)).template;
+    } catch {
+      template = mapApiTemplate(
+        {
+          id: templateId,
+          name: String(summary.template_name || data?.template_name || templateId),
+          status: String(summary.status || data?.status || "draft"),
+          version: 1,
+          page_count: Number(summary.page_count || 0),
+          similarity_threshold: typeof summary.similarity_threshold === "number" ? summary.similarity_threshold : 0.75,
+          final_confidence_threshold: typeof summary.final_confidence_threshold === "number" ? summary.final_confidence_threshold : 0.75,
+          layout_weight: typeof summary.layout_weight === "number" ? summary.layout_weight : 0.5,
+          text_anchor_weight: typeof summary.text_anchor_weight === "number" ? summary.text_anchor_weight : 0.35,
+          image_anchor_weight: typeof summary.image_anchor_weight === "number" ? summary.image_anchor_weight : 0.15,
+        },
+        templateId
+      );
+    }
+  }
 
   return {
     template,

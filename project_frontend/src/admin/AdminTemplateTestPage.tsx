@@ -623,7 +623,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
   const layoutSignaturePages: PrepublishLayoutSignaturePage[] =
     simulation?.layoutSignaturePages?.length
       ? simulation.layoutSignaturePages
-      : simulation?.temporaryEmbedding.layoutSignaturePages?.length
+      : simulation?.temporaryEmbedding?.layoutSignaturePages?.length
         ? simulation.temporaryEmbedding.layoutSignaturePages
         : safePages.map((page) => ({
             templatePageId: page.id,
@@ -643,7 +643,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           }));
   const generatedLayoutReferenceCount = layoutSignaturePages.filter((page) => page.status === "generated").length;
   const layoutReferencesGenerated = layoutSignaturePages.length > 0 && generatedLayoutReferenceCount === layoutSignaturePages.length;
-  const simulationPassed = Boolean(simulation?.separationAnalysis.simulationPassed);
+  const simulationPassed = Boolean(simulation?.separationAnalysis?.simulationPassed);
   const stepTwoCompleted = Boolean(simulationPassed && layoutReferencesGenerated);
   const detectionTestPassed = Boolean(detectionTest?.passed && detectionTest.draftTemplateRank === 1);
   const publishPrerequisitesMet = Boolean(stepTwoCompleted && detectionTestPassed);
@@ -969,11 +969,11 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
         <div className="mt-4 rounded-xl border border-slate-100 bg-white p-3">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             <DraftOverviewMetric label="Template Name" value={template.name} />
-            <DraftOverviewMetric label="Status" value={simulation?.draftSummary.status || template.status} tone="emerald" />
-            <DraftOverviewMetric label="Pages" value={simulation?.draftSummary.pageCount ?? safePages.length} />
-            <DraftOverviewMetric label="Extraction Fields" value={simulation?.draftSummary.extractionFieldCount ?? extractionFields.length} tone="indigo" />
-            <DraftOverviewMetric label="Text Anchors" value={simulation?.draftSummary.textAnchorCount ?? textAnchors.length} tone="orange" />
-            <DraftOverviewMetric label="Image Anchors" value={simulation?.draftSummary.imageAnchorCount ?? imageAnchors.length} tone="orange" />
+            <DraftOverviewMetric label="Status" value={simulation?.draftSummary?.status || template.status} tone="emerald" />
+            <DraftOverviewMetric label="Pages" value={simulation?.draftSummary?.pageCount ?? safePages.length} />
+            <DraftOverviewMetric label="Extraction Fields" value={simulation?.draftSummary?.extractionFieldCount ?? extractionFields.length} tone="indigo" />
+            <DraftOverviewMetric label="Text Anchors" value={simulation?.draftSummary?.textAnchorCount ?? textAnchors.length} tone="orange" />
+            <DraftOverviewMetric label="Image Anchors" value={simulation?.draftSummary?.imageAnchorCount ?? imageAnchors.length} tone="orange" />
           </div>
         </div>
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
