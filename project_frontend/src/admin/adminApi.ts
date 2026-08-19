@@ -15,8 +15,8 @@ export const ADMIN_API_BASE_URL =
 const fetchWithAuth = (input: RequestInfo | URL, init: RequestInit = {}) => {
   const session = readAuthSession();
   const headers = new Headers(init.headers || {});
-  if (session?.accessToken && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${session.accessToken}`);
+  if (session?.id && !headers.has("X-User-Id")) {
+    headers.set("X-User-Id", session.id);
   }
   return fetch(input, { ...init, headers });
 };

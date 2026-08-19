@@ -4,6 +4,7 @@ export type AuthRole = "user" | "admin";
 
 export interface AuthSession {
   id: string;
+  userId?: string;
   email: string;
   role: AuthRole;
   name: string;
@@ -12,6 +13,11 @@ export interface AuthSession {
 
 export const AUTH_SESSION_KEY = "ocr-studio:auth-session";
 export const AUTH_COOKIE_NAME = "ocr_role";
+
+export const mockAccounts: Array<AuthSession & { password: string }> = [
+  { id: "usr_seed_user", email: "user@ocr.com", password: "user123", role: "user", name: "User" },
+  { id: "usr_seed_admin", email: "admin@ocr.com", password: "admin123", role: "admin", name: "Admin" },
+];
 
 export const readAuthSession = (): AuthSession | null => {
   if (typeof window === "undefined") return null;
@@ -22,6 +28,7 @@ export const readAuthSession = (): AuthSession | null => {
     if ((parsed.role === "user" || parsed.role === "admin") && parsed.email) {
       return {
         id: parsed.id || "",
+        userId: parsed.userId || parsed.id || "",
         email: parsed.email,
         role: parsed.role,
         name: parsed.name || parsed.email,
@@ -46,8 +53,9 @@ export const clearAuthSession = () => {
 
 export const authHeaders = (extra?: HeadersInit): HeadersInit => {
   const session = readAuthSession();
+  const userId = session?.userId || session?.id;
   return {
     ...(extra || {}),
-    ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {}),
+    ...(userId ? { "X-User-Id": userId } : {}),
   };
 };

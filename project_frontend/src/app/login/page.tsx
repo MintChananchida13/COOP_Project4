@@ -3,9 +3,7 @@
 import { FormEvent, Suspense, useMemo, useState } from "react";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { writeAuthSession } from "../../auth/session";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { mockAccounts, writeAuthSession } from "../../auth/session";
 
 function LoginForm() {
   const router = useRouter();
@@ -23,40 +21,27 @@ function LoginForm() {
     setIsLoading(true);
     setError("");
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-      const json = await response.json().catch(() => null);
+    window.setTimeout(() => {
+      const account = mockAccounts.find(
+        (item) => item.email.toLowerCase() === email.trim().toLowerCase() && item.password === password
+      );
       setIsLoading(false);
-      if (!response.ok) {
+      if (!account) {
         setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
         return;
       }
 
-      const user = json?.data?.user;
-      const accessToken = json?.data?.access_token;
-      if (!user?.id || !user?.email || !user?.role || !accessToken) {
-        setError("เข้าสู่ระบบไม่สำเร็จ");
-        return;
-      }
-
-      writeAuthSession({ id: user.id, email: user.email, role: user.role, name: user.name || user.email, accessToken });
-      const fallbackPath = user.role === "admin" ? "/admin" : "/";
+      writeAuthSession({ id: account.id, userId: account.id, email: account.email, role: account.role, name: account.name });
+      const fallbackPath = account.role === "admin" ? "/admin" : "/";
       const safeNext =
         nextPath &&
         nextPath.startsWith("/") &&
         !nextPath.startsWith("//") &&
-        (user.role === "admin" || !nextPath.startsWith("/admin"))
+        (account.role === "admin" || !nextPath.startsWith("/admin"))
           ? nextPath
           : fallbackPath;
       router.replace(safeNext);
-    } catch {
-      setIsLoading(false);
-      setError("เชื่อมต่อระบบเข้าสู่ระบบไม่สำเร็จ");
-    }
+    }, 250);
   };
   return (
     <div className="flex min-h-screen flex-col justify-center bg-slate-100 px-4 py-12 sm:px-6 lg:px-8">
