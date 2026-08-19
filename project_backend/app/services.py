@@ -1651,6 +1651,29 @@ def _image_category_display(values: List[str]) -> str:
     return ", ".join(labels)
 
 
+def _resolve_image_category_id(conn: Any, value: Optional[str]) -> Optional[str]:
+    values = _image_category_values(value)
+    if not values:
+        return None
+    selected_value = values[0]
+    ensure_image_verification_categories_table(conn)
+    row = conn.execute(
+        """
+        SELECT id
+        FROM image_verification_categories
+        WHERE id = ? OR value = ?
+        LIMIT 1
+        """,
+        (selected_value, selected_value),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Image verification category not found: {selected_value}",
+        )
+    return str(row["id"])
+
+
 class VerificationService:
     FUZZY_THRESHOLD = 0.85
     DEFAULT_VERIFICATION_THRESHOLD = 0.70
@@ -1695,12 +1718,13 @@ class VerificationService:
                     va.regex_pattern,
                     NULL AS roi_padding,
                     va.weight AS verification_weight,
-                    va.image_category_id AS image_category,
+                    COALESCE(ivc.value, va.image_category_id) AS image_category,
                     va.sort_order,
                     va.created_at,
                     va.updated_at
                 FROM verification_anchors va
                 JOIN template_pages tp ON tp.id = va.template_page_id
+                LEFT JOIN image_verification_categories ivc ON ivc.id = va.image_category_id
                 WHERE tp.template_version_id = ?
                 ORDER BY tp.page_number ASC, va.sort_order ASC, va.created_at ASC
                 """,
@@ -3067,10 +3091,11 @@ class AdminTemplateService:
                        va.expected_text, va.match_type, va.required AS required_for_verification,
                        'fixed_roi' AS extraction_method, 'fix' AS roi_mode, NULL AS expected_content,
                        NULL AS anchor_text, va.regex_pattern, NULL AS roi_padding,
-                       va.weight AS verification_weight, va.image_category_id AS image_category,
+                       va.weight AS verification_weight, COALESCE(ivc.value, va.image_category_id) AS image_category,
                        va.sort_order, va.created_at, va.updated_at
                 FROM verification_anchors va
                 JOIN template_pages tp ON tp.id = va.template_page_id
+                LEFT JOIN image_verification_categories ivc ON ivc.id = va.image_category_id
                 WHERE tp.template_version_id = ?
                 ORDER BY tp.page_number ASC, va.sort_order ASC, va.created_at ASC
                 """,
@@ -3394,7 +3419,35 @@ class AdminTemplateService:
         field_id = _stub_id("tpl_field")
         with _connect() as conn:
             if payload.use_for_verification:
-                conn.execute("INSERT INTO verification_anchors (id, template_page_id, anchor_name, anchor_type, roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio, required, weight, expected_text, match_type, regex_pattern, image_category_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (field_id, payload.template_page_id, payload.field_name, _normalize_data_type(payload.data_type), payload.roi.x_ratio, payload.roi.y_ratio, payload.roi.width_ratio, payload.roi.height_ratio, bool(payload.required_for_verification), payload.verification_weight or 1.0, payload.expected_text, payload.match_type, payload.regex_pattern, payload.image_category or None, payload.sort_order))
+                image_category_id = _resolve_image_category_id(conn, payload.image_category)
+                conn.execute(
+                    """
+                    INSERT INTO verification_anchors (
+                        id, template_page_id, anchor_name, anchor_type,
+                        roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio,
+                        required, weight, expected_text, match_type, regex_pattern,
+                        image_category_id, sort_order, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        field_id,
+                        payload.template_page_id,
+                        payload.field_name,
+                        _normalize_data_type(payload.data_type),
+                        payload.roi.x_ratio,
+                        payload.roi.y_ratio,
+                        payload.roi.width_ratio,
+                        payload.roi.height_ratio,
+                        bool(payload.required_for_verification),
+                        payload.verification_weight or 1.0,
+                        payload.expected_text,
+                        payload.match_type,
+                        payload.regex_pattern,
+                        image_category_id,
+                        payload.sort_order,
+                    ),
+                )
             else:
                 conn.execute("INSERT INTO extraction_fields (id, template_page_id, field_name, display_label, data_type, extraction_method, roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio, roi_mode, expected_content, required, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (field_id, payload.template_page_id, payload.field_name, payload.display_label, _normalize_data_type(payload.data_type), _normalize_extraction_method(payload.extraction_method), payload.roi.x_ratio, payload.roi.y_ratio, payload.roi.width_ratio, payload.roi.height_ratio, _normalize_roi_mode(payload.roi_mode), _normalize_expected_content(payload.expected_content), payload.sort_order))
             conn.commit()
@@ -3429,10 +3482,11 @@ class AdminTemplateService:
                    va.expected_text, va.match_type, va.required AS required_for_verification,
                    'fixed_roi' AS extraction_method, 'fix' AS roi_mode, NULL AS expected_content,
                    NULL AS anchor_text, va.regex_pattern, NULL AS roi_padding,
-                   va.weight AS verification_weight, va.image_category_id AS image_category,
+                   va.weight AS verification_weight, COALESCE(ivc.value, va.image_category_id) AS image_category,
                    va.sort_order, va.created_at, va.updated_at
             FROM verification_anchors va
             JOIN template_pages tp ON tp.id = va.template_page_id
+            LEFT JOIN image_verification_categories ivc ON ivc.id = va.image_category_id
             WHERE tp.template_version_id = ? AND va.id = ?
             """,
             (template_id, field_id),
