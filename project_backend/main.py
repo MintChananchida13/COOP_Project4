@@ -31,7 +31,7 @@ from app.ocr_adapter import recognize_text_roi
 from app.ocr_postprocess import normalize_ocr_text, normalize_table_rows
 from app.paddle_thai_ocr_adapter import PaddleThaiOcrUnavailableError, run_paddle_thai_ocr, run_paddle_thai_ocr_batch
 from app.table_recognition_v2_adapter import TableRecognitionV2UnavailableError, recognize_table_v2
-from app.db import connect as db_connect
+from app.db import connect as db_connect, ensure_database_ready, is_postgres_enabled
 from app.auth_service import current_user
 from app.json_utils import jsonb_dump, jsonb_load
 
@@ -147,6 +147,13 @@ def warmup_paddle_models() -> Dict[str, Any]:
 
 @app.on_event("startup")
 async def startup_warmup() -> None:
+    if is_postgres_enabled():
+        try:
+            ensure_database_ready()
+        except Exception as error:
+            print(f"Database startup initialization failed: {error}")
+            raise
+
     model_service_url = os.getenv("MODEL_SERVICE_URL", "").strip()
     if model_service_url:
         print(f"Using external model runtime service: {model_service_url}")

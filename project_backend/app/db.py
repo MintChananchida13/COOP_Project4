@@ -1,11 +1,26 @@
 import os
 import re
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Sequence
 
 from .auth_password import hash_password
 
 
 _POSTGRES_READY = False
+_SEED_USERS = [
+    {
+        "id": "usr_seed_user",
+        "email": "user@ocr.com",
+        "password": "user123",
+        "role": "user",
+    },
+    {
+        "id": "usr_seed_admin",
+        "email": "admin@ocr.com",
+        "password": "admin123",
+        "role": "admin",
+    },
+]
 
 
 def _database_url() -> str:
@@ -15,6 +30,16 @@ def _database_url() -> str:
 def is_postgres_enabled() -> bool:
     database_url = _database_url().lower()
     return database_url.startswith("postgresql://") or database_url.startswith("postgres://")
+
+
+def database_target_summary() -> Dict[str, Optional[str]]:
+    parsed = urlparse(_database_url())
+    return {
+        "scheme": parsed.scheme or None,
+        "host": parsed.hostname,
+        "port": str(parsed.port) if parsed.port else None,
+        "database": parsed.path.lstrip("/") or None,
+    }
 
 
 class StaticCursor:
@@ -117,27 +142,15 @@ def _ensure_postgres_schema(conn: PostgresConnection) -> None:
 
     for statement in _POSTGRES_SCHEMA:
         conn.execute(statement)
-    _seed_default_users(conn)
+    inserted = _seed_default_users(conn)
     conn.commit()
+    _log_seed_user_summary(conn, inserted)
     _POSTGRES_READY = True
 
 
-def _seed_default_users(conn: PostgresConnection) -> None:
-    seed_users = [
-        {
-            "id": "usr_seed_user",
-            "email": "user@ocr.com",
-            "password": "user123",
-            "role": "user",
-        },
-        {
-            "id": "usr_seed_admin",
-            "email": "admin@ocr.com",
-            "password": "admin123",
-            "role": "admin",
-        },
-    ]
-    for user in seed_users:
+def _seed_default_users(conn: PostgresConnection) -> int:
+    inserted = 0
+    for user in _SEED_USERS:
         existing = conn.execute("SELECT id FROM users WHERE email = ?", (user["email"],)).fetchone()
         if existing is not None:
             continue
@@ -148,6 +161,58 @@ def _seed_default_users(conn: PostgresConnection) -> None:
             """,
             (user["id"], user["email"], hash_password(user["password"]), user["role"]),
         )
+        inserted += 1
+    return inserted
+
+
+def _log_seed_user_summary(conn: PostgresConnection, inserted: int) -> None:
+    rows = conn.execute(
+        """
+        SELECT email, role
+        FROM users
+        WHERE email IN (?, ?)
+        ORDER BY email ASC
+        """,
+        ("admin@ocr.com", "user@ocr.com"),
+    ).fetchall()
+    total = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()
+    target = database_target_summary()
+    seed_emails = [row["email"] for row in rows]
+    print(
+        "Database startup seed users checked "
+        f"(target={target['host']}/{target['database']}, total_users={total['count'] if total else 0}, "
+        f"seed_users_present={len(seed_emails)}/2, inserted={inserted}, emails={seed_emails})."
+    )
+
+
+def ensure_database_ready() -> Dict[str, Any]:
+    with connect() as conn:
+        inserted = _seed_default_users(conn)
+        conn.commit()
+        rows = conn.execute(
+            """
+            SELECT id, email, role
+            FROM users
+            WHERE email IN (?, ?)
+            ORDER BY email ASC
+            """,
+            ("admin@ocr.com", "user@ocr.com"),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()
+    summary = {
+        "database": database_target_summary(),
+        "total_users": int(total["count"] if total else 0),
+        "seed_users_present": len(rows),
+        "seed_users": [{"id": row["id"], "email": row["email"], "role": row["role"]} for row in rows],
+        "inserted": inserted,
+    }
+    print(
+        "Database startup ready "
+        f"(target={summary['database']['host']}/{summary['database']['database']}, "
+        f"total_users={summary['total_users']}, seed_users_present={summary['seed_users_present']}/2, "
+        f"inserted={inserted})."
+    )
+    return summary
 
 
 _POSTGRES_SCHEMA = [
