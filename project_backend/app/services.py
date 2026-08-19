@@ -3248,9 +3248,77 @@ class AdminTemplateService:
             conn.commit()
         return self.get_template(template_id)
 
+    def _get_template_field_for_update(self, conn: Any, template_id: str, field_id: str) -> Optional[Dict[str, Any]]:
+        row = conn.execute(
+            """
+            SELECT tp.template_version_id AS template_id, ef.template_page_id, tp.page_number,
+                   ef.id, ef.field_name, ef.display_label,
+                   ef.roi_x_ratio, ef.roi_y_ratio, ef.roi_width_ratio, ef.roi_height_ratio,
+                   ef.data_type, 1 AS user_selectable, 1 AS default_selected, 0 AS use_for_verification,
+                   NULL AS expected_text, NULL AS match_type, 0 AS required_for_verification,
+                   ef.extraction_method, ef.roi_mode, ef.expected_content,
+                   NULL AS anchor_text, NULL AS regex_pattern, NULL AS roi_padding,
+                   1.0 AS verification_weight, NULL AS image_category,
+                   ef.sort_order, ef.created_at, ef.updated_at
+            FROM extraction_fields ef
+            JOIN template_pages tp ON tp.id = ef.template_page_id
+            WHERE tp.template_version_id = ? AND ef.id = ?
+            """,
+            (template_id, field_id),
+        ).fetchone()
+        if row is not None:
+            return _template_field_row_to_api(row)
+        row = conn.execute(
+            """
+            SELECT tp.template_version_id AS template_id, va.template_page_id, tp.page_number,
+                   va.id, va.anchor_name AS field_name, va.anchor_name AS display_label,
+                   va.roi_x_ratio, va.roi_y_ratio, va.roi_width_ratio, va.roi_height_ratio,
+                   va.anchor_type AS data_type, 0 AS user_selectable, 0 AS default_selected, 1 AS use_for_verification,
+                   va.expected_text, va.match_type, va.required AS required_for_verification,
+                   'fixed_roi' AS extraction_method, 'fix' AS roi_mode, NULL AS expected_content,
+                   NULL AS anchor_text, va.regex_pattern, NULL AS roi_padding,
+                   va.weight AS verification_weight, va.image_category_id AS image_category,
+                   va.sort_order, va.created_at, va.updated_at
+            FROM verification_anchors va
+            JOIN template_pages tp ON tp.id = va.template_page_id
+            WHERE tp.template_version_id = ? AND va.id = ?
+            """,
+            (template_id, field_id),
+        ).fetchone()
+        return _template_field_row_to_api(row) if row is not None else None
+
     def update_template_field(self, template_id: str, field_id: str, payload: TemplateFieldUpdate) -> Dict[str, Any]:
+        patch = payload.model_dump(exclude_unset=True)
+        with _connect() as conn:
+            current = self._get_template_field_for_update(conn, template_id, field_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Template field not found.")
+        roi = patch.get("roi") or current["roi"]
+        merged = {
+            "template_page_id": patch.get("template_page_id", current["template_page_id"]),
+            "page_number": patch.get("page_number", current["page_number"]),
+            "field_name": patch.get("field_name", current["field_name"]),
+            "display_label": patch.get("display_label", current["display_label"]),
+            "roi": roi,
+            "data_type": patch.get("data_type", current["data_type"]),
+            "user_selectable": patch.get("user_selectable", current["user_selectable"]),
+            "default_selected": patch.get("default_selected", current["default_selected"]),
+            "use_for_verification": patch.get("use_for_verification", current["use_for_verification"]),
+            "expected_text": patch.get("expected_text", current.get("expected_text")),
+            "match_type": patch.get("match_type", current.get("match_type")),
+            "required_for_verification": patch.get("required_for_verification", current["required_for_verification"]),
+            "extraction_method": patch.get("extraction_method", current["extraction_method"]),
+            "roi_mode": patch.get("roi_mode", current.get("roi_mode") or "fix"),
+            "expected_content": patch.get("expected_content", current.get("expected_content")),
+            "anchor_text": patch.get("anchor_text", current.get("anchor_text")),
+            "regex_pattern": patch.get("regex_pattern", current.get("regex_pattern")),
+            "roi_padding": patch.get("roi_padding", current.get("roi_padding")),
+            "verification_weight": patch.get("verification_weight", current.get("verification_weight")),
+            "image_category": patch.get("image_category", current.get("image_category")),
+            "sort_order": patch.get("sort_order", current["sort_order"]),
+        }
         self.delete_template_field(template_id, field_id)
-        return self.create_template_field(template_id, TemplateFieldCreate(**payload.model_dump(exclude_unset=False)))
+        return self.create_template_field(template_id, TemplateFieldCreate(**merged))
 
     def delete_template_field(self, template_id: str, field_id: str) -> Dict[str, Any]:
         with _connect() as conn:
