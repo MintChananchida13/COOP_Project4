@@ -1531,22 +1531,28 @@ const mapPrepublishCandidate = (candidate: Record<string, unknown>): PrepublishC
     : [],
 });
 
-const mapPrepublishLayoutSignaturePage = (page: Record<string, unknown>): PrepublishLayoutSignaturePage => ({
-  templatePageId: (page.template_page_id as string | null | undefined) ?? null,
-  templateLayoutReferenceId: (page.template_layout_reference_id as string | null | undefined) ?? null,
-  pageNumber: Number(page.page_number || 0),
-  status: String(page.status || "pending"),
-  engine: (page.engine as string | null | undefined) ?? null,
-  version: (page.version as string | null | undefined) ?? null,
-  modelName: (page.model_name as string | null | undefined) ?? null,
-  labelCount: typeof page.label_count === "number" ? page.label_count : null,
-  imageUrl: (page.image_url as string | null | undefined) ?? null,
-  imageSource: (page.image_source as string | null | undefined) ?? null,
-  isCanonical: Boolean(page.is_canonical),
-  referenceRole: (page.reference_role as string | null | undefined) ?? null,
-  persisted: Boolean(page.persisted),
-  reason: (page.reason as string | null | undefined) ?? null,
-});
+function mapPrepublishLayoutSignaturePage(page: Record<string, unknown>): PrepublishLayoutSignaturePage {
+  return {
+    templatePageId: (page.template_page_id as string | null | undefined) ?? null,
+    templateLayoutReferenceId: (page.template_layout_reference_id as string | null | undefined) ?? null,
+    pageNumber: Number(page.page_number || 0),
+    status: String(page.status || "pending"),
+    engine: (page.engine as string | null | undefined) ?? null,
+    version: (page.version as string | null | undefined) ?? null,
+    modelName: (page.model_name as string | null | undefined) ?? (page.model as string | null | undefined) ?? null,
+    labelCount: typeof page.label_count === "number" ? page.label_count : typeof page.region_count === "number" ? page.region_count : null,
+    imageUrl:
+      (page.image_url as string | null | undefined) ??
+      (page.normalized_image_url as string | null | undefined) ??
+      (page.sample_image_url as string | null | undefined) ??
+      null,
+    imageSource: (page.image_source as string | null | undefined) ?? null,
+    isCanonical: Boolean(page.is_canonical),
+    referenceRole: (page.reference_role as string | null | undefined) ?? null,
+    persisted: Boolean(page.persisted),
+    reason: (page.reason as string | null | undefined) ?? null,
+  };
+}
 
 export const runPrepublishSimulation = async (templateId: string): Promise<PrepublishSimulationResult> => {
   const response = await fetchWithAuth(`${ADMIN_API_BASE_URL}/admin/templates/${templateId}/prepublish-simulation`, {
@@ -1573,6 +1579,8 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
   const conflictTemplates = Array.isArray(separation.conflict_templates)
     ? asRecordArray(separation.conflict_templates).map(mapPrepublishCandidate)
     : [];
+  const rootPassed = typeof data.passed === "boolean" ? data.passed : null;
+  const separationPassed = typeof separation.simulation_passed === "boolean" ? separation.simulation_passed : null;
 
   const responseTemplate = data.template && typeof data.template === "object" && !Array.isArray(data.template)
     ? (data.template as ApiTemplate)
@@ -1623,7 +1631,7 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
       modelName: String(temp.model_name || ""),
       embeddingDimension: Number(temp.embedding_dimension || 0),
       inputCount: Number(temp.input_count || 0),
-      generatedAt: (temp.generated_at as string | undefined) || undefined,
+      generatedAt: (temp.generated_at as string | undefined) || (data.timestamp as string | undefined) || undefined,
       persisted: Boolean(temp.persisted),
       note: (temp.note as string | undefined) || undefined,
       layoutSignaturePages: Array.isArray(temp.layout_signature_pages)
@@ -1638,8 +1646,8 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
     separationAnalysis: {
       top1Score: Number(separation.top1_score || 0),
       top2Score: typeof separation.top2_score === "number" ? separation.top2_score : null,
-      status: String(separation.status || "not_ready"),
-      simulationPassed: Boolean(separation.simulation_passed),
+      status: String(separation.status || data.status || (rootPassed ? "ready_to_publish" : "not_ready")),
+      simulationPassed: separationPassed ?? Boolean(rootPassed),
       conflictTemplates,
       message: (separation.message as string | undefined) || undefined,
     },

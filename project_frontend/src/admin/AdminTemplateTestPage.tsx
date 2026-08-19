@@ -633,7 +633,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
     });
   }, [imageAnchors.length, template?.imageAnchorWeight, template?.layoutWeight, template?.textAnchorWeight, textAnchors.length]);
   const effectiveMatchingWeights = matchingWeights;
-  const layoutSignaturePages: PrepublishLayoutSignaturePage[] =
+  const rawLayoutSignaturePages: PrepublishLayoutSignaturePage[] =
     simulation?.layoutSignaturePages?.length
       ? simulation.layoutSignaturePages
       : simulation?.temporaryEmbedding?.layoutSignaturePages?.length
@@ -654,7 +654,16 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
             persisted: false,
             reason: null,
           }));
-  const generatedLayoutReferenceCount = layoutSignaturePages.filter((page) => page.status === "generated").length;
+  const layoutSignaturePages: PrepublishLayoutSignaturePage[] = rawLayoutSignaturePages.map((signaturePage) => {
+    const templatePage = safePages.find(
+      (page) => page.id === signaturePage.templatePageId || page.pageNumber === signaturePage.pageNumber
+    );
+    return {
+      ...signaturePage,
+      imageUrl: signaturePage.imageUrl || templatePage?.normalizedImageUrl || templatePage?.sampleImageUrl || null,
+    };
+  });
+  const generatedLayoutReferenceCount = layoutSignaturePages.filter((page) => String(page.status || "").toLowerCase() === "generated").length;
   const layoutReferencesGenerated = layoutSignaturePages.length > 0 && generatedLayoutReferenceCount === layoutSignaturePages.length;
   const simulationPassed = Boolean(simulation?.separationAnalysis?.simulationPassed);
   const stepTwoCompleted = Boolean(simulationPassed && layoutReferencesGenerated);
