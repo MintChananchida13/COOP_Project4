@@ -2984,7 +2984,7 @@ class AdminTemplateService:
             if template_row is None:
                 return {"id": template_id, "status": "not_found", "pages": [], "fields": [], "ignore_regions": [], "layout_references": []}
             page_rows = conn.execute("SELECT * FROM template_pages WHERE template_version_id = ? ORDER BY page_number ASC", (template_id,)).fetchall()
-            field_rows = conn.execute(
+            extraction_rows = conn.execute(
                 """
                 SELECT tp.template_version_id AS template_id, ef.template_page_id, tp.page_number,
                        ef.id, ef.field_name, ef.display_label,
@@ -2998,7 +2998,12 @@ class AdminTemplateService:
                 FROM extraction_fields ef
                 JOIN template_pages tp ON tp.id = ef.template_page_id
                 WHERE tp.template_version_id = ?
-                UNION ALL
+                ORDER BY tp.page_number ASC, ef.sort_order ASC, ef.created_at ASC
+                """,
+                (template_id,),
+            ).fetchall()
+            anchor_rows = conn.execute(
+                """
                 SELECT tp.template_version_id AS template_id, va.template_page_id, tp.page_number,
                        va.id, va.anchor_name AS field_name, va.anchor_name AS display_label,
                        va.roi_x_ratio, va.roi_y_ratio, va.roi_width_ratio, va.roi_height_ratio,
@@ -3011,10 +3016,18 @@ class AdminTemplateService:
                 FROM verification_anchors va
                 JOIN template_pages tp ON tp.id = va.template_page_id
                 WHERE tp.template_version_id = ?
-                ORDER BY page_number ASC, sort_order ASC, created_at ASC
+                ORDER BY tp.page_number ASC, va.sort_order ASC, va.created_at ASC
                 """,
-                (template_id, template_id),
+                (template_id,),
             ).fetchall()
+            field_rows = sorted(
+                [*extraction_rows, *anchor_rows],
+                key=lambda row: (
+                    int(row["page_number"] or 1),
+                    int(row["sort_order"] or 0),
+                    str(row["created_at"] or ""),
+                ),
+            )
             ignore_rows = conn.execute(
                 """
                 SELECT ir.*, tp.template_version_id AS template_id, tp.page_number
