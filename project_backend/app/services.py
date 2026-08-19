@@ -518,6 +518,11 @@ def _refresh_template_page_signatures(conn: Any, template_id: str) -> List[Dict[
     return _refresh_template_layout_signatures(conn, template_id)
 
 
+def _refresh_template_layout_reference_signatures(conn: Any, template_id: str) -> List[Dict[str, Any]]:
+    # Schema V2 uses template_pages as the canonical layout references.
+    return _refresh_template_layout_signatures(conn, template_id)
+
+
 def _crop_anchor_roi(image_path_or_source: str, roi: Dict[str, Any], output_path: Path, padding: float = 0) -> Optional[str]:
     image = _load_image_source(image_path_or_source)
     if image is None:
@@ -3219,13 +3224,56 @@ class AdminTemplateService:
         return {"score": sum(scores) / len(scores) if scores else 0.0, "best_reference": best_page.get("best_reference") if best_page else None, "reference_count": sum(int(item.get("reference_count") or 0) for item in page_matches), "page_matches": page_matches}
 
     def _search_layout_candidates_for_pages(self, query_signatures_by_page: Dict[int, Dict[str, Any]], template_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        candidates = []
+        grouped: Dict[str, Dict[str, Any]] = {}
         for page_number, query_signature in sorted(query_signatures_by_page.items()):
-            candidates.extend(search_layout_candidates(query_signature, page_number=page_number, limit=limit, include_template_id=template_id))
-        return candidates
+            candidates = search_layout_candidates(query_signature, page_number=page_number, limit=limit, include_template_id=template_id)
+            for candidate in candidates:
+                candidate_template_id = self._template_id_from_vector_candidate(candidate) or str(candidate.get("template_id") or candidate.get("id") or "")
+                if not candidate_template_id:
+                    continue
+                metadata = candidate.get("metadata") or {}
+                bucket = grouped.setdefault(
+                    candidate_template_id,
+                    {
+                        **candidate,
+                        "score": 0.0,
+                        "matched_pages": 0,
+                        "page_match_details": [],
+                    },
+                )
+                detail = {
+                    "query_page_number": page_number,
+                    "template_page_number": metadata.get("matched_layout_reference_page_number") or metadata.get("page_number"),
+                    "score": float(candidate.get("score") or 0.0),
+                    "vector_id": candidate.get("vector_id"),
+                    "metadata": metadata,
+                }
+                bucket["page_match_details"].append(detail)
+                if float(candidate.get("score") or 0.0) > float(bucket.get("_best_score") or -1.0):
+                    bucket.update({**candidate, "page_match_details": bucket["page_match_details"]})
+                    bucket["_best_score"] = float(candidate.get("score") or 0.0)
+        aggregated: List[Dict[str, Any]] = []
+        for bucket in grouped.values():
+            details = bucket.get("page_match_details") or []
+            scores = [float(item.get("score") or 0.0) for item in details]
+            bucket.pop("_best_score", None)
+            bucket["matched_pages"] = len(details)
+            bucket["score"] = round(sum(scores) / len(scores), 4) if scores else 0.0
+            bucket["layout_score"] = bucket["score"]
+            aggregated.append(bucket)
+        return sorted(aggregated, key=lambda item: float(item.get("score") or 0.0), reverse=True)[:limit]
 
     def _align_query_pages_for_candidate(self, candidate_template: Dict[str, Any], query_page_paths: Dict[int, str], allow_alignment: bool = True) -> Dict[str, Any]:
-        return {"verification_page_paths": dict(query_page_paths), "alignments": []}
+        page_paths = dict(query_page_paths)
+        alignments = [
+            {
+                "page_number": page_number,
+                "alignment_status": "skipped" if not allow_alignment else "not_required",
+                "verification_source_used": "original",
+            }
+            for page_number in sorted(page_paths)
+        ]
+        return {"page_paths": page_paths, "verification_page_paths": page_paths, "alignments": alignments}
 
     def run_prepublish_simulation(self, template_id: str) -> Dict[str, Any]:
         draft = self.get_template(template_id)
@@ -3395,6 +3443,8 @@ class AdminTemplateService:
 
     def create_template_page(self, template_id: str, payload: TemplatePageCreate) -> Dict[str, Any]:
         with _connect() as conn:
+            if conn.execute("SELECT id FROM template_versions WHERE id = ?", (template_id,)).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Template not found.")
             conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, payload.page_number, payload.page_name, payload.sample_image_url, payload.normalized_image_url, payload.layout_signature_json))
             conn.commit()
         return self.get_template(template_id)
@@ -3418,6 +3468,12 @@ class AdminTemplateService:
     def create_template_field(self, template_id: str, payload: TemplateFieldCreate) -> Dict[str, Any]:
         field_id = _stub_id("tpl_field")
         with _connect() as conn:
+            page_row = conn.execute(
+                "SELECT id FROM template_pages WHERE id = ? AND template_version_id = ?",
+                (payload.template_page_id, template_id),
+            ).fetchone()
+            if page_row is None:
+                raise HTTPException(status_code=404, detail="Template page not found.")
             if payload.use_for_verification:
                 image_category_id = _resolve_image_category_id(conn, payload.image_category)
                 conn.execute(
@@ -3535,13 +3591,39 @@ class AdminTemplateService:
 
     def create_ignore_region(self, template_id: str, payload: IgnoreRegionCreate) -> Dict[str, Any]:
         with _connect() as conn:
+            page_row = conn.execute(
+                "SELECT id FROM template_pages WHERE id = ? AND template_version_id = ?",
+                (payload.template_page_id, template_id),
+            ).fetchone()
+            if page_row is None:
+                raise HTTPException(status_code=404, detail="Template page not found.")
             conn.execute("INSERT INTO ignore_regions (id, template_page_id, region_name, roi_x_ratio, roi_y_ratio, roi_width_ratio, roi_height_ratio, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)", (_stub_id("ignore_region"), payload.template_page_id, payload.field_name, payload.roi.x_ratio, payload.roi.y_ratio, payload.roi.width_ratio, payload.roi.height_ratio))
             conn.commit()
         return self.get_template(template_id)
 
     def update_ignore_region(self, template_id: str, region_id: str, payload: IgnoreRegionUpdate) -> Dict[str, Any]:
+        patch = payload.model_dump(exclude_unset=True)
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT ir.*, tp.template_version_id AS template_id, tp.page_number
+                FROM ignore_regions ir
+                JOIN template_pages tp ON tp.id = ir.template_page_id
+                WHERE ir.id = ? AND tp.template_version_id = ?
+                """,
+                (region_id, template_id),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ignore region not found.")
+        current = _ignore_region_row_to_api(row)
+        merged = {
+            "template_page_id": patch.get("template_page_id", current["template_page_id"]),
+            "page_number": patch.get("page_number", current["page_number"]),
+            "field_name": patch.get("field_name", current["field_name"]),
+            "roi": patch.get("roi", current["roi"]),
+        }
         self.delete_ignore_region(template_id, region_id)
-        return self.create_ignore_region(template_id, IgnoreRegionCreate(**payload.model_dump(exclude_unset=False)))
+        return self.create_ignore_region(template_id, IgnoreRegionCreate(**merged))
 
     def delete_ignore_region(self, template_id: str, region_id: str) -> Dict[str, Any]:
         with _connect() as conn:

@@ -535,6 +535,9 @@ _POSTGRES_SCHEMA = [
         va.anchor_type,
         va.required,
         va.weight,
+        va.image_category_id,
+        ivc.value AS image_category_value,
+        ivc.label AS image_category_label,
         va.sort_order,
         va.created_at,
         va.updated_at
@@ -542,5 +545,6 @@ _POSTGRES_SCHEMA = [
     JOIN template_pages tp ON tp.id = va.template_page_id
     JOIN template_versions tv ON tv.id = tp.template_version_id
     JOIN template_groups tg ON tg.id = tv.template_group_id
+    LEFT JOIN image_verification_categories ivc ON ivc.id = va.image_category_id
     """,
 ]

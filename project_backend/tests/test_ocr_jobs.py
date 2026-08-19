@@ -35,9 +35,10 @@ class FakeConnection:
     def execute(self, sql, params=()):
         normalized = " ".join(sql.lower().split())
         if normalized.startswith("insert into ocr_jobs"):
-            job_id, request_json = params
+            job_id, requested_by, request_json = params
             self.jobs[job_id] = {
                 "id": job_id,
+                "requested_by": requested_by,
                 "status": "queued",
                 "request_json": request_json,
                 "result_json": None,
@@ -48,7 +49,7 @@ class FakeConnection:
             }
             return FakeCursor()
 
-        if normalized.startswith("select id, status"):
+        if normalized.startswith("select id, requested_by, status") or normalized.startswith("select id, status"):
             return FakeCursor(self.jobs.get(params[0]))
 
         if normalized.startswith("select request_json"):

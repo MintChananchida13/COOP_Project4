@@ -24,8 +24,8 @@ let templateListPromise: Promise<Template[]> | null = null;
 const cloneTemplateRequests = (requests: AdminTemplateRequest[]) =>
   requests.map((request) => ({
     ...request,
-    pages: request.pages.map((page) => ({ ...page })),
-    requestedFields: request.requestedFields.map((field) => ({ ...field, roi: { ...field.roi } })),
+    pages: (request.pages || []).map((page) => ({ ...page })),
+    requestedFields: (request.requestedFields || []).map((field) => ({ ...field, roi: { ...field.roi } })),
   }));
 
 const cloneTemplates = (templates: Template[]) =>
@@ -1255,9 +1255,9 @@ export const fetchTemplateBundle = async (templateId: string) => {
 
   return {
     template: mapApiTemplate(data),
-    pages: (data.pages || []).map(mapApiTemplatePage),
-    fields: (data.fields || []).map(mapApiTemplateField),
-    ignoreRegions: (data.ignore_regions || []).map(mapApiIgnoreRegion),
+    pages: Array.isArray(data.pages) ? data.pages.map(mapApiTemplatePage) : [],
+    fields: Array.isArray(data.fields) ? data.fields.map(mapApiTemplateField) : [],
+    ignoreRegions: Array.isArray(data.ignore_regions) ? data.ignore_regions.map(mapApiIgnoreRegion) : [],
   };
 };
 
@@ -1548,8 +1548,13 @@ export const runPrepublishSimulation = async (templateId: string): Promise<Prepu
     ? (separation.conflict_templates as Record<string, unknown>[]).map(mapPrepublishCandidate)
     : [];
 
+  const responseTemplate = data?.template as ApiTemplate | undefined;
+  const template = responseTemplate
+    ? mapApiTemplate(responseTemplate)
+    : (await fetchTemplateBundle(templateId)).template;
+
   return {
-    template: mapApiTemplate(data.template as ApiTemplate),
+    template,
     draftSummary: {
       templateName: (summary.template_name as string | null | undefined) ?? null,
       templateId: String(summary.template_id || templateId),
