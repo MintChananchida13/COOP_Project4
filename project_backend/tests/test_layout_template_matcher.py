@@ -74,6 +74,60 @@ class _Connection:
 
 
 class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
+    def _row(self, template_id, status="active"):
+        return {
+            "template_id": template_id,
+            "template_name": template_id,
+            "template_status": status,
+            "page_count": 1,
+            "final_confidence_threshold": 0.75,
+            "layout_weight": 0.4,
+            "text_anchor_weight": 0.3,
+            "image_anchor_weight": 0.3,
+            "detection_mode": "all_pages",
+            "main_page_number": 1,
+            "template_page_id": f"{template_id}_page_1",
+            "layout_reference_id": None,
+            "page_number": 1,
+            "layout_reference_image_url": f"{template_id}.png",
+            "layout_reference_source": "template_page",
+            "layout_reference_is_canonical": 1,
+            "layout_signature_json": json.dumps({"version": "test", "template_id": template_id}),
+        }
+
+    def test_include_template_id_is_not_dropped_when_outside_limit(self):
+        connection = _Connection(
+            reference_rows=[
+                self._row("active_1"),
+                self._row("active_2"),
+                self._row("active_3"),
+                self._row("draft_template", status="draft"),
+            ],
+            fallback_rows=[],
+        )
+        scores = {
+            "active_1": {"score": 0.99},
+            "active_2": {"score": 0.98},
+            "active_3": {"score": 0.97},
+            "draft_template": {"score": 0.6},
+        }
+
+        def fake_compare(_query_signature, reference_signature):
+            return scores[reference_signature["template_id"]]
+
+        with patch("app.layout_template_matcher.connect_db", return_value=connection), patch(
+            "app.layout_template_matcher.compare_layout_signatures",
+            side_effect=fake_compare,
+        ):
+            results = search_layout_candidates(
+                {"version": "test"},
+                page_number=1,
+                limit=2,
+                include_template_id="draft_template",
+            )
+
+        self.assertEqual([item["metadata"]["template_id"] for item in results], ["active_1", "active_2", "draft_template"])
+
     def test_search_layout_candidates_filters_references_by_query_page_number(self):
         page_one_signature = build_layout_signature(_layout([_region("text", 0.1, 0.1, 0.3, 0.08)]))
         page_two_signature = build_layout_signature(_layout([_region("table", 0.1, 0.4, 0.75, 0.3)]))

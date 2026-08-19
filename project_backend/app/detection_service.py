@@ -1198,12 +1198,19 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str], in
     full_evaluation_count = 0
     early_accept_rank = None
     for index, result in enumerate(raw_results, start=1):
+        result_template_id = str((result.get("metadata") or {}).get("template_id") or "")
+        is_included_template = bool(include_template_id and result_template_id == include_template_id)
         layout_score = float(result.get("layout_score", result.get("score", 0.0)) or 0.0)
         layout_confident = layout_score >= DecisionService.MIN_RETRIEVAL_SCORE
         should_fully_evaluate = (
             layout_confident
-            and early_accept_rank is None
-            and full_evaluation_count < DETECTION_FULL_EVAL_LIMIT
+            and (
+                is_included_template
+                or (
+                    early_accept_rank is None
+                    and full_evaluation_count < DETECTION_FULL_EVAL_LIMIT
+                )
+            )
         )
         if should_fully_evaluate:
             full_evaluation_count += 1

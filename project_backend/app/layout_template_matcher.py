@@ -104,4 +104,20 @@ def search_layout_candidates(
         if previous is None or candidate["score"] > previous["score"]:
             best_by_template[template_id] = candidate
 
-    return sorted(best_by_template.values(), key=lambda item: item["score"], reverse=True)[:limit]
+    ranked = sorted(best_by_template.values(), key=lambda item: item["score"], reverse=True)
+    limited = ranked[:limit]
+    if include_template_id and not any(
+        item.get("metadata", {}).get("template_id") == include_template_id
+        for item in limited
+    ):
+        included = next(
+            (
+                item
+                for item in ranked[limit:]
+                if item.get("metadata", {}).get("template_id") == include_template_id
+            ),
+            None,
+        )
+        if included is not None:
+            limited.append(included)
+    return limited
