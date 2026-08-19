@@ -188,7 +188,7 @@ def create_template_request(payload: TemplateRequestCreate, user: Dict[str, Any]
 
 
 @router.get("/template-requests", response_model=ApiResponse)
-def list_template_requests(user: Dict[str, Any] = Depends(current_user)) -> ApiResponse:
+def list_template_requests() -> ApiResponse:
     return ok(template_requests.list())
 
 
