@@ -138,6 +138,21 @@ def _extract_raw_model_fields(dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
     return fields
 
 
+def _source_structure_model_from_raw_fields(raw_fields: Dict[str, Any]) -> str:
+    for key in (
+        "structure_model",
+        "structure_model_name",
+        "table_structure_model",
+        "table_structure_model_name",
+        "model_name",
+        "table_type",
+    ):
+        value = raw_fields.get(key)
+        if value and value != "not_available":
+            return str(value)
+    return "not_available"
+
+
 def _paddle_raw_trace(dicts: List[Dict[str, Any]], html: str, rows: List[List[str]], structured_table: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw_keys = sorted({str(key) for item in dicts for key in item.keys()})
     raw_cells: List[Any] = []
@@ -2644,6 +2659,8 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
             structured_table = _extract_structured_table(item, rows, html)
 
     rows = normalize_table_rows(rows)
+    raw_model_fields = _extract_raw_model_fields(dicts)
+    source_structure_model = _source_structure_model_from_raw_fields(raw_model_fields)
     text = _markdown_table(rows)
     structured_table = structured_table or _structured_from_rows(rows)
     debug: Dict[str, Any] = {
@@ -2652,6 +2669,7 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
         "column_count": max((len(row) for row in rows), default=0),
         "raw_result_count": len(dicts),
         "model_kind": _TABLE_MODEL_KIND,
+        "source_structure_model": source_structure_model,
         "text_recognition_model": _TABLE_TEXT_RECOGNITION_MODEL_NAME,
         "runtime_called": True,
         "input_size": [int(input_width), int(input_height)],
@@ -2675,7 +2693,10 @@ def _slanext_result_from_output(output: Any, image: np.ndarray, started: float, 
     }
     if _table_debug_trace_enabled() and not region_debug:
         debug["table_recognition_trace"] = {
-            "paddle_raw": _paddle_raw_trace(dicts, html, rows, structured_table),
+            "paddle_raw": {
+                **_paddle_raw_trace(dicts, html, rows, structured_table),
+                "source_structure_model": source_structure_model,
+            },
             "parsed": _table_snapshot(result),
         }
     return result
@@ -3406,14 +3427,32 @@ def _ocr_clusters_for_existing_rows(
 
 
 def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.ndarray) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    candidate_debug = candidate.get("table_debug") if isinstance(candidate.get("table_debug"), dict) else {}
+    source_structure_model = str(candidate_debug.get("source_structure_model") or "not_available")
+    base_debug: Dict[str, Any] = {
+        "attempted": False,
+        "source_structure_model": source_structure_model,
+        "row_collapse": False,
+        "column_collapse": False,
+        "x_cluster_count": 0,
+        "y_cluster_count": 0,
+        "supporting_columns": 0,
+        "supporting_rows": 0,
+        "alignment_score": 0.0,
+        "recovery_axis": "none",
+        "recovery_success": False,
+        "selected": False,
+        "recovered_row_count": 0,
+        "recovered_column_count": 0,
+    }
     structured = candidate.get("table_structured") if isinstance(candidate.get("table_structured"), dict) else None
     if image is None or image.size == 0 or not structured:
-        return candidate, {"attempted": False, "row_collapse": False, "column_collapse": False, "reason": "missing_structured_or_image"}
+        return candidate, {**base_debug, "reason": "missing_structured_or_image"}
 
     source_cells = [cell for cell in structured.get("cells") or [] if isinstance(cell, dict)]
     visible_cells = [cell for cell in source_cells if not cell.get("hidden")]
     if not source_cells or not visible_cells:
-        return candidate, {"attempted": False, "row_collapse": False, "column_collapse": False, "reason": "missing_cells"}
+        return candidate, {**base_debug, "reason": "missing_cells"}
 
     row_count = _structured_row_count(structured)
     col_count = _structured_col_count(structured)
@@ -3422,10 +3461,12 @@ def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.nda
     body_row_count = max(0, summary_start - header_row_count)
     if body_row_count <= 0 or col_count < 2:
         return candidate, {
+            **base_debug,
             "attempted": True,
-            "row_collapse": False,
-            "column_collapse": False,
             "body_row_count": body_row_count,
+            "body_column_count": col_count,
+            "recovered_row_count": row_count,
+            "recovered_column_count": col_count,
             "reason": "no_body_region",
         }
 
@@ -3433,10 +3474,12 @@ def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.nda
     col_boundaries = _infer_axis_boundaries_from_cells(visible_cells, "x", col_count)
     if len(row_boundaries) < row_count + 1 or len(col_boundaries) < col_count + 1:
         return candidate, {
+            **base_debug,
             "attempted": True,
-            "row_collapse": False,
-            "column_collapse": False,
             "body_row_count": body_row_count,
+            "body_column_count": col_count,
+            "recovered_row_count": row_count,
+            "recovered_column_count": col_count,
             "reason": "missing_boundaries",
         }
 
@@ -3446,10 +3489,12 @@ def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.nda
         ocr_cells, _, ocr_debug = _ocr_cells_from_text_detection(image, "slanext_row_collapse")
     except Exception as error:
         return candidate, {
+            **base_debug,
             "attempted": True,
-            "row_collapse": False,
-            "column_collapse": False,
             "body_row_count": body_row_count,
+            "body_column_count": col_count,
+            "recovered_row_count": row_count,
+            "recovered_column_count": col_count,
             "reason": f"ocr_geometry_failed:{error}",
         }
 
@@ -3481,6 +3526,7 @@ def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.nda
     alignment_score = round(max(row_alignment_score if row_collapse else 0.0, column_alignment_score if column_collapse else 0.0), 4)
     recovery_axis = "both" if row_collapse and column_collapse else "row" if row_collapse else "column" if column_collapse else "none"
     debug: Dict[str, Any] = {
+        **base_debug,
         "attempted": True,
         "body_row_count": body_row_count,
         "body_column_count": col_count,
@@ -3597,8 +3643,21 @@ def _recover_slanext_structure_collapse(candidate: Dict[str, Any], image: np.nda
     debug["recovered_row_count"] = len(next_rows)
     debug["recovered_column_count"] = max((len(row) for row in next_rows), default=0)
     debug["recovered_body_row_count"] = len(final_row_clusters)
-    debug["selected"] = True
-    debug["recovery_success"] = True
+    recovery_quality = _calculate_table_quality(next_rows, next_structured, "slanext_structure_collapse_recovery")
+    recovery_assignment_quality = _structured_assignment_quality(next_structured)
+    recovery_confident = (
+        bool(recovery_quality.get("usable_shape"))
+        and float(recovery_quality.get("score") or 0.0) >= 0.48
+        and bool(recovery_assignment_quality.get("passed"))
+        and alignment_score >= 0.45
+    )
+    debug["quality"] = recovery_quality
+    debug["assignment_quality"] = recovery_assignment_quality
+    debug["selected"] = recovery_confident
+    debug["recovery_success"] = recovery_confident
+    if not recovery_confident:
+        debug["reason"] = "recovery_quality_gate_failed"
+        return candidate, debug
     debug["final_column_boundaries"] = final_col_boundaries
     recovered["table_debug"]["structure_collapse_recovery"] = debug
     recovered["table_debug"]["row_collapse_recovery"] = debug

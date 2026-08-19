@@ -142,7 +142,8 @@ def ensure_image_verification_categories_table(conn: Any) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS image_verification_categories (
-            value TEXT NOT NULL PRIMARY KEY,
+            id TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL UNIQUE,
             label TEXT NOT NULL,
             prompt TEXT NOT NULL,
             match_threshold REAL NOT NULL DEFAULT 0.70,
@@ -159,13 +160,14 @@ def ensure_image_verification_categories_table(conn: Any) -> None:
         conn.execute(
             """
             INSERT INTO image_verification_categories (
-                value, label, prompt, match_threshold, margin_threshold,
+                id, value, label, prompt, match_threshold, margin_threshold,
                 evidence_temperature, enabled, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(value) DO NOTHING
             """,
             (
+                f"ivc_{payload['value']}",
                 payload["value"],
                 payload["label"],
                 payload["prompt"],
@@ -244,12 +246,13 @@ class ImageVerificationCategoryService:
             conn.execute(
                 """
                 INSERT INTO image_verification_categories (
-                    value, label, prompt, match_threshold, margin_threshold,
+                    id, value, label, prompt, match_threshold, margin_threshold,
                     evidence_temperature, enabled, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
+                    f"ivc_{category['value']}",
                     category["value"],
                     category["label"],
                     category["prompt"],

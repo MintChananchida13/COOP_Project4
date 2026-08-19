@@ -55,22 +55,10 @@ class _Connection:
             return _Cursor([])
         if normalized.startswith("create") or normalized.startswith("alter"):
             return _Cursor([])
-        if "from template_layout_references" in normalized and "join templates" in normalized:
+        if "from template_pages" in normalized and "join template_versions" in normalized:
             self.page_filters.append(params[0])
             return _Cursor([
-                row for row in self.reference_rows
-                if (
-                    row.get("detection_mode") == "main_page"
-                    and row.get("layout_reference_is_canonical")
-                ) or (
-                    row.get("detection_mode", "all_pages") != "main_page"
-                    and row["page_number"] == params[0]
-                )
-            ])
-        if "from template_pages" in normalized and "join templates" in normalized:
-            self.page_filters.append(params[0])
-            return _Cursor([
-                row for row in self.fallback_rows
+                row for row in (self.reference_rows or self.fallback_rows)
                 if (
                     row.get("detection_mode") == "main_page"
                     and row["page_number"] == row.get("main_page_number", 1)
@@ -103,7 +91,7 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
                     "detection_mode": "all_pages",
                     "main_page_number": 1,
                     "template_page_id": "page_1",
-                    "layout_reference_id": "ref_1",
+                    "layout_reference_id": None,
                     "page_number": 1,
                     "layout_reference_image_url": "page_1.png",
                     "layout_reference_source": "template_page",
@@ -122,7 +110,7 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
                     "detection_mode": "all_pages",
                     "main_page_number": 1,
                     "template_page_id": "page_2",
-                    "layout_reference_id": "ref_2",
+                    "layout_reference_id": None,
                     "page_number": 2,
                     "layout_reference_image_url": "page_2.png",
                     "layout_reference_source": "template_page",
@@ -136,11 +124,11 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
         with patch("app.layout_template_matcher.connect_db", return_value=connection):
             results = search_layout_candidates(page_two_signature, page_number=1)
 
-        self.assertEqual(connection.page_filters, [1, 1])
+        self.assertEqual(connection.page_filters, [1])
         self.assertEqual(len(results), 1)
         metadata = results[0]["metadata"]
         self.assertEqual(metadata["matched_layout_reference_page_number"], 1)
-        self.assertEqual(metadata["matched_layout_reference_id"], "ref_1")
+        self.assertIsNone(metadata["matched_layout_reference_id"])
 
     def test_main_page_mode_uses_canonical_reference_for_any_query_page(self):
         main_signature = build_layout_signature(_layout([_region("text", 0.1, 0.1, 0.3, 0.08)]))
@@ -159,7 +147,7 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
                     "detection_mode": "main_page",
                     "main_page_number": 2,
                     "template_page_id": "page_2",
-                    "layout_reference_id": "ref_main",
+                    "layout_reference_id": None,
                     "page_number": 2,
                     "layout_reference_image_url": "page_2.png",
                     "layout_reference_source": "template_page",
@@ -178,7 +166,7 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
                     "detection_mode": "main_page",
                     "main_page_number": 2,
                     "template_page_id": "page_3",
-                    "layout_reference_id": "ref_other",
+                    "layout_reference_id": None,
                     "page_number": 3,
                     "layout_reference_image_url": "page_3.png",
                     "layout_reference_source": "template_page",
@@ -196,7 +184,7 @@ class LayoutTemplateMatcherPageRoutingTest(unittest.TestCase):
         metadata = results[0]["metadata"]
         self.assertEqual(metadata["detection_mode"], "main_page")
         self.assertEqual(metadata["main_page_number"], 2)
-        self.assertEqual(metadata["matched_layout_reference_id"], "ref_main")
+        self.assertIsNone(metadata["matched_layout_reference_id"])
 
 
 if __name__ == "__main__":

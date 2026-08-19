@@ -121,17 +121,19 @@ def _ensure_postgres_schema(conn: PostgresConnection) -> None:
 
 _POSTGRES_SCHEMA = [
     """
-    CREATE TABLE IF NOT EXISTS "User" (
-        "id" TEXT NOT NULL PRIMARY KEY,
-        "email" TEXT NOT NULL UNIQUE,
-        "passwordHash" TEXT NOT NULL,
-        "role" TEXT NOT NULL DEFAULT 'USER',
-        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT NOT NULL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS image_verification_categories (
-        value TEXT NOT NULL PRIMARY KEY,
+        id TEXT NOT NULL PRIMARY KEY,
+        value TEXT NOT NULL UNIQUE,
         label TEXT NOT NULL,
         prompt TEXT NOT NULL,
         match_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.70,
@@ -143,100 +145,123 @@ _POSTGRES_SCHEMA = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS templates (
+    CREATE TABLE IF NOT EXISTS template_groups (
         id TEXT NOT NULL PRIMARY KEY,
+        template_code TEXT NOT NULL UNIQUE,
         name TEXT NOT NULL,
         document_type TEXT,
         category TEXT,
-        status TEXT NOT NULL DEFAULT 'draft',
-        version INTEGER NOT NULL DEFAULT 1,
-        template_group_id TEXT,
-        version_number INTEGER NOT NULL DEFAULT 1,
-        base_template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
         description TEXT,
-        shared_fields_json TEXT,
-        creation_type TEXT NOT NULL DEFAULT 'new_template',
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS template_versions (
+        id TEXT NOT NULL PRIMARY KEY,
+        template_group_id TEXT NOT NULL REFERENCES template_groups(id) ON DELETE CASCADE,
+        version_number INTEGER NOT NULL,
+        version_name TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
         detection_mode TEXT NOT NULL DEFAULT 'all_pages',
         main_page_number INTEGER NOT NULL DEFAULT 1,
-        page_count INTEGER NOT NULL DEFAULT 1,
         similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
         final_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.75,
         layout_weight DOUBLE PRECISION NOT NULL DEFAULT 0.50,
         text_anchor_weight DOUBLE PRECISION NOT NULL DEFAULT 0.35,
         image_anchor_weight DOUBLE PRECISION NOT NULL DEFAULT 0.15,
-        created_by TEXT,
-        approved_by TEXT,
-        rejection_reason TEXT,
+        created_from_version_id TEXT REFERENCES template_versions(id) ON DELETE SET NULL,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_at TIMESTAMPTZ,
+        CONSTRAINT template_versions_group_version_key UNIQUE (template_group_id, version_number)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS template_pages (
         id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+        template_version_id TEXT NOT NULL REFERENCES template_versions(id) ON DELETE CASCADE,
         page_number INTEGER NOT NULL,
         page_name TEXT,
         sample_image_url TEXT,
         normalized_image_url TEXT,
-        layout_signature_json TEXT,
-        similarity_threshold DOUBLE PRECISION,
-        final_confidence_threshold DOUBLE PRECISION,
+        layout_signature_json JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT template_pages_version_page_key UNIQUE (template_version_id, page_number)
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS template_fields (
+    CREATE TABLE IF NOT EXISTS extraction_fields (
         id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
         template_page_id TEXT NOT NULL REFERENCES template_pages(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
         field_name TEXT NOT NULL,
         display_label TEXT NOT NULL,
+        data_type TEXT NOT NULL DEFAULT 'text',
+        extraction_method TEXT NOT NULL DEFAULT 'fixed_roi',
         roi_x_ratio DOUBLE PRECISION NOT NULL,
         roi_y_ratio DOUBLE PRECISION NOT NULL,
         roi_width_ratio DOUBLE PRECISION NOT NULL,
         roi_height_ratio DOUBLE PRECISION NOT NULL,
-        data_type TEXT,
-        user_selectable INTEGER NOT NULL DEFAULT 1,
-        default_selected INTEGER NOT NULL DEFAULT 0,
-        use_for_verification INTEGER NOT NULL DEFAULT 0,
-        expected_text TEXT,
-        match_type TEXT,
-        required_for_verification INTEGER NOT NULL DEFAULT 0,
-        extraction_method TEXT NOT NULL DEFAULT 'fixed_roi',
         roi_mode TEXT NOT NULL DEFAULT 'fix',
         expected_content TEXT,
-        anchor_text TEXT,
-        regex_pattern TEXT,
-        roi_padding DOUBLE PRECISION,
+        required BOOLEAN NOT NULL DEFAULT FALSE,
         sort_order INTEGER NOT NULL DEFAULT 0,
-        verification_weight DOUBLE PRECISION DEFAULT 1.0,
-        image_category TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT template_fields_roi_ratio_check CHECK (
+        CONSTRAINT extraction_fields_data_type_check CHECK (data_type IN ('text', 'table', 'image')),
+        CONSTRAINT extraction_fields_roi_mode_check CHECK (roi_mode IN ('fix', 'flexible')),
+        CONSTRAINT extraction_fields_roi_ratio_check CHECK (
             roi_x_ratio >= 0 AND roi_x_ratio <= 1 AND
             roi_y_ratio >= 0 AND roi_y_ratio <= 1 AND
             roi_width_ratio > 0 AND roi_width_ratio <= 1 AND
             roi_height_ratio > 0 AND roi_height_ratio <= 1
-        )
+        ),
+        CONSTRAINT extraction_fields_page_field_name_key UNIQUE (template_page_id, field_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS verification_anchors (
+        id TEXT NOT NULL PRIMARY KEY,
+        template_page_id TEXT NOT NULL REFERENCES template_pages(id) ON DELETE CASCADE,
+        anchor_name TEXT NOT NULL,
+        anchor_type TEXT NOT NULL DEFAULT 'text',
+        roi_x_ratio DOUBLE PRECISION NOT NULL,
+        roi_y_ratio DOUBLE PRECISION NOT NULL,
+        roi_width_ratio DOUBLE PRECISION NOT NULL,
+        roi_height_ratio DOUBLE PRECISION NOT NULL,
+        required BOOLEAN NOT NULL DEFAULT FALSE,
+        weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+        expected_text TEXT,
+        match_type TEXT,
+        regex_pattern TEXT,
+        image_category_id TEXT REFERENCES image_verification_categories(id) ON DELETE SET NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT verification_anchors_type_check CHECK (anchor_type IN ('text', 'image')),
+        CONSTRAINT verification_anchors_roi_ratio_check CHECK (
+            roi_x_ratio >= 0 AND roi_x_ratio <= 1 AND
+            roi_y_ratio >= 0 AND roi_y_ratio <= 1 AND
+            roi_width_ratio > 0 AND roi_width_ratio <= 1 AND
+            roi_height_ratio > 0 AND roi_height_ratio <= 1
+        ),
+        CONSTRAINT verification_anchors_page_anchor_name_key UNIQUE (template_page_id, anchor_name)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS ignore_regions (
         id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
         template_page_id TEXT NOT NULL REFERENCES template_pages(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
-        field_name TEXT NOT NULL,
+        region_name TEXT NOT NULL,
         roi_x_ratio DOUBLE PRECISION NOT NULL,
         roi_y_ratio DOUBLE PRECISION NOT NULL,
         roi_width_ratio DOUBLE PRECISION NOT NULL,
         roi_height_ratio DOUBLE PRECISION NOT NULL,
+        reason TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT ignore_regions_roi_ratio_check CHECK (
             roi_x_ratio >= 0 AND roi_x_ratio <= 1 AND
             roi_y_ratio >= 0 AND roi_y_ratio <= 1 AND
@@ -248,18 +273,17 @@ _POSTGRES_SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS template_requests (
         id TEXT NOT NULL PRIMARY KEY,
-        requested_by TEXT,
+        requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
         request_title TEXT NOT NULL,
         document_type TEXT,
-        sample_file_url TEXT,
         request_mode TEXT NOT NULL DEFAULT 'image_only',
         status TEXT NOT NULL DEFAULT 'draft',
         user_note TEXT,
         admin_note TEXT,
-        converted_template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
-        page_count INTEGER NOT NULL DEFAULT 1,
+        converted_template_group_id TEXT REFERENCES template_groups(id) ON DELETE SET NULL,
+        converted_template_version_id TEXT REFERENCES template_versions(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        reviewed_at TIMESTAMPTZ
     )
     """,
     """
@@ -267,49 +291,40 @@ _POSTGRES_SCHEMA = [
         id TEXT NOT NULL PRIMARY KEY,
         template_request_id TEXT NOT NULL REFERENCES template_requests(id) ON DELETE CASCADE,
         page_number INTEGER NOT NULL,
+        page_name TEXT,
         sample_image_url TEXT,
-        source_file_id TEXT,
         source_file_name TEXT,
-        image_source TEXT NOT NULL DEFAULT 'user_request',
         review_status TEXT NOT NULL DEFAULT 'pending',
-        is_canonical INTEGER NOT NULL DEFAULT 0,
-        layout_signature_json TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        CONSTRAINT template_request_pages_request_page_key UNIQUE (template_request_id, page_number)
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS template_layout_references (
+    CREATE TABLE IF NOT EXISTS version_test_cases (
         id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
-        template_page_id TEXT REFERENCES template_pages(id) ON DELETE SET NULL,
-        page_number INTEGER NOT NULL DEFAULT 1,
+        template_version_id TEXT NOT NULL REFERENCES template_versions(id) ON DELETE CASCADE,
+        test_name TEXT NOT NULL,
+        page_number INTEGER NOT NULL,
         image_url TEXT NOT NULL,
-        image_source TEXT NOT NULL DEFAULT 'user_request',
-        review_status TEXT NOT NULL DEFAULT 'approved',
-        is_canonical INTEGER NOT NULL DEFAULT 0,
-        layout_signature_json TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        expected_match BOOLEAN NOT NULL DEFAULT TRUE,
+        test_type TEXT NOT NULL DEFAULT 'pre_publish',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS requested_fields (
         id TEXT NOT NULL PRIMARY KEY,
-        template_request_id TEXT NOT NULL REFERENCES template_requests(id) ON DELETE CASCADE,
         template_request_page_id TEXT NOT NULL REFERENCES template_request_pages(id) ON DELETE CASCADE,
-        page_number INTEGER NOT NULL,
         field_name TEXT NOT NULL,
         display_label TEXT NOT NULL,
+        data_type TEXT NOT NULL DEFAULT 'text',
+        extraction_method TEXT NOT NULL DEFAULT 'ocr_text',
         roi_x_ratio DOUBLE PRECISION NOT NULL,
         roi_y_ratio DOUBLE PRECISION NOT NULL,
         roi_width_ratio DOUBLE PRECISION NOT NULL,
         roi_height_ratio DOUBLE PRECISION NOT NULL,
-        data_type TEXT DEFAULT 'text',
-        extraction_method TEXT NOT NULL DEFAULT 'ocr_text',
         user_note TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT requested_fields_roi_ratio_check CHECK (
             roi_x_ratio >= 0 AND roi_x_ratio <= 1 AND
             roi_y_ratio >= 0 AND roi_y_ratio <= 1 AND
@@ -319,37 +334,119 @@ _POSTGRES_SCHEMA = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS embedding_jobs (
+    CREATE TABLE IF NOT EXISTS publish_jobs (
         id TEXT NOT NULL PRIMARY KEY,
-        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+        template_version_id TEXT NOT NULL REFERENCES template_versions(id) ON DELETE CASCADE,
         status TEXT NOT NULL DEFAULT 'queued',
+        step TEXT NOT NULL DEFAULT 'validation',
+        error_message TEXT,
+        metadata_json JSONB,
         requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         started_at TIMESTAMPTZ,
-        completed_at TIMESTAMPTZ,
-        error_message TEXT,
-        vector_id TEXT,
-        metadata_json TEXT
+        completed_at TIMESTAMPTZ
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS ocr_jobs (
         id TEXT NOT NULL PRIMARY KEY,
+        requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        template_version_id TEXT REFERENCES template_versions(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'queued',
+        request_json JSONB NOT NULL,
+        result_json JSONB,
+        error_message TEXT,
         requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         started_at TIMESTAMPTZ,
-        completed_at TIMESTAMPTZ,
-        error_message TEXT,
-        request_json TEXT NOT NULL,
-        result_json TEXT
+        completed_at TIMESTAMPTZ
     )
     """,
-    'CREATE UNIQUE INDEX IF NOT EXISTS template_pages_template_id_page_number_key ON template_pages(template_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS template_fields_template_page_id_page_number_idx ON template_fields(template_page_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS ignore_regions_template_page_id_page_number_idx ON ignore_regions(template_page_id, page_number)',
-    'CREATE UNIQUE INDEX IF NOT EXISTS template_request_pages_template_request_id_page_number_key ON template_request_pages(template_request_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS requested_fields_template_request_page_id_page_number_idx ON requested_fields(template_request_page_id, page_number)',
-    'CREATE INDEX IF NOT EXISTS template_layout_references_template_id_idx ON template_layout_references(template_id)',
-    'CREATE INDEX IF NOT EXISTS template_layout_references_template_status_idx ON template_layout_references(template_id, review_status, is_canonical)',
-    'CREATE INDEX IF NOT EXISTS embedding_jobs_template_id_requested_at_idx ON embedding_jobs(template_id, requested_at)',
+    'CREATE INDEX IF NOT EXISTS template_groups_document_type_idx ON template_groups(document_type)',
+    'CREATE INDEX IF NOT EXISTS template_versions_group_status_idx ON template_versions(template_group_id, status)',
+    'CREATE INDEX IF NOT EXISTS template_versions_status_updated_at_idx ON template_versions(status, updated_at)',
+    'CREATE INDEX IF NOT EXISTS template_pages_version_page_idx ON template_pages(template_version_id, page_number)',
+    'CREATE INDEX IF NOT EXISTS extraction_fields_template_page_id_sort_order_idx ON extraction_fields(template_page_id, sort_order)',
+    'CREATE INDEX IF NOT EXISTS verification_anchors_template_page_id_sort_order_idx ON verification_anchors(template_page_id, sort_order)',
+    'CREATE INDEX IF NOT EXISTS ignore_regions_template_page_id_idx ON ignore_regions(template_page_id)',
+    'CREATE INDEX IF NOT EXISTS template_requests_status_created_at_idx ON template_requests(status, created_at)',
+    'CREATE INDEX IF NOT EXISTS template_request_pages_request_page_idx ON template_request_pages(template_request_id, page_number)',
+    'CREATE INDEX IF NOT EXISTS requested_fields_template_request_page_id_idx ON requested_fields(template_request_page_id)',
+    'CREATE INDEX IF NOT EXISTS version_test_cases_template_version_id_idx ON version_test_cases(template_version_id)',
+    'CREATE INDEX IF NOT EXISTS publish_jobs_template_version_step_idx ON publish_jobs(template_version_id, step, status)',
     'CREATE INDEX IF NOT EXISTS ocr_jobs_status_requested_at_idx ON ocr_jobs(status, requested_at)',
+    'CREATE INDEX IF NOT EXISTS ocr_jobs_template_version_id_idx ON ocr_jobs(template_version_id)',
+    """
+    CREATE OR REPLACE VIEW template_versions_view AS
+    SELECT
+        tv.id AS template_version_id,
+        tg.id AS template_group_id,
+        tg.name AS template_name,
+        tg.template_code,
+        tg.document_type,
+        tg.category,
+        tv.version_number,
+        tv.version_name,
+        tv.status,
+        tv.detection_mode,
+        tv.main_page_number,
+        tv.final_confidence_threshold,
+        tv.similarity_threshold,
+        tv.layout_weight,
+        tv.text_anchor_weight,
+        tv.image_anchor_weight,
+        tv.published_at,
+        tv.created_at,
+        tv.updated_at
+    FROM template_versions tv
+    JOIN template_groups tg ON tg.id = tv.template_group_id
+    """,
+    """
+    CREATE OR REPLACE VIEW template_fields_view AS
+    SELECT
+        tv.id AS template_version_id,
+        tg.name AS template_name,
+        tv.version_number,
+        tv.version_name,
+        tv.status,
+        tp.id AS template_page_id,
+        tp.page_number,
+        tp.page_name,
+        ef.id AS field_id,
+        ef.field_name,
+        ef.display_label,
+        ef.data_type,
+        ef.extraction_method,
+        ef.roi_mode,
+        ef.required,
+        ef.sort_order,
+        ef.created_at,
+        ef.updated_at
+    FROM extraction_fields ef
+    JOIN template_pages tp ON tp.id = ef.template_page_id
+    JOIN template_versions tv ON tv.id = tp.template_version_id
+    JOIN template_groups tg ON tg.id = tv.template_group_id
+    """,
+    """
+    CREATE OR REPLACE VIEW verification_anchors_view AS
+    SELECT
+        tv.id AS template_version_id,
+        tg.name AS template_name,
+        tv.version_number,
+        tv.version_name,
+        tv.status,
+        tp.id AS template_page_id,
+        tp.page_number,
+        tp.page_name,
+        va.id AS anchor_id,
+        va.anchor_name,
+        va.anchor_type,
+        va.required,
+        va.weight,
+        va.sort_order,
+        va.created_at,
+        va.updated_at
+    FROM verification_anchors va
+    JOIN template_pages tp ON tp.id = va.template_page_id
+    JOIN template_versions tv ON tv.id = tp.template_version_id
+    JOIN template_groups tg ON tg.id = tv.template_group_id
+    """,
 ]

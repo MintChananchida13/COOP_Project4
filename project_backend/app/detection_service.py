@@ -68,7 +68,41 @@ def _fetch_template(template_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not template_id:
         return None
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+        row = conn.execute(
+            """
+            SELECT
+                tv.id,
+                tg.name,
+                tg.document_type,
+                tg.category,
+                tv.status,
+                tv.version_number AS version,
+                tv.template_group_id,
+                tv.version_number,
+                tv.created_from_version_id AS base_template_id,
+                tg.description,
+                'new_version' AS creation_type,
+                tv.detection_mode,
+                tv.main_page_number,
+                (
+                    SELECT COUNT(*)
+                    FROM template_pages tp
+                    WHERE tp.template_version_id = tv.id
+                ) AS page_count,
+                tv.similarity_threshold,
+                tv.final_confidence_threshold,
+                tv.layout_weight,
+                tv.text_anchor_weight,
+                tv.image_anchor_weight,
+                NULL AS rejection_reason,
+                tv.created_at,
+                tv.updated_at
+            FROM template_versions tv
+            JOIN template_groups tg ON tg.id = tv.template_group_id
+            WHERE tv.id = ?
+            """,
+            (template_id,),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -78,7 +112,7 @@ def _fetch_template_page_image_source(template_id: str, page_number: int) -> Opt
             """
             SELECT normalized_image_url, sample_image_url
             FROM template_pages
-            WHERE template_id = ? AND page_number = ?
+            WHERE template_version_id = ? AND page_number = ?
             LIMIT 1
             """,
             (template_id, page_number),
@@ -92,12 +126,62 @@ def _fetch_template_fields(template_id: str) -> List[Dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT *
-            FROM template_fields
-            WHERE template_id = ?
+            SELECT
+                ef.id,
+                tp.template_version_id AS template_id,
+                ef.template_page_id,
+                tp.page_number,
+                ef.field_name,
+                ef.display_label,
+                ef.data_type,
+                0 AS use_for_verification,
+                NULL AS expected_text,
+                NULL AS match_type,
+                0 AS required_for_verification,
+                ef.extraction_method,
+                NULL AS roi_padding,
+                1.0 AS verification_weight,
+                ef.roi_mode,
+                ef.expected_content,
+                ef.roi_x_ratio,
+                ef.roi_y_ratio,
+                ef.roi_width_ratio,
+                ef.roi_height_ratio,
+                ef.sort_order,
+                ef.created_at
+            FROM extraction_fields ef
+            JOIN template_pages tp ON tp.id = ef.template_page_id
+            WHERE tp.template_version_id = ?
+            UNION ALL
+            SELECT
+                va.id,
+                tp.template_version_id AS template_id,
+                va.template_page_id,
+                tp.page_number,
+                va.anchor_name AS field_name,
+                va.anchor_name AS display_label,
+                va.anchor_type AS data_type,
+                1 AS use_for_verification,
+                va.expected_text,
+                va.match_type,
+                va.required AS required_for_verification,
+                'fixed_roi' AS extraction_method,
+                NULL AS roi_padding,
+                va.weight AS verification_weight,
+                'fix' AS roi_mode,
+                NULL AS expected_content,
+                va.roi_x_ratio,
+                va.roi_y_ratio,
+                va.roi_width_ratio,
+                va.roi_height_ratio,
+                va.sort_order,
+                va.created_at
+            FROM verification_anchors va
+            JOIN template_pages tp ON tp.id = va.template_page_id
+            WHERE tp.template_version_id = ?
             ORDER BY page_number ASC, sort_order ASC, created_at ASC
             """,
-            (template_id,),
+            (template_id, template_id),
         ).fetchall()
 
     fields: List[Dict[str, Any]] = []
@@ -677,9 +761,9 @@ def _candidate_from_result(
             field_count = conn.execute(
                 """
                 SELECT COUNT(*) as count
-                FROM template_fields
-                WHERE template_id = ?
-                  AND use_for_verification = 0
+                FROM extraction_fields ef
+                JOIN template_pages tp ON tp.id = ef.template_page_id
+                WHERE tp.template_version_id = ?
                 """,
                 (template_id,),
             ).fetchone()["count"]
@@ -1017,9 +1101,9 @@ def _lightweight_candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[
             field_count = conn.execute(
                 """
                 SELECT COUNT(*) as count
-                FROM template_fields
-                WHERE template_id = ?
-                  AND use_for_verification = 0
+                FROM extraction_fields ef
+                JOIN template_pages tp ON tp.id = ef.template_page_id
+                WHERE tp.template_version_id = ?
                 """,
                 (template_id,),
             ).fetchone()["count"]

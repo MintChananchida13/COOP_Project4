@@ -23,6 +23,7 @@ from app.table_recognition_v2_adapter import (
     _select_best_table_candidate,
     _structured_assignment_quality,
     _section_from_region_candidate,
+    _slanext_result_from_output,
     _try_semi_structured_table,
     _try_forced_semi_after_empty_slanext,
     recognize_table_v2,
@@ -325,6 +326,48 @@ class TableRecognitionV2AdapterRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(debug["x_cluster_count"], 3)
         self.assertEqual(recovered["table_rows"][1], ["IC-0001", "Mouse", "100"])
         self.assertEqual(recovered["table_rows"][2], ["IC-0002", "Keyboard", "200"])
+
+    def test_slanext_result_records_source_structure_model_from_raw_output(self) -> None:
+        image = np.zeros((80, 160, 3), dtype=np.uint8)
+        output = [{
+            "structure_model": "SLANeXt_wireless",
+            "html": "<table><tr><td>A</td><td>B</td></tr></table>",
+        }]
+
+        result = _slanext_result_from_output(output, image, 0.0)
+
+        self.assertEqual(result["table_debug"]["source_structure_model"], "SLANeXt_wireless")
+
+    def test_local_table_flow_runs_structure_collapse_recovery_as_common_post_validation(self) -> None:
+        image = np.zeros((80, 160, 3), dtype=np.uint8)
+        output = [{
+            "structure_model": "SLANeXt_wired",
+            "html": "<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>",
+        }]
+        recovery_debug = {
+            "attempted": True,
+            "source_structure_model": "SLANeXt_wired",
+            "row_collapse": False,
+            "column_collapse": False,
+            "x_cluster_count": 2,
+            "y_cluster_count": 2,
+            "alignment_score": 0.0,
+            "recovery_axis": "none",
+            "recovery_success": False,
+            "selected": False,
+            "recovered_row_count": 2,
+            "recovered_column_count": 2,
+            "reason": "structure_collapse_not_supported",
+        }
+
+        with patch("app.table_recognition_v2_adapter._load_table_model", return_value=object()), \
+            patch("app.table_recognition_v2_adapter._predict_table_model", return_value=output), \
+            patch("app.table_recognition_v2_adapter._recover_slanext_structure_collapse", side_effect=lambda candidate, img: (candidate, recovery_debug)) as recover:
+            result = recognize_table_v2_local(image)
+
+        self.assertEqual(recover.call_count, 1)
+        self.assertEqual(result["table_debug"]["structure_collapse_recovery"]["source_structure_model"], "SLANeXt_wired")
+        self.assertEqual(result["table_debug"]["structure_collapse_recovery"]["recovery_axis"], "none")
 
     @unittest.skipUnless(importlib.util.find_spec("bs4") and importlib.util.find_spec("lxml"), "beautifulsoup4/lxml not installed")
     def test_table_html_postprocess_uses_beautifulsoup_lxml(self) -> None:

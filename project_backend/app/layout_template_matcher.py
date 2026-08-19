@@ -9,62 +9,7 @@ from .layout_signature_service import compare_layout_signatures, signature_from_
 def _connect() -> Any:
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
-    _ensure_layout_signature_column(conn)
-    _ensure_template_layout_references_table(conn)
-    _ensure_template_matching_weight_columns(conn)
-    _ensure_template_detection_mode_columns(conn)
     return conn
-
-
-def _ensure_layout_signature_column(conn: Any) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(template_pages)").fetchall()}
-    if columns and "layout_signature_json" not in columns:
-        conn.execute("ALTER TABLE template_pages ADD COLUMN layout_signature_json TEXT")
-        conn.commit()
-
-
-def _ensure_template_layout_references_table(conn: Any) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS template_layout_references (
-            id TEXT NOT NULL PRIMARY KEY,
-            template_id TEXT NOT NULL,
-            template_page_id TEXT,
-            page_number INTEGER NOT NULL DEFAULT 1,
-            image_url TEXT NOT NULL,
-            image_source TEXT NOT NULL DEFAULT 'user_request',
-            review_status TEXT NOT NULL DEFAULT 'approved',
-            is_canonical INTEGER NOT NULL DEFAULT 0,
-            layout_signature_json TEXT,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS template_layout_references_template_id_idx ON template_layout_references(template_id)"
-    )
-    conn.commit()
-
-
-def _ensure_template_matching_weight_columns(conn: Any) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(templates)").fetchall()}
-    if columns and "layout_weight" not in columns:
-        conn.execute("ALTER TABLE templates ADD COLUMN layout_weight REAL DEFAULT 0.50")
-    if columns and "text_anchor_weight" not in columns:
-        conn.execute("ALTER TABLE templates ADD COLUMN text_anchor_weight REAL DEFAULT 0.35")
-    if columns and "image_anchor_weight" not in columns:
-        conn.execute("ALTER TABLE templates ADD COLUMN image_anchor_weight REAL DEFAULT 0.15")
-    conn.commit()
-
-
-def _ensure_template_detection_mode_columns(conn: Any) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(templates)").fetchall()}
-    if columns and "detection_mode" not in columns:
-        conn.execute("ALTER TABLE templates ADD COLUMN detection_mode TEXT NOT NULL DEFAULT 'all_pages'")
-    if columns and "main_page_number" not in columns:
-        conn.execute("ALTER TABLE templates ADD COLUMN main_page_number INTEGER NOT NULL DEFAULT 1")
-    conn.commit()
 
 
 def search_layout_candidates(
@@ -75,80 +20,46 @@ def search_layout_candidates(
     active_only: bool = True,
 ) -> List[Dict[str, Any]]:
     with _connect() as conn:
-        reference_rows = conn.execute(
+        rows = conn.execute(
             """
             SELECT
-                t.id AS template_id,
-                t.name AS template_name,
-                t.status AS template_status,
-                t.page_count AS page_count,
-                t.final_confidence_threshold AS final_confidence_threshold,
-                t.layout_weight AS layout_weight,
-                t.text_anchor_weight AS text_anchor_weight,
-                t.image_anchor_weight AS image_anchor_weight,
-                COALESCE(t.detection_mode, 'all_pages') AS detection_mode,
-                COALESCE(t.main_page_number, 1) AS main_page_number,
-                COALESCE(tlr.template_page_id, tp.id) AS template_page_id,
-                tlr.id AS layout_reference_id,
-                tlr.page_number AS page_number,
-                tlr.image_url AS layout_reference_image_url,
-                tlr.image_source AS layout_reference_source,
-                tlr.is_canonical AS layout_reference_is_canonical,
-                tlr.layout_signature_json AS layout_signature_json
-            FROM template_layout_references tlr
-            JOIN templates t ON t.id = tlr.template_id
-            LEFT JOIN template_pages tp ON tp.template_id = t.id AND tp.page_number = tlr.page_number
-            WHERE tlr.layout_signature_json IS NOT NULL
-              AND tlr.review_status = 'approved'
-              AND (
-                    (COALESCE(t.detection_mode, 'all_pages') = 'main_page' AND tlr.is_canonical = 1)
-                    OR (COALESCE(t.detection_mode, 'all_pages') != 'main_page' AND tlr.page_number = ?)
-                  )
-            ORDER BY t.updated_at DESC, tlr.is_canonical DESC, tlr.page_number ASC
-            """,
-            (page_number,),
-        ).fetchall()
-
-        fallback_rows = conn.execute(
-            """
-            SELECT
-                t.id AS template_id,
-                t.name AS template_name,
-                t.status AS template_status,
-                t.page_count AS page_count,
-                t.final_confidence_threshold AS final_confidence_threshold,
-                t.layout_weight AS layout_weight,
-                t.text_anchor_weight AS text_anchor_weight,
-                t.image_anchor_weight AS image_anchor_weight,
-                COALESCE(t.detection_mode, 'all_pages') AS detection_mode,
-                COALESCE(t.main_page_number, 1) AS main_page_number,
+                tv.id AS template_id,
+                tg.name AS template_name,
+                tv.status AS template_status,
+                (
+                    SELECT COUNT(*)
+                    FROM template_pages count_tp
+                    WHERE count_tp.template_version_id = tv.id
+                ) AS page_count,
+                tv.final_confidence_threshold AS final_confidence_threshold,
+                tv.layout_weight AS layout_weight,
+                tv.text_anchor_weight AS text_anchor_weight,
+                tv.image_anchor_weight AS image_anchor_weight,
+                tv.detection_mode AS detection_mode,
+                tv.main_page_number AS main_page_number,
                 tp.id AS template_page_id,
                 NULL AS layout_reference_id,
                 tp.page_number AS page_number,
                 COALESCE(tp.normalized_image_url, tp.sample_image_url) AS layout_reference_image_url,
                 'template_page' AS layout_reference_source,
-                1 AS layout_reference_is_canonical,
+                CASE
+                    WHEN tv.detection_mode = 'main_page' AND tp.page_number = tv.main_page_number THEN 1
+                    WHEN tv.detection_mode != 'main_page' AND tp.page_number = 1 THEN 1
+                    ELSE 0
+                END AS layout_reference_is_canonical,
                 tp.layout_signature_json AS layout_signature_json
             FROM template_pages tp
-            JOIN templates t ON t.id = tp.template_id
+            JOIN template_versions tv ON tv.id = tp.template_version_id
+            JOIN template_groups tg ON tg.id = tv.template_group_id
             WHERE tp.layout_signature_json IS NOT NULL
               AND (
-                    (COALESCE(t.detection_mode, 'all_pages') = 'main_page' AND tp.page_number = COALESCE(t.main_page_number, 1))
-                    OR (COALESCE(t.detection_mode, 'all_pages') != 'main_page' AND tp.page_number = ?)
-                  )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM template_layout_references tlr
-                  WHERE tlr.template_id = t.id
-                    AND tlr.layout_signature_json IS NOT NULL
-                    AND tlr.review_status = 'approved'
-            )
-            ORDER BY t.updated_at DESC, tp.page_number ASC
+                    (tv.detection_mode = 'main_page' AND tp.page_number = tv.main_page_number)
+                    OR (tv.detection_mode != 'main_page' AND tp.page_number = ?)
+              )
+            ORDER BY tv.updated_at DESC, tp.page_number ASC
             """,
             (page_number,),
         ).fetchall()
-
-        rows = [*reference_rows, *fallback_rows]
 
     best_by_template: Dict[str, Dict[str, Any]] = {}
     for row in rows:
