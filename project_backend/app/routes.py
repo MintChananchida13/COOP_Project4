@@ -21,9 +21,11 @@ from .schemas import (
     TemplateRequestImageCreate,
     TemplateRequestImageUpdate,
     TemplateRequestUpdate,
+    TemplateRequestConvert,
     TemplateTestRequest,
     TemplateUpdate,
     TemplateVersionCreate,
+    TemplateVersionFromRequestCreate,
 )
 from .detection_service import detect_template_dev
 from .services import (
@@ -295,7 +297,7 @@ def admin_set_template_request_canonical_image(request_id: str, image_id: str) -
 
 
 @router.post("/admin/template-requests/{request_id}/convert-to-template", response_model=ApiResponse)
-def admin_convert_request_to_template(request_id: str, payload: TemplateVersionCreate | None = None) -> ApiResponse:
+def admin_convert_request_to_template(request_id: str, payload: TemplateRequestConvert | None = None) -> ApiResponse:
     return ok(admin_templates.convert_request_to_template(request_id, payload))
 
 
@@ -307,7 +309,7 @@ def admin_suggest_template_request_base_version(request_id: str, payload: Templa
 
 
 @router.post("/admin/template-requests/{request_id}/convert-to-version", response_model=ApiResponse)
-def admin_convert_request_to_template_version(request_id: str, payload: TemplateVersionCreate) -> ApiResponse:
+def admin_convert_request_to_template_version(request_id: str, payload: TemplateVersionFromRequestCreate) -> ApiResponse:
     return ok(admin_templates.create_version_from_request(request_id, payload))
 
 

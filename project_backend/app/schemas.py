@@ -159,6 +159,24 @@ class TemplateVersionCreate(BaseModel):
     main_page_number: int = Field(default=1, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
 
 
+class TemplateRequestConvert(BaseModel):
+    template_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("template_name", "templateName"))
+    description: Optional[str] = None
+    similarity_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    detection_mode: str = Field(default="all_pages", validation_alias=AliasChoices("detection_mode", "detectionMode"))
+    main_page_number: int = Field(default=1, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
+
+
+class TemplateVersionFromRequestCreate(BaseModel):
+    base_template_id: str = Field(..., validation_alias=AliasChoices("base_template_id", "baseTemplateId"))
+    version_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("version_name", "versionName"))
+    similarity_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    final_confidence_threshold: Optional[float] = Field(default=None, ge=0, le=1, validation_alias=AliasChoices("final_confidence_threshold", "finalConfidenceThreshold"))
+    reuse_roi: bool = Field(default=True, validation_alias=AliasChoices("reuse_roi", "reuseRoi"))
+    detection_mode: str = Field(default="all_pages", validation_alias=AliasChoices("detection_mode", "detectionMode"))
+    main_page_number: int = Field(default=1, ge=1, validation_alias=AliasChoices("main_page_number", "mainPageNumber"))
+
+
 class TemplatePageCreate(BaseModel):
     page_number: int = Field(..., ge=1)
     page_name: Optional[str] = None

@@ -57,9 +57,11 @@ from .schemas import (
     TemplateRequestImageCreate,
     TemplateRequestImageUpdate,
     TemplateRequestUpdate,
+    TemplateRequestConvert,
     TemplateTestRequest,
     TemplateUpdate,
     TemplateVersionCreate,
+    TemplateVersionFromRequestCreate,
 )
 
 
@@ -1322,7 +1324,7 @@ class EmbeddingService:
             template_id = job_row["template_version_id"]
             self._fetch_template_or_404(conn, template_id)
             _refresh_template_layout_signatures(conn, template_id)
-            generated_references = _refresh_template_page_signatures(conn, template_id)
+            generated_references = _refresh_template_layout_reference_signatures(conn, template_id)
             if not generated_references or any(item.get("status") != "generated" for item in generated_references):
                 failed_pages = [item for item in generated_references if item.get("status") != "generated"]
                 raise HTTPException(
@@ -1388,7 +1390,7 @@ class EmbeddingService:
         try:
             with _connect() as conn:
                 _refresh_template_layout_signatures(conn, template_id)
-                generated_references = _refresh_template_page_signatures(conn, template_id)
+                generated_references = _refresh_template_layout_reference_signatures(conn, template_id)
                 if not generated_references or any(item.get("status") != "generated" for item in generated_references):
                     failed_pages = [item for item in generated_references if item.get("status") != "generated"]
                     raise RuntimeError(f"Layout reference signature generation failed: {failed_pages or 'no layout references'}")
@@ -3095,7 +3097,7 @@ class AdminTemplateService:
             comparison = compare_layout_signatures(query_signature, signature)
             score = float(comparison.get("score") or 0.0)
             reference = {
-                "template_page_reference_id": row["id"],
+                "template_layout_reference_id": row["id"],
                 "template_page_id": row["template_page_id"],
                 "page_number": row["page_number"],
                 "image_url": row["image_url"],
@@ -3285,7 +3287,9 @@ class AdminTemplateService:
                 raise HTTPException(status_code=409, detail="At least one request page is required")
             next_version = int(conn.execute("SELECT COALESCE(MAX(version_number), 0) AS max_version FROM template_versions WHERE template_group_id = ?", (base["template_group_id"],)).fetchone()["max_version"]) + 1
             template_id = _stub_id("tpl")
-            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_from_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, base["template_group_id"], next_version, payload.version_name or f"Version {next_version}", _normalize_detection_mode(payload.detection_mode), _normalize_main_page_number(payload.main_page_number), payload.similarity_threshold or base["similarity_threshold"], payload.final_confidence_threshold or base["final_confidence_threshold"], base["layout_weight"], base["text_anchor_weight"], base["image_anchor_weight"], payload.base_template_id))
+            similarity_threshold = payload.similarity_threshold if payload.similarity_threshold is not None else base["similarity_threshold"]
+            final_confidence_threshold = payload.final_confidence_threshold if payload.final_confidence_threshold is not None else base["final_confidence_threshold"]
+            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_from_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, base["template_group_id"], next_version, payload.version_name or f"Version {next_version}", _normalize_detection_mode(payload.detection_mode), _normalize_main_page_number(payload.main_page_number), similarity_threshold, final_confidence_threshold, base["layout_weight"], base["text_anchor_weight"], base["image_anchor_weight"], payload.base_template_id))
             for index, page in enumerate(pages, start=1):
                 conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, index, page.get("page_name") or f"Page {index}", page.get("sample_image_url"), page.get("sample_image_url")))
             conn.execute("UPDATE template_requests SET status = 'converted', converted_template_group_id = ?, converted_template_version_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (base["template_group_id"], template_id, request_id))
@@ -3304,7 +3308,8 @@ class AdminTemplateService:
             template_id = _stub_id("tpl")
             template_name = (payload.template_name if payload and payload.template_name else request_row["request_title"]).strip()
             conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, f"{(_safe_file_token(template_name) or 'template')}_{uuid.uuid4().hex[:8]}", request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None))
-            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), payload.similarity_threshold if payload else 0.75))
+            similarity_threshold = payload.similarity_threshold if payload and payload.similarity_threshold is not None else 0.75
+            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), similarity_threshold))
             for index, page in enumerate(pages, start=1):
                 conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, index, page.get("page_name") or f"Page {index}", page.get("sample_image_url"), page.get("sample_image_url")))
             conn.execute("UPDATE template_requests SET status = 'converted', converted_template_group_id = ?, converted_template_version_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (group_id, template_id, request_id))
