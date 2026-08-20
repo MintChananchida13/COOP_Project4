@@ -349,18 +349,73 @@ class ImageNormalizationService:
         box = cv2.boxPoints(rect).astype("float32")
         return box.reshape(4, 1, 2)
 
-    def _validate_transformed_image(self, transformed: Optional[np.ndarray], original: np.ndarray) -> Dict[str, Any]:
+    # def _validate_transformed_image(self, transformed: Optional[np.ndarray], original: np.ndarray) -> Dict[str, Any]:
+    #     if transformed is None or not isinstance(transformed, np.ndarray):
+    #         return {"passed": False, "reason": "perspective_transform_failed"}
+    #     if transformed.size == 0:
+    #         return {"passed": False, "reason": "perspective_transform_empty"}
+
+    #     height, width = transformed.shape[:2]
+    #     original_height, original_width = original.shape[:2]
+    #     area_ratio = (width * height) / max(1, original_width * original_height)
+    #     aspect_ratio = width / max(1, height)
+    #     gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY) if len(transformed.shape) == 3 else transformed
+    #     stddev = float(gray.std())
+    #     validation = {
+    #         "passed": True,
+    #         "reason": None,
+    #         "width": width,
+    #         "height": height,
+    #         "area_ratio": round(float(area_ratio), 4),
+    #         "aspect_ratio": round(float(aspect_ratio), 4),
+    #         "stddev": round(stddev, 4),
+    #     }
+
+    #     if width < self.MIN_TRANSFORMED_DIMENSION or height < self.MIN_TRANSFORMED_DIMENSION:
+    #         validation.update({"passed": False, "reason": "transformed_image_too_small"})
+    #     elif aspect_ratio > self.MAX_TRANSFORMED_ASPECT_RATIO or aspect_ratio < (1 / self.MAX_TRANSFORMED_ASPECT_RATIO):
+    #         validation.update({"passed": False, "reason": "transformed_aspect_ratio_invalid"})
+    #     elif area_ratio < self.MIN_TRANSFORMED_AREA_RATIO:
+    #         validation.update({"passed": False, "reason": "transformed_area_too_small"})
+    #     elif stddev < self.MIN_IMAGE_STDDEV:
+    #         validation.update({"passed": False, "reason": "transformed_image_nearly_empty"})
+    #     return validation
+    
+    def _validate_transformed_image(
+    self,
+    transformed: Optional[np.ndarray],
+    original: np.ndarray,) -> Dict[str, Any]:
+
         if transformed is None or not isinstance(transformed, np.ndarray):
             return {"passed": False, "reason": "perspective_transform_failed"}
+
         if transformed.size == 0:
             return {"passed": False, "reason": "perspective_transform_empty"}
 
         height, width = transformed.shape[:2]
         original_height, original_width = original.shape[:2]
-        area_ratio = (width * height) / max(1, original_width * original_height)
+
+        area_ratio = (width * height) / max(
+            1,
+            original_width * original_height,
+        )
+
         aspect_ratio = width / max(1, height)
-        gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY) if len(transformed.shape) == 3 else transformed
+        original_aspect_ratio = original_width / max(1, original_height)
+
+        aspect_change_ratio = max(
+            aspect_ratio / original_aspect_ratio,
+            original_aspect_ratio / aspect_ratio,
+        )
+
+        gray = (
+            cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
+            if len(transformed.shape) == 3
+            else transformed
+        )
+
         stddev = float(gray.std())
+
         validation = {
             "passed": True,
             "reason": None,
@@ -368,17 +423,57 @@ class ImageNormalizationService:
             "height": height,
             "area_ratio": round(float(area_ratio), 4),
             "aspect_ratio": round(float(aspect_ratio), 4),
+            "original_aspect_ratio": round(float(original_aspect_ratio), 4),
+            "aspect_change_ratio": round(float(aspect_change_ratio), 4),
             "stddev": round(stddev, 4),
         }
 
-        if width < self.MIN_TRANSFORMED_DIMENSION or height < self.MIN_TRANSFORMED_DIMENSION:
-            validation.update({"passed": False, "reason": "transformed_image_too_small"})
-        elif aspect_ratio > self.MAX_TRANSFORMED_ASPECT_RATIO or aspect_ratio < (1 / self.MAX_TRANSFORMED_ASPECT_RATIO):
-            validation.update({"passed": False, "reason": "transformed_aspect_ratio_invalid"})
+        if (
+            width < self.MIN_TRANSFORMED_DIMENSION
+            or height < self.MIN_TRANSFORMED_DIMENSION
+        ):
+            validation.update(
+                {
+                    "passed": False,
+                    "reason": "transformed_image_too_small",
+                }
+            )
+
+        elif (
+            aspect_ratio > self.MAX_TRANSFORMED_ASPECT_RATIO
+            or aspect_ratio < (1 / self.MAX_TRANSFORMED_ASPECT_RATIO)
+        ):
+            validation.update(
+                {
+                    "passed": False,
+                    "reason": "transformed_aspect_ratio_invalid",
+                }
+            )
+
+        elif aspect_change_ratio > 1.35:
+            validation.update(
+                {
+                    "passed": False,
+                    "reason": "transformed_aspect_ratio_changed_too_much",
+                }
+            )
+
         elif area_ratio < self.MIN_TRANSFORMED_AREA_RATIO:
-            validation.update({"passed": False, "reason": "transformed_area_too_small"})
+            validation.update(
+                {
+                    "passed": False,
+                    "reason": "transformed_area_too_small",
+                }
+            )
+
         elif stddev < self.MIN_IMAGE_STDDEV:
-            validation.update({"passed": False, "reason": "transformed_image_nearly_empty"})
+            validation.update(
+                {
+                    "passed": False,
+                    "reason": "transformed_image_nearly_empty",
+                }
+            )
+
         return validation
 
     def _layout_assisted_crop(self, image: np.ndarray, previous_fallback_reason: Optional[str] = None) -> tuple[np.ndarray, Dict[str, Any]]:
