@@ -7,9 +7,7 @@ from .layout_signature_service import compare_layout_signatures, signature_from_
 
 
 def _connect() -> Any:
-    conn = connect_db()
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return connect_db()
 
 
 def search_layout_candidates(
@@ -43,8 +41,14 @@ def search_layout_candidates(
                 COALESCE(tp.normalized_image_url, tp.sample_image_url) AS layout_reference_image_url,
                 'template_page' AS layout_reference_source,
                 CASE
-                    WHEN tv.detection_mode = 'main_page' AND tp.page_number = tv.main_page_number THEN 1
-                    WHEN tv.detection_mode != 'main_page' AND tp.page_number = 1 THEN 1
+                    WHEN COALESCE(tv.detection_mode, 'all_pages') = 'main_page'
+                        AND tp.page_number = COALESCE(tv.main_page_number, 1)
+                    THEN 1
+
+                    WHEN COALESCE(tv.detection_mode, 'all_pages') != 'main_page'
+                        AND tp.page_number = 1
+                    THEN 1
+
                     ELSE 0
                 END AS layout_reference_is_canonical,
                 tp.layout_signature_json AS layout_signature_json
@@ -52,10 +56,17 @@ def search_layout_candidates(
             JOIN template_versions tv ON tv.id = tp.template_version_id
             JOIN template_groups tg ON tg.id = tv.template_group_id
             WHERE tp.layout_signature_json IS NOT NULL
-              AND (
-                    (tv.detection_mode = 'main_page' AND tp.page_number = tv.main_page_number)
-                    OR (tv.detection_mode != 'main_page' AND tp.page_number = ?)
-              )
+            AND (
+                    (
+                        COALESCE(tv.detection_mode, 'all_pages') = 'main_page'
+                        AND tp.page_number = COALESCE(tv.main_page_number, 1)
+                    )
+                    OR
+                    (
+                        COALESCE(tv.detection_mode, 'all_pages') != 'main_page'
+                        AND tp.page_number = ?
+                    )
+            )
             ORDER BY tv.updated_at DESC, tp.page_number ASC
             """,
             (page_number,),
