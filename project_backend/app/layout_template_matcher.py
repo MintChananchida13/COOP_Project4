@@ -71,16 +71,60 @@ def search_layout_candidates(
             """,
             (page_number,),
         ).fetchall()
+        print("[LAYOUT] include_template_id =", include_template_id)
+        print("[LAYOUT] rows_count =", len(rows))
+        print(
+            "[LAYOUT] rows =",
+            [
+                {
+                    "template_id": row["template_id"],
+                    "status": row["template_status"],
+                    "page_number": row["page_number"],
+                    "detection_mode": row["detection_mode"],
+                    "has_signature": bool(row["layout_signature_json"]),
+                }
+                for row in rows
+            ],
+        )
 
     best_by_template: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         template_id = row["template_id"]
-        if active_only and row["template_status"] != "active" and template_id != include_template_id:
+
+        print(
+            "[LAYOUT] checking:",
+            template_id,
+            "status=",
+            row["template_status"],
+            "include=",
+            template_id == include_template_id,
+        )
+
+        if (
+            active_only
+            and row["template_status"] != "active"
+            and template_id != include_template_id
+        ):
+            print("[LAYOUT] skipped by active_only:", template_id)
             continue
+
         signature = signature_from_json(row["layout_signature_json"])
+
         if not signature:
+            print("[LAYOUT] skipped invalid signature:", template_id)
             continue
-        similarity = compare_layout_signatures(query_signature, signature)
+
+        similarity = compare_layout_signatures(
+            query_signature,
+            signature,
+        )
+
+        print(
+            "[LAYOUT] compared:",
+            template_id,
+            "score=",
+            similarity.get("score"),
+        )
         metadata = {
             "template_id": template_id,
             "template_name": row["template_name"],
@@ -117,6 +161,7 @@ def search_layout_candidates(
 
     ranked = sorted(best_by_template.values(), key=lambda item: item["score"], reverse=True)
     limited = ranked[:limit]
+    
     if include_template_id and not any(
         item.get("metadata", {}).get("template_id") == include_template_id
         for item in limited
