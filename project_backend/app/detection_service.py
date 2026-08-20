@@ -743,6 +743,7 @@ def _candidate_from_result(
     query_image_path: str,
     normalization_info: Optional[Dict[str, Any]] = None,
     allow_alignment: bool = True,
+    include_template_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
@@ -774,7 +775,7 @@ def _candidate_from_result(
         field_count = metadata.get("field_count")
         final_confidence_threshold = decision_service.final_confidence_threshold(None, metadata)
 
-    if template_status != "active":
+    if template_status != "active" and template_id != include_template_id:
         return None
 
     matching_weights = decision_service.matching_weights(template, metadata)
@@ -1221,6 +1222,7 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str], in
                 normalized_image_path,
                 page_info.get("normalization"),
                 allow_alignment=index <= DETECTION_ALIGNMENT_LIMIT,
+                include_template_id=include_template_id,
             )
         else:
             candidate = _lightweight_candidate_from_result(result, include_template_id=include_template_id)
