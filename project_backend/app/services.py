@@ -3816,31 +3816,175 @@ class AdminTemplateService:
             conn.commit()
         return {"id": request_id, "status": "converted", "converted_template_id": template_id, "template_id": template_id, "template_group_id": base["template_group_id"], "created_records": {"template_versions": 1, "template_pages": len(pages)}}
 
-    def convert_request_to_template(
-        self,
-        request_id: str,
-        payload: Optional[TemplateRequestConvert] = None,
-        created_by: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        with _connect() as conn:
-            request_row = conn.execute("SELECT * FROM template_requests WHERE id = ?", (request_id,)).fetchone()
-            if request_row is None:
-                return {"id": request_id, "status": "not_found", "created_records": {}}
-            pages = [_row_to_dict(row) for row in conn.execute("SELECT * FROM template_request_pages WHERE template_request_id = ? AND review_status IN ('approved', 'pending') AND sample_image_url IS NOT NULL ORDER BY page_number ASC", (request_id,)).fetchall()]
-            if not pages:
-                raise HTTPException(status_code=409, detail="At least one request page is required")
-            group_id = _stub_id("tgrp")
-            template_id = _stub_id("tpl")
-            template_name = (payload.template_name if payload and payload.template_name else request_row["request_title"]).strip()
-            conn.execute("INSERT INTO template_groups (id, template_code, name, document_type, category, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (group_id, _template_group_code(), request_row["document_type"] or template_name, request_row["document_type"], payload.description if payload else None, created_by))
-            similarity_threshold = payload.similarity_threshold if payload and payload.similarity_threshold is not None else 0.75
-            conn.execute("INSERT INTO template_versions (id, template_group_id, version_number, version_name, status, detection_mode, main_page_number, similarity_threshold, final_confidence_threshold, layout_weight, text_anchor_weight, image_anchor_weight, created_by, created_at, updated_at) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (template_id, group_id, template_name, _normalize_detection_mode(payload.detection_mode if payload else None), _normalize_main_page_number(payload.main_page_number if payload else None), similarity_threshold, created_by))
-            for index, page in enumerate(pages, start=1):
-                conn.execute("INSERT INTO template_pages (id, template_version_id, page_number, page_name, sample_image_url, normalized_image_url, layout_signature_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", (_stub_id("tpl_page"), template_id, index, page.get("page_name") or f"Page {index}", page.get("sample_image_url"), page.get("sample_image_url")))
-            conn.execute("UPDATE template_requests SET status = 'converted', converted_template_group_id = ?, converted_template_version_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (group_id, template_id, request_id))
-            conn.commit()
-        return {"id": request_id, "status": "converted", "converted_template_id": template_id, "template_id": template_id, "template_group_id": group_id, "created_records": {"template_groups": 1, "template_versions": 1, "template_pages": len(pages)}}
+def convert_request_to_template(
+    self,
+    request_id: str,
+    payload: Optional[TemplateRequestConvert] = None,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    with _connect() as conn:
+        request_row = conn.execute(
+            "SELECT * FROM template_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if request_row is None:
+            return {"id": request_id, "status": "not_found", "created_records": {}}
 
+        pages = [
+            _row_to_dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM template_request_pages
+                WHERE template_request_id = ?
+                  AND review_status IN ('approved', 'pending')
+                  AND sample_image_url IS NOT NULL
+                ORDER BY page_number ASC
+                """,
+                (request_id,),
+            ).fetchall()
+        ]
+        if not pages:
+            raise HTTPException(status_code=409, detail="At least one request page is required")
+
+        group_id, template_id = _stub_id("tgrp"), _stub_id("tpl")
+        template_name = (
+            payload.template_name if payload and payload.template_name
+            else request_row["request_title"]
+        ).strip()
+        similarity_threshold = (
+            payload.similarity_threshold
+            if payload and payload.similarity_threshold is not None else 0.75
+        )
+
+        conn.execute(
+            """
+            INSERT INTO template_groups
+            (id, template_code, name, document_type, category, description, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                group_id, _template_group_code(), template_name,
+                request_row["document_type"],
+                payload.description if payload else None, created_by,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO template_versions
+            (id, template_group_id, version_number, version_name, status,
+             detection_mode, main_page_number, similarity_threshold,
+             final_confidence_threshold, layout_weight, text_anchor_weight,
+             image_anchor_weight, created_by, created_at, updated_at)
+            VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, 0.75, 0.40, 0.30, 0.30, ?,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                template_id, group_id, template_name,
+                _normalize_detection_mode(payload.detection_mode if payload else None),
+                _normalize_main_page_number(payload.main_page_number if payload else None),
+                similarity_threshold, created_by,
+            ),
+        )
+
+        # request page id -> template page id
+        page_id_map: Dict[str, str] = {}
+        for index, page in enumerate(pages, start=1):
+            page_id = _stub_id("tpl_page")
+            page_id_map[str(page["id"])] = page_id
+
+            conn.execute(
+                """
+                INSERT INTO template_pages
+                (id, template_version_id, page_number, page_name,
+                 sample_image_url, normalized_image_url, layout_signature_json,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    page_id, template_id, index,
+                    page.get("page_name") or f"Page {index}",
+                    page.get("sample_image_url"), page.get("sample_image_url"),
+                ),
+            )
+
+        # Copy User ROI -> Extraction ROI
+        fields = [
+            _row_to_dict(row)
+            for row in conn.execute(
+                """
+                SELECT rf.* FROM requested_fields rf
+                JOIN template_request_pages rp ON rp.id = rf.template_request_page_id
+                WHERE rp.template_request_id = ?
+                ORDER BY rp.page_number, rf.created_at
+                """,
+                (request_id,),
+            ).fetchall()
+        ]
+
+        field_count = 0
+        page_orders: Dict[str, int] = {}
+
+        for field in fields:
+            page_id = page_id_map.get(str(field["template_request_page_id"]))
+            if not page_id:
+                continue
+
+            page_orders[page_id] = page_orders.get(page_id, 0) + 1
+            order = page_orders[page_id]
+
+            data_type = str(field.get("data_type") or "text").lower()
+            if data_type not in {"text", "table", "image"}:
+                data_type = "text"
+
+            conn.execute(
+                """
+                INSERT INTO extraction_fields
+                (id, template_page_id, field_name, display_label, data_type,
+                 extraction_method, roi_x_ratio, roi_y_ratio, roi_width_ratio,
+                 roi_height_ratio, roi_mode, expected_content, required,
+                 sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'fixed_roi', ?, ?, ?, ?, 'fix',
+                        NULL, FALSE, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    _stub_id("field"), page_id,
+                    field.get("field_name") or f"field_{order}",
+                    field.get("display_label") or field.get("field_name") or f"Field {order}",
+                    data_type,
+                    field["roi_x_ratio"], field["roi_y_ratio"],
+                    field["roi_width_ratio"], field["roi_height_ratio"],
+                    order,
+                ),
+            )
+            field_count += 1
+
+        conn.execute(
+            """
+            UPDATE template_requests
+            SET status = 'converted',
+                converted_template_group_id = ?,
+                converted_template_version_id = ?,
+                reviewed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (group_id, template_id, request_id),
+        )
+        conn.commit()
+
+    return {
+        "id": request_id,
+        "status": "converted",
+        "converted_template_id": template_id,
+        "template_id": template_id,
+        "template_group_id": group_id,
+        "created_records": {
+            "template_groups": 1,
+            "template_versions": 1,
+            "template_pages": len(pages),
+            "extraction_fields": field_count,
+        },
+    }
+    
     def reject_request(self, request_id: str, reason: Optional[str]) -> Dict[str, Any]:
         return TemplateRequestService().reject(request_id, reason)
 

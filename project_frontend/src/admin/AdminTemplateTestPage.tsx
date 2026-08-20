@@ -1494,7 +1494,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
                   </td>
                 </tr>
               ) : (
-                detectionTest?.candidates.map((candidate) => (
+                (detectionTest?.candidates || []).slice(0, 5).map((candidate) => (
                   <tr key={`${candidate.templateId}-${candidate.rank}-test`} className={candidate.isCurrentDraft ? "bg-indigo-50" : undefined}>
                     <td className="px-3 py-2 font-black text-slate-900">#{candidate.rank}</td>
                     <td className="px-3 py-2 font-bold text-slate-800">{candidate.templateName || candidate.templateId}</td>
@@ -1521,17 +1521,25 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
           </table>
         </div>
         <div className="mt-4 space-y-3">
-          {(detectionTest?.candidates || []).map((candidate) => {
-            const key = `${candidate.templateId}-${candidate.rank}-detail`;
-            return (
-              <DraftCandidateCard
-                key={key}
-                candidate={candidate}
-                open={Boolean(expandedDetectionCandidates[key])}
-                onToggle={() => setExpandedDetectionCandidates((prev) => ({ ...prev, [key]: !prev[key] }))}
-              />
-            );
-          })}
+          {(detectionTest?.candidates || [])
+            .slice(0, 5)
+            .map((candidate) => {
+              const key = `${candidate.templateId}-${candidate.rank}-detail`;
+
+              return (
+                <DraftCandidateCard
+                  key={key}
+                  candidate={candidate}
+                  open={Boolean(expandedDetectionCandidates[key])}
+                  onToggle={() =>
+                    setExpandedDetectionCandidates((prev) => ({
+                      ...prev,
+                      [key]: !prev[key],
+                    }))
+                  }
+                />
+              );
+            })}
         </div>
       </section>
       )}
