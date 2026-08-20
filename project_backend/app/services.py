@@ -3390,10 +3390,10 @@ class AdminTemplateService:
 
     def confirm_publish_template(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)
-
         if template.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Template not found")
 
+        # 1. ให้ผ่านสถานะก่อนสร้าง publish job
         with _connect() as conn:
             conn.execute(
                 """
@@ -3406,13 +3406,44 @@ class AdminTemplateService:
             )
             conn.commit()
 
-        job_result = EmbeddingService().create_embedding_job(template_id)
+        embedding_service = EmbeddingService()
 
+        # 2. สร้าง Publish Job จริง
+        created = embedding_service.create_embedding_job(template_id)
+
+        job = created.get("job") or {}
+        job_id = job.get("id")
+        if not job_id:
+            raise HTTPException(
+                status_code=500,
+                detail="Publish job was not created",
+            )
+
+        # 3. รัน Publish Job ให้เสร็จทันที
+        completed = embedding_service.run_job_dev(job_id)
+
+        completed_job = completed.get("job") or {}
+        completed_template = completed.get("template") or {}
+
+        if (
+            completed_job.get("status") != "completed"
+            or completed_template.get("status") != "active"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Template publish did not complete successfully",
+                    "job": completed_job,
+                    "template": completed_template,
+                },
+            )
+
+        # ถึงตรงนี้คือ Publish จริงและ active แล้ว
         return {
             "template_id": template_id,
-            "status": "publish_queued",
-            "job": job_result.get("job"),
-            "template": job_result.get("template"),
+            "status": "published",
+            "job": completed_job,
+            "template": completed_template,
         }
 
     def test_extraction_fields(self, template_id: str) -> Dict[str, Any]:
