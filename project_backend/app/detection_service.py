@@ -1080,7 +1080,7 @@ def _candidate_from_result(
     }
 
 
-def _lightweight_candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _lightweight_candidate_from_result(result: Dict[str, Any], include_template_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     metadata = result.get("metadata") or {}
     vector_id = str(result.get("vector_id") or "")
     template_id = _template_id_from_metadata(metadata, vector_id)
@@ -1089,7 +1089,7 @@ def _lightweight_candidate_from_result(result: Dict[str, Any]) -> Optional[Dict[
         return None
 
     template_status = template.get("status") if template else metadata.get("template_status")
-    if template_status != "active":
+    if template_status != "active" and template_id != include_template_id:
         return None
 
     template_name = template.get("name") if template else metadata.get("template_name")
@@ -1223,7 +1223,7 @@ def _detect_page(page_info: Dict[str, Any], page_image_paths: Dict[int, str], in
                 allow_alignment=index <= DETECTION_ALIGNMENT_LIMIT,
             )
         else:
-            candidate = _lightweight_candidate_from_result(result)
+            candidate = _lightweight_candidate_from_result(result, include_template_id=include_template_id)
         if candidate is not None:
             candidate["retrieval_rank"] = index
             candidate["layout_confident"] = layout_confident
