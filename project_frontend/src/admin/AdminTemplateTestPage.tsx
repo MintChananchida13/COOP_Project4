@@ -1536,7 +1536,7 @@ export default function AdminTemplateTestPage({ templateId }: { templateId: stri
       </section>
       )}
 
-      {false && (
+      {validationStep === 2 && simulation && (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <DraftSectionHeader title="7. Verification Anchor Results" subtitle="Text anchors use OCR comparison. Image anchors use temporary image-feature similarity when available." />
         <div className="mt-4 grid gap-3 lg:grid-cols-2">

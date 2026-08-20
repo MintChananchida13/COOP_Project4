@@ -1053,6 +1053,11 @@ def _candidate_from_result(
         "roi_coordinate_space": roi_coordinate_space,
 
         "verification": verification,
+        "verification_details": (
+            verification.get("checked_fields", [])
+            if isinstance(verification, dict)
+            else []
+        ),
         "verification_score": decision["verification_score"],
         "text_anchor_score": decision.get("text_anchor_score"),
         "image_anchor_score": decision.get("image_anchor_score"),
@@ -1157,6 +1162,7 @@ def _lightweight_candidate_from_result(result: Dict[str, Any], include_template_
         "extraction_image_preview_url": None,
         "roi_coordinate_space": None,
         "verification": verification,
+        "verification_details": [],
         "verification_score": 0.0,
         "text_anchor_score": 0.0,
         "image_anchor_score": 0.0,
@@ -1370,6 +1376,10 @@ def _aggregate_candidates(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "extraction_image_preview_url": best_page_cand.get("extraction_image_preview_url"),
             "roi_coordinate_space": best_page_cand.get("roi_coordinate_space"),
             "verification": best_page_cand.get("verification"),
+            "verification_details": (
+                best_page_cand.get("verification_details")
+                or (best_page_cand.get("verification") or {}).get("checked_fields", [])
+            ),
             "verification_score": decision["verification_score"],
             "text_anchor_score": decision.get("text_anchor_score"),
             "image_anchor_score": decision.get("image_anchor_score"),
