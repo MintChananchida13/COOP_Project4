@@ -39,9 +39,7 @@ projection_service = AnchorProjectionService()
 
 
 def _connect() -> Any:
-    conn = connect_db()
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return connect_db()
 
 
 def _storage_path() -> Path:
