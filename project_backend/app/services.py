@@ -3390,11 +3390,24 @@ class AdminTemplateService:
 
     def confirm_publish_template(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)
+
         if template.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Template not found")
+
         with _connect() as conn:
-            conn.execute("UPDATE template_versions SET status = 'validated', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (template_id,))
+            conn.execute(
+                """
+                UPDATE template_versions
+                SET status = 'validated',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (template_id,),
+            )
             conn.commit()
+
+        job_result = EmbeddingService().create_embedding_job(template_id)
+
         return {
             "template_id": template_id,
             "status": "publish_queued",
