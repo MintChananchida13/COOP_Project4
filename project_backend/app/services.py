@@ -3395,7 +3395,12 @@ class AdminTemplateService:
         with _connect() as conn:
             conn.execute("UPDATE template_versions SET status = 'validated', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (template_id,))
             conn.commit()
-        return {"template_id": template_id, "status": "publish_queued", "job": layout_job_service.create_embedding_job(template_id).get("job")}
+        return {
+            "template_id": template_id,
+            "status": "publish_queued",
+            "job": job_result.get("job"),
+            "template": job_result.get("template"),
+        }
 
     def test_extraction_fields(self, template_id: str) -> Dict[str, Any]:
         template = self.get_template(template_id)
